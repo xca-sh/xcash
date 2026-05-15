@@ -485,6 +485,15 @@ def test_compute_create2_address_matches_eip1014_example():
     assert address.lower() == "0x4d1a2e2bb4f88f0250f26ffff098b0b30b26bf38"
 
 
+def test_compute_create2_address_requires_keyword_arguments():
+    with pytest.raises(TypeError):
+        compute_create2_address(
+            "0x0000000000000000000000000000000000000000",
+            b"\x00" * 32,
+            Web3.keccak(b"\x00"),
+        )
+
+
 def test_build_payment_collector_deploy_intent_sets_contract_call_fields():
     factory_address = "0x1111111111111111111111111111111111111111"
     vault_address = "0x2222222222222222222222222222222222222222"

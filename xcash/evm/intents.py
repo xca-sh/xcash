@@ -299,6 +299,7 @@ _PAYMENT_COLLECTOR_FACTORY_SELECTOR = (
 
 
 def compute_create2_address(
+    *,
     factory_address: str,
     salt: bytes,
     init_code_hash: bytes,
