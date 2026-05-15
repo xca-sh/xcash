@@ -260,7 +260,7 @@ def test_build_contract_call_intent_sets_basic_fields():
     intent = build_contract_call_intent(
         address=_fake_address(),
         chain=chain,
-        to=contract_address,
+        contract_address=contract_address,
         data="A9059CBB",
         gas=50000,
         transfer_type=TransferType.Invoice,
@@ -278,7 +278,7 @@ def test_build_contract_call_intent_defaults_value_to_zero():
     intent = build_contract_call_intent(
         address=_fake_address(),
         chain=_fake_chain(),
-        to="0x2222222222222222222222222222222222222222",
+        contract_address="0x2222222222222222222222222222222222222222",
         data="0x",
         gas=50000,
         transfer_type=TransferType.Invoice,
@@ -292,7 +292,7 @@ def test_build_contract_call_intent_rejects_non_positive_gas():
         build_contract_call_intent(
             address=_fake_address(),
             chain=_fake_chain(),
-            to="0x2222222222222222222222222222222222222222",
+            contract_address="0x2222222222222222222222222222222222222222",
             data="0x",
             gas=0,
             transfer_type=TransferType.Invoice,
@@ -304,7 +304,7 @@ def test_build_contract_call_intent_rejects_negative_value():
         build_contract_call_intent(
             address=_fake_address(),
             chain=_fake_chain(),
-            to="0x2222222222222222222222222222222222222222",
+            contract_address="0x2222222222222222222222222222222222222222",
             data="0x",
             gas=50000,
             transfer_type=TransferType.Invoice,
@@ -317,7 +317,7 @@ def test_build_contract_call_intent_rejects_non_hex_data():
         build_contract_call_intent(
             address=_fake_address(),
             chain=_fake_chain(),
-            to="0x2222222222222222222222222222222222222222",
+            contract_address="0x2222222222222222222222222222222222222222",
             data="zzzz",
             gas=50000,
             transfer_type=TransferType.Invoice,
