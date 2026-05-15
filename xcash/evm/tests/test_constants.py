@@ -14,7 +14,7 @@ def test_returns_configured_value_for_known_chain_id():
 
 def test_missing_chain_id_raises_with_helpful_message():
     chain = SimpleNamespace(chain_id=999_999, code="unknown-test")
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(ValueError, match=r"unknown-test.*999999.*evm/constants\.py") as exc:
         get_x402_eip3009_facilitate_gas(chain)
     msg = str(exc.value)
     assert "unknown-test" in msg
