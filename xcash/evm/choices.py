@@ -10,7 +10,11 @@ from django.utils.translation import gettext_lazy as _
 
 
 class TxKind(models.TextChoices):
-    """EVM 链上交易的物理形态。完备且封闭，两个值覆盖当前所有业务场景。"""
+    """EVM 链上交易的物理形态。
+
+    当前两个值覆盖所有业务场景；扩展时必须同步 intents.py / models.py
+    中按 TxKind 分派的派发表，保留缺项即 KeyError 的 fail-fast 语义。
+    """
 
     NATIVE_TRANSFER = "native_transfer", _("原生币转账")
     CONTRACT_CALL = "contract_call", _("合约调用")

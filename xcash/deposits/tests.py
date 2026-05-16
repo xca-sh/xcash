@@ -19,6 +19,7 @@ from rest_framework.test import force_authenticate
 from web3 import Web3
 
 from chains.models import Address
+from chains.models import AddressChainState
 from chains.models import AddressUsage
 from chains.models import BroadcastTask
 from chains.models import Chain
@@ -810,11 +811,12 @@ class GasRechargeServiceTests(SimpleTestCase):
         schedule_mock.return_value = SimpleNamespace(base_task=base_task_sentinel)
 
         expected_collection_gas_cost = 10 * 100_000
-        result = GasRechargeService.request_recharge(
-            deposit_address=deposit_address,
-            chain=chain,
-            expected_collection_gas_cost=expected_collection_gas_cost,
-        )
+        with patch("deposits.service.db_transaction.atomic", return_value=nullcontext()):
+            result = GasRechargeService.request_recharge(
+                deposit_address=deposit_address,
+                chain=chain,
+                expected_collection_gas_cost=expected_collection_gas_cost,
+            )
         self.assertTrue(result)
         schedule_mock.assert_called_once()
         intent = schedule_mock.call_args.args[0]
@@ -1034,6 +1036,75 @@ class GasRechargeServiceIdempotencyDbTests(TestCase):
         schedule_mock.assert_called_once()
         get_address_mock.assert_called_once()
         self.assertEqual(GasRecharge.objects.count(), 2)
+
+    @patch(
+        "deposits.service.GasRecharge.objects.create",
+        side_effect=RuntimeError("gas recharge create failed"),
+    )
+    @patch("chains.models.Wallet.get_address")
+    def test_request_recharge_rolls_back_broadcast_task_when_gas_recharge_create_fails(
+        self, get_address_mock, gas_recharge_create_mock,
+    ):
+        from deposits.service import GasRechargeService
+
+        project = Project.objects.create(
+            name="DemoRechargeRollback",
+            wallet=Wallet.objects.create(),
+        )
+        customer = Customer.objects.create(
+            project=project,
+            uid="customer-recharge-rollback",
+        )
+        native = Crypto.objects.create(
+            name="Ethereum Recharge Rollback",
+            symbol="ETHRB",
+            coingecko_id="ethereum-recharge-rollback",
+        )
+        chain = Chain.objects.create(
+            name="EthereumRechargeRollback",
+            code="eth-recharge-rollback",
+            type=ChainType.EVM,
+            native_coin=native,
+            chain_id=403,
+            rpc="http://localhost:8545",
+            active=True,
+        )
+        vault_addr = Address.objects.create(
+            wallet=project.wallet,
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.Vault,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.Vault),
+            address_index=0,
+            address="0x0000000000000000000000000000000000000291",
+        )
+        deposit_addr = Address.objects.create(
+            wallet=project.wallet,
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.Deposit,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.Deposit),
+            address_index=0,
+            address="0x0000000000000000000000000000000000000292",
+        )
+        deposit_address = DepositAddress.objects.create(
+            customer=customer,
+            chain_type=chain.type,
+            address=deposit_addr,
+        )
+        get_address_mock.return_value = vault_addr
+
+        result = GasRechargeService.request_recharge(
+            deposit_address=deposit_address,
+            chain=chain,
+            expected_collection_gas_cost=100_000,
+        )
+
+        self.assertFalse(result)
+        gas_recharge_create_mock.assert_called_once()
+        self.assertEqual(BroadcastTask.objects.count(), 0)
+        self.assertEqual(EvmBroadcastTask.objects.count(), 0)
+        self.assertFalse(
+            AddressChainState.objects.filter(address=vault_addr, chain=chain).exists()
+        )
 
 
 class DepositTransferRematchTests(TestCase):

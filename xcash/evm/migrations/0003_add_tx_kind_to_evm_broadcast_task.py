@@ -12,6 +12,10 @@ def backfill_tx_kind(apps, schema_editor):
     )
 
 
+def noop_reverse(apps, schema_editor):
+    """tx_kind 是前向迁移派生值；回滚时原始空值/异常值不可恢复。"""
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -32,7 +36,7 @@ class Migration(migrations.Migration):
                 verbose_name="交易形态",
             ),
         ),
-        migrations.RunPython(backfill_tx_kind, migrations.RunPython.noop),
+        migrations.RunPython(backfill_tx_kind, noop_reverse),
         migrations.AlterField(
             model_name="evmbroadcasttask",
             name="tx_kind",

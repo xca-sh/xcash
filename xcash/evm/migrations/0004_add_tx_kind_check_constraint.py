@@ -5,11 +5,17 @@ from django.db import models
 def normalize_tx_kind(apps, schema_editor):
     EvmBroadcastTask = apps.get_model("evm", "EvmBroadcastTask")
     valid_tx_kinds = ["native_transfer", "contract_call"]
-    invalid_rows = EvmBroadcastTask.objects.exclude(tx_kind__in=valid_tx_kinds)
-    invalid_rows.filter(models.Q(data="") | models.Q(data="0x")).update(
-        tx_kind="native_transfer"
+    EvmBroadcastTask.objects.exclude(tx_kind__in=valid_tx_kinds).filter(
+        models.Q(data="") | models.Q(data="0x")
+    ).update(tx_kind="native_transfer")
+    # 显式重新查询：上一步已修复的 native_transfer 行不应再被改写为 contract_call。
+    EvmBroadcastTask.objects.exclude(tx_kind__in=valid_tx_kinds).update(
+        tx_kind="contract_call"
     )
-    invalid_rows.update(tx_kind="contract_call")
+
+
+def noop_reverse(apps, schema_editor):
+    """tx_kind 归一化会覆盖异常值；回滚时原始异常值不可恢复。"""
 
 
 class Migration(migrations.Migration):
@@ -19,7 +25,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunPython(normalize_tx_kind, migrations.RunPython.noop),
+        migrations.RunPython(normalize_tx_kind, noop_reverse),
         migrations.AddConstraint(
             model_name="evmbroadcasttask",
             constraint=models.CheckConstraint(

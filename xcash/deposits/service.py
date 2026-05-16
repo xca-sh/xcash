@@ -100,11 +100,14 @@ class GasRechargeService:
                 value=recharge_raw,
                 transfer_type=TransferType.GasRecharge,
             )
-            task = EvmBroadcastTask.schedule(intent)
-            GasRecharge.objects.create(
-                deposit_address=deposit_address,
-                broadcast_task=task.base_task,
-            )
+            # schedule() 会分配 nonce 并创建 BroadcastTask；GasRecharge 落库失败时
+            # 必须一起回滚，避免留下无法被幂等查询感知的孤儿广播任务。
+            with db_transaction.atomic():
+                task = EvmBroadcastTask.schedule(intent)
+                GasRecharge.objects.create(
+                    deposit_address=deposit_address,
+                    broadcast_task=task.base_task,
+                )
         except Exception:  # noqa: BLE001
             logger.warning(
                 "Gas 补充交易调度失败",
