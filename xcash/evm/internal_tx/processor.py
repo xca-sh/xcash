@@ -6,6 +6,7 @@ from typing import Any
 import structlog
 from chains.models import BroadcastTask, BroadcastTaskFailureReason, Chain
 from chains.service import ObservedTransferPayload, TransferService
+from django.db import transaction as db_transaction
 from django.utils import timezone
 from evm.internal_tx.exceptions import UnknownInternalBroadcastError
 from evm.internal_tx.handlers import get_handler
@@ -52,13 +53,14 @@ def _finalize_failed(
     broadcast_task: BroadcastTask,
     reason: BroadcastTaskFailureReason,
 ) -> None:
-    BroadcastTask.mark_finalized_failed(
-        task_id=broadcast_task.pk,
-        reason=reason,
-        expected_stage=None,
-    )
-    handler = get_handler(broadcast_task.transfer_type)
-    handler.finalize_failed(broadcast_task, reason)
+    with db_transaction.atomic():
+        BroadcastTask.mark_finalized_failed(
+            task_id=broadcast_task.pk,
+            reason=reason,
+            expected_stage=None,
+        )
+        handler = get_handler(broadcast_task.transfer_type)
+        handler.finalize_failed(broadcast_task, reason)
 
 
 def process_internal_transaction(
@@ -66,6 +68,8 @@ def process_internal_transaction(
     chain: Chain,
     tx: dict,
     receipt: dict,
+    block_timestamp: int | None = None,
+    occurred_at: datetime | None = None,
 ) -> None:
     """处理 tx.from 已确认是系统地址的 EVM 交易。"""
     tx_hash = _normalize_tx_hash(tx["hash"])
@@ -104,7 +108,11 @@ def process_internal_transaction(
         return
 
     block_number = int(receipt["blockNumber"])
-    ts, occurred_at = _lookup_block_timestamp(chain=chain, receipt=receipt)
+    if block_timestamp is None or occurred_at is None:
+        block_timestamp, occurred_at = _lookup_block_timestamp(
+            chain=chain,
+            receipt=receipt,
+        )
     payload = ObservedTransferPayload(
         chain=chain,
         block=block_number,
@@ -115,7 +123,7 @@ def process_internal_transaction(
         crypto=fact.crypto,
         value=fact.value,
         amount=fact.amount,
-        timestamp=ts,
+        timestamp=block_timestamp,
         occurred_at=occurred_at,
         block_hash=_block_hash_from_receipt(receipt),
         source="evm-internal-tx",

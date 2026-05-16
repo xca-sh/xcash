@@ -3,15 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import chain as iter_chain
 
-from django.core.cache import cache
-from web3 import Web3
-
-from chains.models import Address
-from chains.models import Chain
-from chains.models import ChainType
+from chains.models import Address, Chain, ChainType
 from currencies.models import ChainToken
-from projects.models import RecipientAddress
-from projects.models import RecipientAddressUsage
+from django.core.cache import cache
+from projects.models import RecipientAddress, RecipientAddressUsage
+from web3 import Web3
 
 
 @dataclass(frozen=True)
@@ -23,6 +19,7 @@ class EvmWatchSet:
 
 
 EVM_WATCHED_ADDRESSES_CACHE_KEY = "evm:scanner:watched_addresses"
+EVM_SYSTEM_ADDRESSES_CACHE_KEY = "evm:scanner:system_addresses"
 EVM_CHAIN_TOKENS_CACHE_KEY_TEMPLATE = "evm:scanner:chain_tokens:{chain_id}"
 EVM_WATCH_SET_CACHE_TIMEOUT = None
 EVM_WATCH_SET_ITERATOR_CHUNK_SIZE = 1_000
@@ -57,6 +54,27 @@ def load_watch_set(*, chain: Chain, refresh: bool = False) -> EvmWatchSet:
         watched_addresses=watched_addresses,
         tokens_by_address=tokens_by_address,
     )
+
+
+def load_evm_system_addresses(*, refresh: bool = False) -> frozenset[str]:
+    """加载系统 EVM Address 集合，用于判断 tx.from 是否内部地址。"""
+    if refresh:
+        return refresh_evm_system_addresses()
+
+    system_addresses = cache.get(EVM_SYSTEM_ADDRESSES_CACHE_KEY)
+    if system_addresses is None:
+        system_addresses = refresh_evm_system_addresses()
+    return system_addresses
+
+
+def refresh_evm_system_addresses() -> frozenset[str]:
+    system_addresses = _load_evm_system_addresses_from_db()
+    cache.set(
+        EVM_SYSTEM_ADDRESSES_CACHE_KEY,
+        system_addresses,
+        timeout=EVM_WATCH_SET_CACHE_TIMEOUT,
+    )
+    return system_addresses
 
 
 def refresh_evm_watched_addresses() -> frozenset[str]:
@@ -103,6 +121,13 @@ def clear_evm_watched_addresses_cache() -> None:
     """清空 EVM 全局观察地址缓存。"""
 
     cache.delete(EVM_WATCHED_ADDRESSES_CACHE_KEY)
+    cache.delete(EVM_SYSTEM_ADDRESSES_CACHE_KEY)
+
+
+def clear_evm_system_addresses_cache() -> None:
+    """清空 EVM 系统地址缓存。"""
+
+    cache.delete(EVM_SYSTEM_ADDRESSES_CACHE_KEY)
 
 
 def clear_evm_chain_tokens_cache(*, chain: Chain) -> None:
@@ -116,13 +141,7 @@ def _chain_tokens_cache_key(*, chain: Chain) -> str:
 
 
 def _load_evm_watched_addresses_from_db() -> frozenset[str]:
-    system_addresses = (
-        Address.objects.filter(
-            chain_type=ChainType.EVM,
-        )
-        .values_list("address", flat=True)
-        .iterator(chunk_size=EVM_WATCH_SET_ITERATOR_CHUNK_SIZE)
-    )
+    system_addresses = _load_evm_system_addresses_from_db()
     recipient_addresses = (
         RecipientAddress.objects.filter(
             chain_type=ChainType.EVM,
@@ -139,6 +158,15 @@ def _load_evm_watched_addresses_from_db() -> frozenset[str]:
         _normalize_address(address)
         for address in iter_chain(system_addresses, recipient_addresses)
     )
+
+
+def _load_evm_system_addresses_from_db() -> frozenset[str]:
+    addresses = (
+        Address.objects.filter(chain_type=ChainType.EVM)
+        .values_list("address", flat=True)
+        .iterator(chunk_size=EVM_WATCH_SET_ITERATOR_CHUNK_SIZE)
+    )
+    return frozenset(_normalize_address(address) for address in addresses)
 
 
 def _load_evm_chain_tokens_from_db(*, chain: Chain) -> dict[str, ChainToken]:

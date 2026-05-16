@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
 from chains.models import (
     AddressUsage,
@@ -10,14 +11,18 @@ from chains.models import (
     OnchainTransfer,
     TransferType,
 )
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 from evm.intents import Eip3009Authorization
+from evm.internal_tx import handlers as handlers_mod
+from evm.internal_tx import matchers as matchers_mod
+from evm.internal_tx.facts import MatchedTransferFact
 from evm.internal_tx.processor import process_internal_transaction
 from evm.models import ContractDeployCollectionStatus, X402FacilitationStatus
 from evm.services.create2 import ContractDeployCollectionService
 from evm.services.x402 import X402FacilitationService
 from evm.tests._fixtures import (
+    make_broadcast_task,
     make_erc20_token,
     make_evm_chain,
     make_evm_system_address,
@@ -188,3 +193,76 @@ class Create2InternalLifecycleTests(TestCase):
         assert collection.transfer_id == transfer.pk
         assert collection.status == ContractDeployCollectionStatus.BROADCASTED
         assert transfer.type == TransferType.ContractDeployCollect
+
+
+class ProcessorFailureAtomicityTests(TransactionTestCase):
+    def test_failed_finalize_rolls_back_broadcast_task_when_handler_raises(self):
+        chain = make_evm_chain(code="eth-atomic", chain_id=43001)
+        address = make_evm_system_address(suffix="a7")
+        task = make_broadcast_task(
+            chain=chain,
+            address=address,
+            transfer_type=TransferType.Withdrawal,
+            tx_hash_suffix="fa11",
+            stage=BroadcastTaskStage.PENDING_CHAIN,
+        )
+        original_handler = handlers_mod.HANDLERS[TransferType.Withdrawal]
+        handler = MagicMock()
+        handler.finalize_failed.side_effect = RuntimeError("business failure")
+        handlers_mod.HANDLERS[TransferType.Withdrawal] = handler
+        try:
+            with self.assertRaisesRegex(RuntimeError, "business failure"):
+                process_internal_transaction(
+                    chain=chain,
+                    tx={"hash": task.tx_hash, "from": address.address},
+                    receipt={"status": 0, "logs": [], "blockNumber": 1},
+                )
+        finally:
+            handlers_mod.HANDLERS[TransferType.Withdrawal] = original_handler
+
+        task.refresh_from_db()
+        assert task.stage == BroadcastTaskStage.PENDING_CHAIN
+        assert task.result == BroadcastTaskResult.UNKNOWN
+        assert task.failure_reason == ""
+
+
+class ProcessorTimestampReuseTests(TestCase):
+    def test_supplied_block_time_skips_block_lookup(self):
+        chain = make_evm_chain(code="eth-ts", chain_id=43002)
+        address = make_evm_system_address(suffix="a8")
+        task = make_broadcast_task(
+            chain=chain,
+            address=address,
+            transfer_type=TransferType.Withdrawal,
+            tx_hash_suffix="55",
+            stage=BroadcastTaskStage.PENDING_CHAIN,
+        )
+        fact = MatchedTransferFact(
+            event_id="native:tx",
+            from_address=address.address,
+            to_address=task.recipient,
+            crypto=chain.native_coin,
+            value=Decimal("1000000000000000000"),
+            amount=Decimal("1"),
+        )
+        original_matcher = matchers_mod.MATCHERS[TransferType.Withdrawal]
+        matchers_mod.MATCHERS[TransferType.Withdrawal] = (
+            lambda *, chain, broadcast_task, receipt: fact
+        )
+        try:
+            with patch("evm.internal_tx.processor._lookup_block_timestamp") as lookup:
+                process_internal_transaction(
+                    chain=chain,
+                    tx={"hash": task.tx_hash, "from": address.address},
+                    receipt={
+                        "status": 1,
+                        "logs": [],
+                        "blockNumber": 1234,
+                        "blockHash": make_tx_hash("bc"),
+                    },
+                    block_timestamp=1_700_000_000,
+                    occurred_at=timezone.now(),
+                )
+            lookup.assert_not_called()
+        finally:
+            matchers_mod.MATCHERS[TransferType.Withdrawal] = original_matcher

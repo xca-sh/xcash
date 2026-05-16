@@ -1,20 +1,14 @@
+from chains.models import Address, AddressUsage, Chain, ChainType, Wallet
+from currencies.models import ChainToken, Crypto
 from django.core.cache import cache
-from django.test import TestCase
-from django.test import override_settings
+from django.test import TestCase, override_settings
+from evm.scanner.watchers import (
+    clear_evm_watch_set_cache,
+    load_evm_system_addresses,
+    load_watch_set,
+)
+from projects.models import Project, RecipientAddress, RecipientAddressUsage
 from web3 import Web3
-
-from chains.models import Address
-from chains.models import AddressUsage
-from chains.models import Chain
-from chains.models import ChainType
-from chains.models import Wallet
-from currencies.models import ChainToken
-from currencies.models import Crypto
-from evm.scanner.watchers import clear_evm_watch_set_cache
-from evm.scanner.watchers import load_watch_set
-from projects.models import Project
-from projects.models import RecipientAddress
-from projects.models import RecipientAddressUsage
 
 WATCHER_TEST_CACHES = {
     "default": {
@@ -84,6 +78,23 @@ class EvmWatchSetCacheTests(TestCase):
 
         refreshed_watch_set = load_watch_set(chain=self.chain, refresh=True)
         self.assertNotIn(self.address.address, refreshed_watch_set.watched_addresses)
+
+    def test_load_evm_system_addresses_excludes_recipient_addresses(self):
+        recipient_address = Web3.to_checksum_address(
+            "0x00000000000000000000000000000000000000cd"
+        )
+        RecipientAddress.objects.create(
+            name="watcher-recipient-system-cache",
+            project=self._create_project(),
+            chain_type=ChainType.EVM,
+            address=recipient_address,
+            usage=RecipientAddressUsage.INVOICE,
+        )
+
+        system_addresses = load_evm_system_addresses(refresh=True)
+
+        self.assertIn(self.address.address, system_addresses)
+        self.assertNotIn(recipient_address, system_addresses)
 
     def test_address_save_refreshes_cached_watch_set_after_commit(self):
         load_watch_set(chain=self.chain, refresh=True)

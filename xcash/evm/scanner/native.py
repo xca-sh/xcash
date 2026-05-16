@@ -3,30 +3,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import structlog
+from chains.models import Chain, ChainType
+from chains.service import ObservedTransferPayload, TransferService
 from django.db import transaction
 from django.db.models import F
 from django.db.models.functions import Greatest
 from django.utils import timezone
-from web3 import Web3
-
-from chains.models import Address
-from chains.models import Chain
-from chains.models import ChainType
-from chains.service import ObservedTransferPayload
-from chains.service import TransferService
-from evm.models import EvmScanCursor
-from evm.models import EvmScanCursorType
-from evm.scanner.constants import DEFAULT_NATIVE_SCAN_BATCH_SIZE
-from evm.scanner.constants import DEFAULT_NATIVE_SCAN_REPLAY_BLOCKS
+from evm.models import EvmScanCursor, EvmScanCursorType
+from evm.scanner.constants import (
+    DEFAULT_NATIVE_SCAN_BATCH_SIZE,
+    DEFAULT_NATIVE_SCAN_REPLAY_BLOCKS,
+)
 from evm.scanner.cursor import bootstrap_cursor_to_latest_for_debug
-from evm.scanner.rpc import EvmScannerRpcClient
-from evm.scanner.rpc import EvmScannerRpcError
-from evm.scanner.watchers import EvmWatchSet
-from evm.scanner.watchers import load_watch_set
+from evm.scanner.rpc import EvmScannerRpcClient, EvmScannerRpcError
+from evm.scanner.watchers import EvmWatchSet, load_evm_system_addresses, load_watch_set
+from web3 import Web3
 
 logger = structlog.get_logger()
 
@@ -265,6 +259,8 @@ class EvmNativeDirectScanner:
                 cls._process_internal_transactions(
                     chain=chain,
                     block_number=block_number,
+                    timestamp=timestamp,
+                    occurred_at=occurred_at,
                     receipts_map=receipts_map,
                     rpc_client=rpc_client,
                     txs=internal_txs,
@@ -320,10 +316,7 @@ class EvmNativeDirectScanner:
 
     @staticmethod
     def _load_system_addresses() -> frozenset[str]:
-        return frozenset(
-            Address.objects.filter(chain_type=ChainType.EVM)
-            .values_list("address", flat=True)
-        )
+        return load_evm_system_addresses()
 
     @classmethod
     def _process_internal_transactions(
@@ -331,6 +324,8 @@ class EvmNativeDirectScanner:
         *,
         chain: Chain,
         block_number: int,
+        timestamp: int,
+        occurred_at: datetime,
         receipts_map: dict[str, dict] | None,
         rpc_client: EvmScannerRpcClient,
         txs: list[dict[str, Any]],
@@ -348,7 +343,13 @@ class EvmNativeDirectScanner:
             if receipt is None:
                 continue
             try:
-                process_internal_transaction(chain=chain, tx=dict(tx), receipt=receipt)
+                process_internal_transaction(
+                    chain=chain,
+                    tx=dict(tx),
+                    receipt=receipt,
+                    block_timestamp=timestamp,
+                    occurred_at=occurred_at,
+                )
             except UnknownInternalBroadcastError as exc:
                 logger.warning(
                     "EVM 扫描到系统地址发出的交易但找不到 BroadcastTask",
