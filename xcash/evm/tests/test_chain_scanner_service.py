@@ -316,7 +316,7 @@ class EvmChainScannerServiceTests(TestCase):
         chain.w3.eth.account.sign_transaction.assert_not_called()
 
     @patch.object(EvmBroadcastTask, "_next_nonce", return_value=0)
-    def test_create_broadcast_task_defers_signing_until_first_broadcast(
+    def test_schedule_defers_signing_until_first_broadcast(
         self,
         _next_nonce_mock,
     ):

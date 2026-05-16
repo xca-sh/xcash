@@ -20,7 +20,7 @@ from evm.models import EvmBroadcastTask
 class EvmNonceConcurrencyTests(TransactionTestCase):
     """多线程并发创建 EvmBroadcastTask，验证 nonce 分配的严格递增和互斥性。
 
-    EVM 的 schedule(intent) → _create_broadcast_task 只做 nonce 分配和 DB 写入，
+    EVM 的 schedule(intent) 只做 nonce 分配和 DB 写入，
     不涉及 signer 或 RPC，因此无需 mock 外部依赖。
     """
 
