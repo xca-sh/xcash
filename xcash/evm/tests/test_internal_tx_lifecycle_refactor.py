@@ -10,21 +10,33 @@ from django.utils import timezone
 from web3 import Web3
 
 from chains.models import AddressUsage
+from chains.models import BroadcastTask
 from chains.models import BroadcastTaskFailureReason
 from chains.models import BroadcastTaskResult
 from chains.models import BroadcastTaskStage
 from chains.models import OnchainActionType
 from chains.models import OnchainTransfer
+from deposits.models import Deposit
+from deposits.models import DepositAddress
+from deposits.models import DepositCollection
+from deposits.models import DepositStatus
+from deposits.models import GasRecharge
+from evm.choices import TxKind
 from evm.contracts_codec import collector_init_code_hash
 from evm.intents import Eip3009Authorization
 from evm.internal_tx import handlers as handlers_mod
 from evm.internal_tx import matchers as matchers_mod
 from evm.internal_tx.facts import MatchedTransferFact
 from evm.internal_tx.processor import process_internal_transaction
+from evm.models import EvmBroadcastTask
 from evm.models import ContractDeployCollectionStatus
 from evm.models import X402FacilitationStatus
 from evm.services.create2 import ContractDeployCollectionService
 from evm.services.x402 import X402FacilitationService
+from projects.models import Project
+from users.models import Customer
+from withdrawals.models import Withdrawal
+from withdrawals.models import WithdrawalStatus
 from evm.tests._fixtures import make_broadcast_task
 from evm.tests._fixtures import make_erc20_token
 from evm.tests._fixtures import make_evm_chain
@@ -43,6 +55,224 @@ def _erc20_transfer_log(*, token, from_addr, to_addr, value_raw, log_index):
         "data": "0x" + hex(value_raw)[2:].zfill(64),
         "logIndex": log_index,
     }
+
+
+def _base_task_without_asset_fields(*, chain, address, action_type, tx_hash_suffix):
+    return BroadcastTask.objects.create(
+        chain=chain,
+        address=address,
+        action_type=action_type,
+        tx_hash=make_tx_hash(tx_hash_suffix),
+        stage=BroadcastTaskStage.PENDING_CHAIN,
+        result=BroadcastTaskResult.UNKNOWN,
+    )
+
+
+def _native_evm_task(*, base_task, address, chain, to, value_raw, nonce=0):
+    return EvmBroadcastTask.objects.create(
+        base_task=base_task,
+        address=address,
+        chain=chain,
+        nonce=nonce,
+        to=Web3.to_checksum_address(to),
+        value=value_raw,
+        data="",
+        gas=21_000,
+        tx_kind=TxKind.NATIVE_TRANSFER,
+    )
+
+
+class DirectInternalLifecycleWithoutBroadcastAssetFieldsTests(TestCase):
+    def test_native_withdrawal_matches_from_withdrawal_and_evm_task(self):
+        chain = make_evm_chain(code="eth-noasset-wd", chain_id=43010)
+        vault = make_evm_system_address(suffix="ad01", usage=AddressUsage.Vault)
+        recipient = Web3.to_checksum_address("0x" + "91" * 20)
+        value_raw = 1_250_000_000_000_000_000
+        base_task = _base_task_without_asset_fields(
+            chain=chain,
+            address=vault,
+            action_type=OnchainActionType.Withdrawal,
+            tx_hash_suffix="0d01",
+        )
+        _native_evm_task(
+            base_task=base_task,
+            address=vault,
+            chain=chain,
+            to=recipient,
+            value_raw=value_raw,
+        )
+        project = Project.objects.create(name="NoAssetWithdrawal", wallet=vault.wallet)
+        Withdrawal.objects.create(
+            project=project,
+            crypto=chain.native_coin,
+            amount=Decimal("1.25"),
+            chain=chain,
+            out_no="noasset-withdrawal",
+            to=recipient,
+            broadcast_task=base_task,
+            status=WithdrawalStatus.PENDING,
+        )
+
+        with patch("evm.internal_tx.processor._lookup_block_timestamp") as ts:
+            ts.return_value = (1_700_000_000, timezone.now())
+            process_internal_transaction(
+                chain=chain,
+                tx={"hash": base_task.tx_hash, "from": vault.address},
+                receipt={"status": 1, "logs": [], "blockNumber": 10},
+            )
+
+        transfer = OnchainTransfer.objects.get(hash=base_task.tx_hash)
+        transfer.process()
+        withdrawal = Withdrawal.objects.get(broadcast_task=base_task)
+        assert withdrawal.transfer_id == transfer.pk
+        assert transfer.crypto_id == chain.native_coin_id
+        assert transfer.to_address == recipient
+        assert transfer.value == Decimal(value_raw)
+
+    def test_gas_recharge_matches_from_gas_recharge_and_evm_task(self):
+        chain = make_evm_chain(code="eth-noasset-gas", chain_id=43011)
+        vault = make_evm_system_address(suffix="ad02", usage=AddressUsage.Vault)
+        wallet = vault.wallet
+        deposit_addr = make_evm_system_address(
+            wallet=wallet,
+            suffix="ad12",
+            usage=AddressUsage.Deposit,
+        )
+        project = Project.objects.create(name="NoAssetGas", wallet=wallet)
+        customer = Customer.objects.create(project=project, uid="noasset-gas")
+        deposit_address = DepositAddress.objects.create(
+            customer=customer,
+            chain_type=chain.type,
+            address=deposit_addr,
+        )
+        value_raw = 300_000_000_000_000
+        base_task = _base_task_without_asset_fields(
+            chain=chain,
+            address=vault,
+            action_type=OnchainActionType.GasRecharge,
+            tx_hash_suffix="0a01",
+        )
+        _native_evm_task(
+            base_task=base_task,
+            address=vault,
+            chain=chain,
+            to=deposit_addr.address,
+            value_raw=value_raw,
+        )
+        GasRecharge.objects.create(
+            deposit_address=deposit_address,
+            broadcast_task=base_task,
+        )
+
+        with patch("evm.internal_tx.processor._lookup_block_timestamp") as ts:
+            ts.return_value = (1_700_000_000, timezone.now())
+            process_internal_transaction(
+                chain=chain,
+                tx={"hash": base_task.tx_hash, "from": vault.address},
+                receipt={"status": 1, "logs": [], "blockNumber": 11},
+            )
+
+        transfer = OnchainTransfer.objects.get(hash=base_task.tx_hash)
+        transfer.process()
+        recharge = GasRecharge.objects.get(broadcast_task=base_task)
+        assert recharge.transfer_id == transfer.pk
+        assert transfer.type == OnchainActionType.GasRecharge
+        assert transfer.to_address == deposit_addr.address
+        assert transfer.value == Decimal(value_raw)
+
+    def test_erc20_collection_matches_from_deposits_and_evm_task(self):
+        chain = make_evm_chain(code="eth-noasset-col", chain_id=43012)
+        crypto = make_erc20_token(chain=chain, address_suffix="cafe", decimals=6)
+        vault = make_evm_system_address(suffix="ad03", usage=AddressUsage.Vault)
+        wallet = vault.wallet
+        deposit_addr = make_evm_system_address(
+            wallet=wallet,
+            suffix="ad13",
+            usage=AddressUsage.Deposit,
+        )
+        project = Project.objects.create(name="NoAssetCollection", wallet=wallet)
+        customer = Customer.objects.create(project=project, uid="noasset-collection")
+        DepositAddress.objects.create(
+            customer=customer,
+            chain_type=chain.type,
+            address=deposit_addr,
+        )
+        recipient = Web3.to_checksum_address("0x" + "92" * 20)
+        value_raw = 2_500_000
+        base_task = _base_task_without_asset_fields(
+            chain=chain,
+            address=deposit_addr,
+            action_type=OnchainActionType.DepositCollection,
+            tx_hash_suffix="c001",
+        )
+        encoded_args = (
+            "0x"
+            "a9059cbb"
+            f"{recipient.lower().replace('0x', '').rjust(64, '0')}"
+            f"{hex(value_raw)[2:].rjust(64, '0')}"
+        )
+        EvmBroadcastTask.objects.create(
+            base_task=base_task,
+            address=deposit_addr,
+            chain=chain,
+            nonce=0,
+            to=crypto.address(chain),
+            value=0,
+            data=encoded_args,
+            gas=65_000,
+            tx_kind=TxKind.CONTRACT_CALL,
+        )
+        collection = DepositCollection.objects.create(
+            collection_hash=None,
+            broadcast_task=base_task,
+        )
+        deposit_transfer = OnchainTransfer.objects.create(
+            chain=chain,
+            block=1,
+            hash=make_tx_hash("de01"),
+            event_id="erc20:1",
+            crypto=crypto,
+            from_address=Web3.to_checksum_address("0x" + "93" * 20),
+            to_address=deposit_addr.address,
+            value=value_raw,
+            amount=Decimal("2.5"),
+            timestamp=1_700_000_000,
+            datetime=timezone.now(),
+        )
+        Deposit.objects.create(
+            customer=customer,
+            transfer=deposit_transfer,
+            status=DepositStatus.COMPLETED,
+            collection=collection,
+        )
+
+        receipt = {
+            "status": 1,
+            "logs": [
+                _erc20_transfer_log(
+                    token=crypto.address(chain),
+                    from_addr=deposit_addr.address,
+                    to_addr=recipient,
+                    value_raw=value_raw,
+                    log_index=3,
+                )
+            ],
+            "blockNumber": 12,
+        }
+        with patch("evm.internal_tx.processor._lookup_block_timestamp") as ts:
+            ts.return_value = (1_700_000_000, timezone.now())
+            process_internal_transaction(
+                chain=chain,
+                tx={"hash": base_task.tx_hash, "from": deposit_addr.address},
+                receipt=receipt,
+            )
+
+        transfer = OnchainTransfer.objects.get(hash=base_task.tx_hash, event_id="erc20:3")
+        transfer.process()
+        collection.refresh_from_db()
+        assert collection.transfer_id == transfer.pk
+        assert collection.collection_hash == base_task.tx_hash
+        assert transfer.type == OnchainActionType.DepositCollection
 
 
 class X402InternalLifecycleTests(TestCase):
@@ -244,7 +474,7 @@ class ProcessorTimestampReuseTests(TestCase):
         fact = MatchedTransferFact(
             event_id="native:tx",
             from_address=address.address,
-            to_address=task.recipient,
+            to_address="0x00000000000000000000000000000000000000ff",
             crypto=chain.native_coin,
             value=Decimal("1000000000000000000"),
             amount=Decimal("1"),

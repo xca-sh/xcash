@@ -16,6 +16,8 @@ from chains.models import BroadcastTaskStage
 from chains.models import ChainType
 from chains.models import OnchainTransfer
 from chains.models import OnchainActionType
+from chains.transfer_matching import raw_amount
+from chains.transfer_matching import transfer_matches
 from common.internal_callback import send_internal_callback
 from common.utils.math import format_decimal_stripped
 from deposits.exceptions import DepositStatusError
@@ -482,9 +484,42 @@ class DepositService:
         transfer: OnchainTransfer, broadcast_task: BroadcastTask
     ) -> bool:
         """通过 BroadcastTask 识别 Vault → 充币地址的 Gas 补充转账，并关联到 GasRecharge 记录。"""
-        if not broadcast_task.matches_onchain_transfer(transfer):
+        recharge = (
+            GasRecharge.objects.select_related(
+                "deposit_address__address",
+            )
+            .filter(broadcast_task=broadcast_task)
+            .first()
+        )
+        if recharge is None:
+            return False
+
+        from evm.internal_tx.direct_transfer import decode_direct_transfer_fields  # noqa: PLC0415
+
+        try:
+            fields = decode_direct_transfer_fields(
+                chain=transfer.chain,
+                broadcast_task=broadcast_task,
+            )
+        except (AttributeError, ValueError):
+            logger.exception(
+                "Gas 补充 calldata 解码失败",
+                broadcast_task_id=broadcast_task.pk,
+                transfer_id=transfer.pk,
+                tx_hash=transfer.hash,
+            )
+            fields = None
+
+        if fields is None or not transfer_matches(
+            transfer,
+            chain=transfer.chain,
+            crypto=fields.crypto,
+            from_address=broadcast_task.address.address,
+            to_address=recharge.deposit_address.address.address,
+            value=fields.value,
+        ):
             logger.warning(
-                "Gas 补充链上转账与广播任务不匹配，忽略",
+                "Gas 补充链上转账与 GasRecharge 记录不匹配，忽略",
                 broadcast_task_id=broadcast_task.pk,
                 transfer_id=transfer.pk,
                 tx_hash=transfer.hash,
@@ -496,7 +531,7 @@ class DepositService:
 
         # 将链上转账关联到 GasRecharge 审计记录
         GasRecharge.objects.filter(
-            broadcast_task=broadcast_task,
+            pk=recharge.pk,
             transfer__isnull=True,
         ).update(transfer=transfer, updated_at=timezone.now())
         return True
@@ -509,21 +544,59 @@ class DepositService:
         broadcast_task: BroadcastTask,
     ) -> bool:
         """通过 BroadcastTask 将链上归集转账与 DepositCollection 记录关联。"""
-        if not broadcast_task.matches_onchain_transfer(transfer):
-            logger.warning(
-                "归集链上转账与广播任务不匹配，忽略",
-                broadcast_task_id=broadcast_task.pk,
-                transfer_id=transfer.pk,
-                tx_hash=transfer.hash,
-            )
-            return False
-
         collection = (
             DepositCollection.objects.select_for_update()
             .filter(broadcast_task=broadcast_task)
             .first()
         )
         if collection is None:
+            return False
+
+        deposits = list(
+            collection.deposits.select_related("transfer__chain", "transfer__crypto")
+        )
+        if not deposits:
+            return False
+
+        crypto = deposits[0].transfer.crypto
+        if any(deposit.transfer.crypto_id != crypto.pk for deposit in deposits):
+            raise ValueError(
+                f"DepositCollection {collection.pk} contains mixed cryptos"
+            )
+
+        amount = cls._calculate_collection_amount(deposits)
+        expected_value = raw_amount(amount=amount, crypto=crypto, chain=transfer.chain)
+
+        from evm.internal_tx.direct_transfer import decode_direct_transfer_fields  # noqa: PLC0415
+
+        try:
+            fields = decode_direct_transfer_fields(
+                chain=transfer.chain,
+                broadcast_task=broadcast_task,
+            )
+        except (AttributeError, ValueError):
+            logger.exception(
+                "归集 calldata 解码失败",
+                broadcast_task_id=broadcast_task.pk,
+                transfer_id=transfer.pk,
+                tx_hash=transfer.hash,
+            )
+            fields = None
+
+        if fields is None or not transfer_matches(
+            transfer,
+            chain=transfer.chain,
+            crypto=crypto,
+            from_address=broadcast_task.address.address,
+            to_address=fields.to_address,
+            value=expected_value,
+        ):
+            logger.warning(
+                "归集链上转账与归集记录不匹配，忽略",
+                broadcast_task_id=broadcast_task.pk,
+                transfer_id=transfer.pk,
+                tx_hash=transfer.hash,
+            )
             return False
 
         transfer.type = OnchainActionType.DepositCollection

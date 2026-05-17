@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 
 from chains.models import (
     BroadcastTask,
@@ -10,8 +9,8 @@ from chains.models import (
     OnchainTransfer,
 )
 from django.utils import timezone
+from evm.internal_tx.direct_transfer import match_direct_transfer_fact
 from evm.internal_tx.facts import MatchedTransferFact
-from web3 import Web3
 
 
 def gas_recharge_matcher(
@@ -20,15 +19,10 @@ def gas_recharge_matcher(
     broadcast_task: BroadcastTask,
     receipt: dict,
 ) -> MatchedTransferFact | None:
-    decimals = chain.native_coin.get_decimals(chain)
-    expected_value = Decimal(broadcast_task.amount).scaleb(decimals)
-    return MatchedTransferFact(
-        event_id="native:tx",
-        from_address=Web3.to_checksum_address(broadcast_task.address.address),
-        to_address=Web3.to_checksum_address(broadcast_task.recipient),
-        crypto=chain.native_coin,
-        value=expected_value,
-        amount=broadcast_task.amount,
+    return match_direct_transfer_fact(
+        chain=chain,
+        broadcast_task=broadcast_task,
+        receipt=receipt,
     )
 
 
@@ -56,4 +50,3 @@ class GasRechargeHandler:
 
 
 gas_recharge_handler = GasRechargeHandler()
-

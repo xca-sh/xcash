@@ -553,9 +553,6 @@ class EvmBroadcastTask(UndeletableModel):
                 chain=intent.chain,
                 address=intent.address,
                 action_type=intent.action_type,
-                crypto=intent.crypto,
-                recipient=intent.recipient,
-                amount=intent.amount,
                 stage=BroadcastTaskStage.QUEUED,
                 result=BroadcastTaskResult.UNKNOWN,
             )

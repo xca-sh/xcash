@@ -40,10 +40,12 @@ from chains.signer import SignerServiceError
 from chains.signer import build_signer_signature_payload
 from chains.signer import get_signer_backend
 from chains.tasks import block_number_updated
+from chains.transfer_matching import addresses_equal
+from chains.transfer_matching import raw_amount
+from chains.transfer_matching import transfer_matches
 from currencies.models import ChainToken
 from currencies.models import Crypto
 from evm.choices import TxKind
-from evm.models import EvmBroadcastTask
 
 
 class ChainPoaDetectionTests(SimpleTestCase):
@@ -68,6 +70,101 @@ class ChainPoaDetectionTests(SimpleTestCase):
             Chain._detect_poa,
         )
         self.assertTrue(detect_poa(chain))
+
+
+class TransferMatchingTests(TestCase):
+    def test_addresses_equal_normalizes_evm_addresses(self):
+        native = Crypto.objects.create(
+            name="Transfer Match Native",
+            symbol="TMN",
+            coingecko_id="transfer-match-native",
+        )
+        chain = Chain.objects.create(
+            name="Transfer Match EVM",
+            code="transfer-match-evm",
+            type=ChainType.EVM,
+            native_coin=native,
+            chain_id=930001,
+            rpc="http://localhost:8545",
+            active=True,
+        )
+        checksum = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000abc"
+        )
+
+        self.assertTrue(addresses_equal(checksum.lower(), checksum, chain=chain))
+
+    def test_addresses_equal_uses_exact_string_for_non_evm_chains(self):
+        native = Crypto.objects.create(
+            name="Transfer Match Bitcoin",
+            symbol="TMB",
+            coingecko_id="transfer-match-bitcoin",
+        )
+        chain = Chain.objects.create(
+            name="Transfer Match BTC",
+            code="transfer-match-btc",
+            type=ChainType.BITCOIN,
+            native_coin=native,
+            active=True,
+        )
+
+        self.assertTrue(addresses_equal("bc1ABC", "bc1ABC", chain=chain))
+        self.assertFalse(addresses_equal("bc1ABC", "bc1abc", chain=chain))
+
+    def test_transfer_matches_uses_raw_value_and_chain_specific_address_rules(self):
+        native = Crypto.objects.create(
+            name="Transfer Match Coin",
+            symbol="TMC",
+            coingecko_id="transfer-match-coin",
+            decimals=6,
+        )
+        chain = Chain.objects.create(
+            name="Transfer Match Chain",
+            code="transfer-match-chain",
+            type=ChainType.EVM,
+            native_coin=native,
+            chain_id=930002,
+            rpc="http://localhost:8545",
+            active=True,
+        )
+        from_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000001"
+        )
+        to_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000002"
+        )
+        transfer = OnchainTransfer.objects.create(
+            chain=chain,
+            block=1,
+            hash="0x" + "1" * 64,
+            event_id="native:tx",
+            crypto=native,
+            from_address=from_address.lower(),
+            to_address=to_address.lower(),
+            value=Decimal("1234567"),
+            amount=Decimal("1.234567"),
+            timestamp=1,
+            datetime=timezone.now(),
+            status=TransferStatus.CONFIRMED,
+            type=OnchainActionType.Withdrawal,
+        )
+
+        expected_value = raw_amount(
+            amount=Decimal("1.234567"),
+            crypto=native,
+            chain=chain,
+        )
+
+        self.assertTrue(
+            transfer_matches(
+                transfer,
+                chain=chain,
+                crypto=native,
+                from_address=from_address,
+                to_address=to_address,
+                value=expected_value,
+            )
+        )
 
 
 class ChainPoaRetryTests(TestCase):
@@ -144,9 +241,6 @@ class BroadcastTaskValidationTests(TestCase):
             chain=self.chain,
             address=self.addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=self.crypto,
-            recipient="0x0000000000000000000000000000000000000002",
-            amount="1",
             tx_hash="0x" + "1" * 64,
             stage=BroadcastTaskStage.PENDING_CHAIN,
             result=BroadcastTaskResult.FAILED,
@@ -162,9 +256,6 @@ class BroadcastTaskValidationTests(TestCase):
             chain=self.chain,
             address=self.addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=self.crypto,
-            recipient="0x0000000000000000000000000000000000000002",
-            amount="1",
             tx_hash="0x" + "2" * 64,
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
@@ -216,9 +307,6 @@ class TxHashModelTests(TestCase):
             chain=self.chain,
             address=self.addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=self.crypto,
-            recipient="0x0000000000000000000000000000000000000012",
-            amount="1",
             tx_hash="0x" + "a1" * 32,
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
@@ -312,9 +400,6 @@ class BroadcastTaskTxHashHistoryTests(TestCase):
             chain=self.chain,
             address=self.addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=self.crypto,
-            recipient="0x0000000000000000000000000000000000000022",
-            amount="1",
             tx_hash="0x" + "e1" * 32,
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
@@ -608,11 +693,6 @@ class TransferConfirmDispatchTests(TestCase):
             chain=self.chain,
             address=self.addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=self.crypto,
-            recipient=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000c2"
-            ),
-            amount="1",
             tx_hash=tx_hash,
             stage=BroadcastTaskStage.PENDING_CONFIRM,
             result=BroadcastTaskResult.UNKNOWN,
@@ -1449,96 +1529,6 @@ class TransferServiceCreateObservedTests(TestCase):
         self.assertTrue(result.conflict)
 
 
-class BroadcastTaskOnchainMatchTests(TestCase):
-    def test_evm_erc20_token_with_native_symbol_matches_by_token_amount(self):
-        native = Crypto.objects.create(
-            name="Match Ether",
-            symbol="ETHM",
-            coingecko_id="match-ether",
-            decimals=18,
-        )
-        token = Crypto.objects.create(
-            name="Wrapped BSC Token",
-            symbol="BSC",
-            coingecko_id="wrapped-bsc-token",
-            decimals=6,
-        )
-        chain = Chain.objects.create(
-            name="Match ERC20 Chain",
-            code="match-erc20-chain",
-            type=ChainType.EVM,
-            native_coin=native,
-            chain_id=909_301,
-            rpc="http://localhost:8545",
-            active=True,
-        )
-        ChainToken.objects.create(
-            chain=chain,
-            crypto=token,
-            address=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000a01"
-            ),
-            decimals=6,
-        )
-        assert token.is_native
-        assert token != chain.native_coin
-        address = Address.objects.create(
-            wallet=Wallet.objects.create(),
-            chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
-            bip44_account=1,
-            address_index=0,
-            address=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000a02"
-            ),
-        )
-        recipient = Web3.to_checksum_address(
-            "0x0000000000000000000000000000000000000a03"
-        )
-        tx_hash = "0x" + "a1" * 32
-        broadcast_task = BroadcastTask.objects.create(
-            chain=chain,
-            address=address,
-            action_type=OnchainActionType.Withdrawal,
-            crypto=token,
-            recipient=recipient,
-            amount=Decimal("1.23"),
-            tx_hash=tx_hash,
-            stage=BroadcastTaskStage.PENDING_CONFIRM,
-            result=BroadcastTaskResult.UNKNOWN,
-        )
-        EvmBroadcastTask.objects.create(
-            base_task=broadcast_task,
-            address=address,
-            chain=chain,
-            to=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000a01"
-            ),
-            value=0,
-            nonce=0,
-            data="0xa9059cbb",
-            gas=65_000,
-            tx_kind=TxKind.CONTRACT_CALL,
-        )
-        transfer = OnchainTransfer.objects.create(
-            chain=chain,
-            block=1,
-            hash=tx_hash,
-            event_id="erc20:transfer",
-            crypto=token,
-            from_address=address.address,
-            to_address=recipient,
-            value=Decimal("1230000"),
-            amount=Decimal("1.23"),
-            timestamp=1,
-            datetime=timezone.now(),
-            status=TransferStatus.CONFIRMING,
-            type=OnchainActionType.Withdrawal,
-        )
-
-        self.assertTrue(broadcast_task.matches_onchain_transfer(transfer))
-
-
 class BroadcastTaskTransitionTests(TestCase):
     """验证 BroadcastTask 封装的状态转换方法。"""
 
@@ -1572,11 +1562,6 @@ class BroadcastTaskTransitionTests(TestCase):
             chain=self.chain,
             address=self.addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=self.crypto,
-            recipient=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000d2"
-            ),
-            amount="1",
             tx_hash="0x" + "dd" * 32,
             stage=BroadcastTaskStage.PENDING_CONFIRM,
             result=BroadcastTaskResult.UNKNOWN,
@@ -1923,7 +1908,6 @@ def test_address_send_crypto_schedules_native_transfer_intent():
     assert intent.chain == chain
     assert intent.tx_kind == TxKind.NATIVE_TRANSFER
     assert intent.action_type == OnchainActionType.Withdrawal
-    assert intent.crypto == native
     assert intent.value == 1_500_000_000_000_000_000
     assert intent.gas == chain.base_transfer_gas
 
@@ -1996,6 +1980,4 @@ def test_address_send_crypto_schedules_erc20_transfer_intent():
         "0x00000000000000000000000000000000001212c0"
     )
     assert intent.action_type == OnchainActionType.DepositCollection
-    assert intent.crypto == token
-    assert intent.recipient == recipient
     assert intent.gas == chain.erc20_transfer_gas

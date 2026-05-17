@@ -1438,11 +1438,6 @@ class DepositCollectionVerificationTests(TestCase):
                             ),
                         ),
                         action_type=OnchainActionType.DepositCollection,
-                        crypto=self.crypto,
-                        recipient=Web3.to_checksum_address(
-                            "0x0000000000000000000000000000000000000d04"
-                        ),
-                        amount=Decimal("1"),
                     )
                 )
                 Deposit.objects.filter(pk=self.deposit.pk).update(collection=collection)

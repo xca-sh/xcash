@@ -12,6 +12,8 @@ from chains.models import AddressUsage, BroadcastTask
 from chains.models import ChainType
 from chains.models import OnchainActionType
 from chains.service import AddressService
+from chains.transfer_matching import raw_amount
+from chains.transfer_matching import transfer_matches
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from common.internal_callback import send_internal_callback
@@ -600,16 +602,6 @@ class WithdrawalService:
         except Withdrawal.DoesNotExist:
             return False
 
-        if not broadcast_task.matches_onchain_transfer(transfer):
-            logger.warning(
-                "提币链上转账与广播任务不匹配，忽略",
-                withdrawal_id=withdrawal.id,
-                broadcast_task_id=broadcast_task.pk,
-                transfer_id=transfer.pk,
-                tx_hash=transfer.hash,
-            )
-            return False
-
         # 记录需要额外写入的字段（chain 为 None 时才加入）
         update_fields = ["transfer", "status", "updated_at"]
 
@@ -624,6 +616,29 @@ class WithdrawalService:
                 transfer_hash=transfer.hash,
                 expected_chain_id=withdrawal.chain_id,
                 actual_chain_id=transfer.chain_id,
+            )
+            return False
+
+        expected_chain = withdrawal.chain or transfer.chain
+        expected_value = raw_amount(
+            amount=withdrawal.amount,
+            crypto=withdrawal.crypto,
+            chain=expected_chain,
+        )
+        if not transfer_matches(
+            transfer,
+            chain=expected_chain,
+            crypto=withdrawal.crypto,
+            from_address=broadcast_task.address.address,
+            to_address=withdrawal.to,
+            value=expected_value,
+        ):
+            logger.warning(
+                "提币链上转账与提币单不匹配，忽略",
+                withdrawal_id=withdrawal.id,
+                broadcast_task_id=broadcast_task.pk,
+                transfer_id=transfer.pk,
+                tx_hash=transfer.hash,
             )
             return False
 

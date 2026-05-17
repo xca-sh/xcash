@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal  # noqa: TC003 - 规格要求运行时可解析 Decimal 注解
 from typing import TYPE_CHECKING
 
 import eth_abi
@@ -33,9 +32,6 @@ class EvmTxIntent:
     data: str
     gas: int
     action_type: OnchainActionType
-    crypto: Crypto | None
-    recipient: str | None
-    amount: Decimal | None
     verify_fn: Callable[[], None] | None = None
 
 
@@ -109,8 +105,6 @@ def build_native_transfer_intent(
         raise ValueError("value must be >= 0")
 
     to_checksum = Web3.to_checksum_address(to)
-    native = chain.native_coin
-
     return EvmTxIntent(
         address=address,
         chain=chain,
@@ -120,9 +114,6 @@ def build_native_transfer_intent(
         data="",
         gas=chain.base_transfer_gas,
         action_type=action_type,
-        crypto=native,
-        recipient=to_checksum,
-        amount=Decimal(value).scaleb(-native.decimals),
         verify_fn=verify_fn,
     )
 
@@ -159,9 +150,6 @@ def build_erc20_transfer_intent(
         data=f"{_ERC20_TRANSFER_SELECTOR}{encoded_args}",
         gas=chain.erc20_transfer_gas,
         action_type=action_type,
-        crypto=crypto,
-        recipient=to_checksum,
-        amount=Decimal(value_raw).scaleb(-crypto.get_decimals(chain)),
         verify_fn=verify_fn,
     )
 
@@ -175,17 +163,12 @@ def build_contract_call_intent(
     gas: int,
     action_type: OnchainActionType,
     value: int = 0,
-    crypto: Crypto | None = None,
-    recipient: str | None = None,
-    amount: Decimal | None = None,
     verify_fn: Callable[[], None] | None = None,
 ) -> EvmTxIntent:
     if gas <= 0:
         raise ValueError("gas must be > 0")
     if value < 0:
         raise ValueError("value must be >= 0")
-
-    recipient_checksum = Web3.to_checksum_address(recipient) if recipient else None
 
     return EvmTxIntent(
         address=address,
@@ -196,9 +179,6 @@ def build_contract_call_intent(
         data=_normalize_hex_calldata(data),
         gas=gas,
         action_type=action_type,
-        crypto=crypto,
-        recipient=recipient_checksum,
-        amount=amount,
         verify_fn=verify_fn,
     )
 
@@ -284,9 +264,6 @@ def build_x402_eip3009_facilitate_intent(
         data=f"{_EIP3009_TRANSFER_WITH_AUTH_SELECTOR}{encoded_args}",
         gas=get_x402_eip3009_facilitate_gas(chain),
         action_type=OnchainActionType.X402Facilitate,
-        crypto=crypto,
-        recipient=auth_to,
-        amount=Decimal(authorization.value).scaleb(-crypto.get_decimals(chain)),
     )
 
 
@@ -321,27 +298,17 @@ def build_payment_collector_deploy_intent(
     address: Address,
     chain: Chain,
     salt: bytes,
-    crypto: Crypto,
-    expected_collect_value_raw: int,
     collector_init_code: bytes,
     gas: int,
 ) -> EvmTxIntent:
     if not chain.create2_factory_address:
         raise ValueError(f"Chain {chain.code} 未配置 create2_factory_address")
-    if expected_collect_value_raw < 0:
-        raise ValueError("expected_collect_value_raw must be >= 0")
     if not collector_init_code:
         raise ValueError("collector_init_code must not be empty")
 
     _require_bytes32("salt", salt)
-    collector_init_code_hash = Web3.keccak(collector_init_code)
 
     factory_address = Web3.to_checksum_address(chain.create2_factory_address)
-    collector_address = compute_create2_address(
-        factory_address=factory_address,
-        salt=salt,
-        init_code_hash=collector_init_code_hash,
-    )
     encoded_args = eth_abi.encode(
         ["bytes32", "bytes"],
         [bytes(salt), bytes(collector_init_code)],
@@ -354,7 +321,4 @@ def build_payment_collector_deploy_intent(
         data=f"{_PAYMENT_COLLECTOR_FACTORY_SELECTOR}{encoded_args}",
         gas=gas,
         action_type=OnchainActionType.ContractDeployCollect,
-        crypto=crypto,
-        recipient=collector_address,
-        amount=Decimal(expected_collect_value_raw).scaleb(-crypto.get_decimals(chain)),
     )

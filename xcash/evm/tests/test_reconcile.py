@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock
 from unittest.mock import patch
@@ -88,11 +87,6 @@ class EvmReconcilePendingChainTests(TestCase):
             chain=self.chain,
             address=self.addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=self.native,
-            recipient=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000a2"
-            ),
-            amount=Decimal("1"),
             tx_hash=tx_hash,
             stage=stage,
             result=result,

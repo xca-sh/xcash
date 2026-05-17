@@ -9,8 +9,8 @@ from chains.models import (
     Chain,
     OnchainTransfer,
 )
+from evm.internal_tx.direct_transfer import match_direct_transfer_fact
 from evm.internal_tx.facts import MatchedTransferFact
-from evm.internal_tx.withdrawal import _task_transfer_fact
 
 
 def deposit_collection_matcher(
@@ -19,7 +19,11 @@ def deposit_collection_matcher(
     broadcast_task: BroadcastTask,
     receipt: dict,
 ) -> MatchedTransferFact | None:
-    return _task_transfer_fact(chain=chain, task=broadcast_task, receipt=receipt)
+    return match_direct_transfer_fact(
+        chain=chain,
+        broadcast_task=broadcast_task,
+        receipt=receipt,
+    )
 
 
 @dataclass
@@ -54,4 +58,3 @@ class DepositCollectionHandler:
 
 
 deposit_collection_handler = DepositCollectionHandler()
-

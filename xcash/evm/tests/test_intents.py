@@ -3,7 +3,6 @@
 import typing
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError
-from decimal import Decimal
 
 import eth_abi
 import pytest
@@ -39,9 +38,6 @@ def simple_intent():
         data="",
         gas=21000,
         action_type=OnchainActionType.Withdrawal,
-        crypto=None,
-        recipient=None,
-        amount=None,
     )
 
 
@@ -50,7 +46,7 @@ def test_evm_tx_intent_is_frozen(simple_intent):
         simple_intent.value = 999
 
 
-def test_evm_tx_intent_amount_annotation_is_decimal():
+def test_evm_tx_intent_has_no_business_asset_fields():
     hints = typing.get_type_hints(
         EvmTxIntent,
         globalns={
@@ -59,11 +55,12 @@ def test_evm_tx_intent_amount_annotation_is_decimal():
             "Callable": Callable,
             "Chain": object,
             "Crypto": object,
-            "Decimal": Decimal,
         },
     )
 
-    assert hints["amount"] == Decimal | None
+    assert "crypto" not in hints
+    assert "recipient" not in hints
+    assert "amount" not in hints
 
 
 def test_normalize_accepts_empty_string_returns_0x():
@@ -184,12 +181,9 @@ def test_build_native_transfer_intent_sets_basic_fields():
 
     assert intent.tx_kind == TxKind.NATIVE_TRANSFER
     assert intent.to == Web3.to_checksum_address(recipient)
-    assert intent.recipient == Web3.to_checksum_address(recipient)
     assert intent.value == value
     assert intent.data == ""
     assert intent.gas == chain.base_transfer_gas
-    assert intent.amount == Decimal(value).scaleb(-18)
-    assert intent.crypto is native_coin
 
 
 def test_build_native_transfer_intent_rejects_negative_value():
@@ -232,9 +226,6 @@ def test_build_erc20_transfer_intent_sets_basic_fields():
     )
     assert decoded_value_raw == value_raw
     assert intent.gas == chain.erc20_transfer_gas
-    assert intent.recipient == Web3.to_checksum_address(recipient)
-    assert intent.amount == Decimal(value_raw).scaleb(-6)
-    assert intent.crypto is crypto
 
 
 def test_build_erc20_transfer_intent_rejects_negative_value_raw():
@@ -269,8 +260,6 @@ def test_build_erc20_transfer_intent_rejects_crypto_not_deployed_on_chain():
 def test_build_contract_call_intent_sets_basic_fields():
     chain = _fake_chain()
     contract_address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    recipient = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-
     intent = build_contract_call_intent(
         address=_fake_address(),
         chain=chain,
@@ -279,7 +268,6 @@ def test_build_contract_call_intent_sets_basic_fields():
         gas=50000,
         action_type=OnchainActionType.Invoice,
         value=7,
-        recipient=recipient,
     )
 
     assert intent.tx_kind == TxKind.CONTRACT_CALL
@@ -287,7 +275,6 @@ def test_build_contract_call_intent_sets_basic_fields():
     assert intent.data == "0xa9059cbb"
     assert intent.gas == 50000
     assert intent.value == 7
-    assert intent.recipient == Web3.to_checksum_address(recipient)
 
 
 def test_build_contract_call_intent_defaults_value_to_zero():
@@ -383,11 +370,9 @@ def test_build_x402_eip3009_facilitate_intent_sets_contract_call_fields(
     assert intent.tx_kind == TxKind.CONTRACT_CALL
     assert intent.to == Web3.to_checksum_address(token_address)
     assert intent.to != Web3.to_checksum_address(authorization.to)
-    assert intent.recipient == Web3.to_checksum_address(authorization.to)
     assert intent.action_type == OnchainActionType.X402Facilitate
     assert intent.gas == 200000
     assert intent.data.startswith("0xe3ee160e")
-    assert intent.amount == Decimal(authorization.value).scaleb(-6)
 
     decoded = eth_abi.decode(
         [
@@ -494,57 +479,35 @@ def test_compute_create2_address_requires_keyword_arguments():
 
 def test_build_payment_collector_deploy_intent_sets_contract_call_fields():
     factory_address = "0x1111111111111111111111111111111111111111"
-    vault_address = "0x2222222222222222222222222222222222222222"
-    token_address = "0x3333333333333333333333333333333333333333"
     salt = b"\x01" * 32
     collector_init_code = b"\x60\x00"
-    collector_init_code_hash = Web3.keccak(collector_init_code)
-    expected_collect_value_raw = 1234567
     gas = 180000
-    crypto = _fake_crypto(symbol="USDT", decimals=6, token_address=token_address)
     chain = _fake_chain(create2_factory_address=factory_address)
 
     intent = build_payment_collector_deploy_intent(
         address=_fake_address(),
         chain=chain,
         salt=salt,
-        crypto=crypto,
-        expected_collect_value_raw=expected_collect_value_raw,
         collector_init_code=collector_init_code,
         gas=gas,
     )
 
-    expected_collector = compute_create2_address(
-        factory_address=factory_address,
-        salt=salt,
-        init_code_hash=collector_init_code_hash,
-    )
     assert intent.tx_kind == TxKind.CONTRACT_CALL
     assert intent.to == Web3.to_checksum_address(factory_address)
-    assert intent.recipient == expected_collector
-    assert intent.recipient != Web3.to_checksum_address(factory_address)
-    assert intent.recipient != Web3.to_checksum_address(vault_address)
     assert intent.action_type == OnchainActionType.ContractDeployCollect
     assert intent.gas == gas
-    assert intent.amount == Decimal(expected_collect_value_raw).scaleb(-6)
-    assert intent.crypto is crypto
     assert intent.data.startswith("0x")
 
 
 def test_build_payment_collector_deploy_intent_encodes_factory_call_data():
     factory_address = "0x1111111111111111111111111111111111111111"
-    token_address = "0x3333333333333333333333333333333333333333"
     salt = b"\x01" * 32
-    expected_collect_value_raw = 1234567
-    crypto = _fake_crypto(symbol="USDT", decimals=6, token_address=token_address)
     chain = _fake_chain(create2_factory_address=factory_address)
 
     intent = build_payment_collector_deploy_intent(
         address=_fake_address(),
         chain=chain,
         salt=salt,
-        crypto=crypto,
-        expected_collect_value_raw=expected_collect_value_raw,
         collector_init_code=b"\x60\x00",
         gas=180000,
     )
@@ -567,10 +530,6 @@ def test_build_payment_collector_deploy_intent_rejects_missing_factory():
             address=_fake_address(),
             chain=chain,
             salt=b"\x01" * 32,
-            crypto=_fake_crypto(
-                token_address="0x3333333333333333333333333333333333333333"
-            ),
-            expected_collect_value_raw=1,
             collector_init_code=b"\x60\x00",
             gas=180000,
         )
@@ -586,29 +545,6 @@ def test_build_payment_collector_deploy_intent_rejects_short_salt():
             address=_fake_address(),
             chain=chain,
             salt=b"\x01" * 31,
-            crypto=_fake_crypto(
-                token_address="0x3333333333333333333333333333333333333333"
-            ),
-            expected_collect_value_raw=1,
-            collector_init_code=b"\x60\x00",
-            gas=180000,
-        )
-
-
-def test_build_payment_collector_deploy_intent_rejects_negative_expected_value():
-    chain = _fake_chain(
-        create2_factory_address="0x1111111111111111111111111111111111111111"
-    )
-
-    with pytest.raises(ValueError, match="expected_collect_value_raw"):
-        build_payment_collector_deploy_intent(
-            address=_fake_address(),
-            chain=chain,
-            salt=b"\x01" * 32,
-            crypto=_fake_crypto(
-                token_address="0x3333333333333333333333333333333333333333"
-            ),
-            expected_collect_value_raw=-1,
             collector_init_code=b"\x60\x00",
             gas=180000,
         )
@@ -624,10 +560,6 @@ def test_build_payment_collector_deploy_intent_rejects_empty_init_code():
             address=_fake_address(),
             chain=chain,
             salt=b"\x01" * 32,
-            crypto=_fake_crypto(
-                token_address="0x3333333333333333333333333333333333333333"
-            ),
-            expected_collect_value_raw=1,
             collector_init_code=b"",
             gas=180000,
         )
@@ -642,8 +574,6 @@ def test_build_payment_collector_deploy_intent_does_not_require_token_address():
         address=_fake_address(),
         chain=chain,
         salt=b"\x01" * 32,
-        crypto=_fake_crypto(symbol="USDT", token_address=None),
-        expected_collect_value_raw=1,
         collector_init_code=b"\x60\x00",
         gas=180000,
     )

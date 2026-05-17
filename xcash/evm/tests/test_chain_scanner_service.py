@@ -1,4 +1,3 @@
-from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import ANY
 from unittest.mock import Mock
@@ -489,11 +488,6 @@ class EvmChainScannerServiceTests(TestCase):
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000f6"
-            ),
-            amount=Decimal("1"),
             tx_hash="0x" + "ef" * 32,
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,

@@ -3,7 +3,6 @@ from unfold.decorators import display
 
 from common.admin import ReadOnlyModelAdmin
 from common.admin_scan_cursor import SyncScanCursorToLatestActionMixin
-from common.utils.math import format_decimal_stripped
 from evm.models import EvmBroadcastTask
 from evm.models import EvmScanCursor
 
@@ -16,19 +15,17 @@ class EvmBroadcastTaskAdmin(ReadOnlyModelAdmin):
         "display_chain",
         "action_type",
         "tx_kind",
-        "display_crypto",
-        "display_recipient",
-        "display_amount",
+        "to",
+        "value",
         "display_nonce",
         "display_status",
         "created_at",
         "formatted_last_attempt_at",
     )
-    # BroadcastTask 已吸收 EVM 业务元数据，后台直接查询主任务对象即可。
     # 状态展示优先读取统一父任务，后台查询一并预加载，避免 N+1。
-    list_select_related = ("base_task", "base_task__crypto", "address", "chain")
+    list_select_related = ("base_task", "address", "chain")
     list_filter = ("tx_kind",)
-    search_fields = ("base_task__tx_hash", "address__address", "base_task__recipient")
+    search_fields = ("base_task__tx_hash", "address__address", "to")
 
     @admin.display(ordering="last_attempt_at", description="执行时间")
     def formatted_last_attempt_at(self, obj: EvmBroadcastTask):
@@ -53,26 +50,6 @@ class EvmBroadcastTaskAdmin(ReadOnlyModelAdmin):
     @admin.display(description="类型", ordering="base_task__action_type")
     def action_type(self, obj: EvmBroadcastTask):  # pragma: no cover
         return obj.base_task.get_action_type_display() if obj.base_task_id else "—"
-
-    @admin.display(description="代币", ordering="base_task__crypto__symbol")
-    def display_crypto(self, obj: EvmBroadcastTask):  # pragma: no cover
-        return (
-            obj.base_task.crypto
-            if obj.base_task_id and obj.base_task.crypto_id
-            else "—"
-        )
-
-    @admin.display(description="收款地址", ordering="base_task__recipient")
-    def display_recipient(self, obj: EvmBroadcastTask):  # pragma: no cover
-        if obj.base_task_id and obj.base_task.recipient:
-            return obj.base_task.recipient
-        return obj.to
-
-    @admin.display(description="数量")
-    def display_amount(self, obj: EvmBroadcastTask):  # pragma: no cover
-        if obj.base_task_id and obj.base_task.amount is not None:
-            return format_decimal_stripped(obj.base_task.amount)
-        return "—"
 
     @admin.display(ordering="address__address", description="地址")
     def display_address(self, obj: EvmBroadcastTask):  # pragma: no cover

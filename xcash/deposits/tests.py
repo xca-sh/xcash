@@ -672,15 +672,11 @@ class DepositServiceDecimalsTests(TestCase):
         self.assertTrue(collected)
         schedule_mock.assert_called_once()
         intent = schedule_mock.call_args.args[0]
-        self.assertEqual(intent.crypto, crypto)
         self.assertEqual(intent.chain, chain)
         self.assertEqual(intent.address, fake_addr)
-        self.assertEqual(
-            intent.recipient,
-            Web3.to_checksum_address("0x00000000000000000000000000000000000000aa"),
-        )
+        self.assertEqual(intent.to, Web3.to_checksum_address(crypto.address(chain)))
+        self.assertIn("000000000000000000000000000000000000000000aa", intent.data)
         self.assertEqual(intent.value, 0)
-        self.assertEqual(intent.amount, Decimal("1"))
         self.assertEqual(intent.action_type, OnchainActionType.DepositCollection)
 
     @patch.object(DepositService, "_lock_pending_group_ids", return_value={2})
@@ -931,8 +927,6 @@ class GasRechargeServiceIdempotencyDbTests(TestCase):
             chain=chain,
             address=addr,
             action_type=OnchainActionType.GasRecharge,
-            crypto=native,
-            amount=Decimal("1"),
         )
         GasRecharge.objects.create(
             deposit_address=deposit_address,
@@ -1010,8 +1004,6 @@ class GasRechargeServiceIdempotencyDbTests(TestCase):
             chain=chain_b,
             address=addr,
             action_type=OnchainActionType.GasRecharge,
-            crypto=native_b,
-            amount=Decimal("1"),
         )
         GasRecharge.objects.create(
             deposit_address=deposit_address,
@@ -1021,8 +1013,6 @@ class GasRechargeServiceIdempotencyDbTests(TestCase):
             chain=chain_a,
             address=addr,
             action_type=OnchainActionType.GasRecharge,
-            crypto=native_a,
-            amount=Decimal("1"),
         )
         schedule_mock.return_value = SimpleNamespace(base_task=current_task)
 
@@ -1174,6 +1164,100 @@ class DepositTransferRematchTests(TestCase):
         self.assertEqual(payload["data"]["sys_no"], transfer.deposit.sys_no)
         self.assertEqual(payload["data"]["uid"], customer.uid)
         self.assertTrue(payload["data"]["confirmed"])
+
+    def test_try_match_collection_rejects_mixed_crypto_deposits(self):
+        wallet = Wallet.objects.create()
+        project = Project.objects.create(name="MixedCollection", wallet=wallet)
+        customer = Customer.objects.create(project=project, uid="mixed-collection")
+        native = Crypto.objects.create(
+            name="Mixed Collection Native",
+            symbol="MCN",
+            coingecko_id="mixed-collection-native",
+        )
+        token_a = Crypto.objects.create(
+            name="Mixed Collection Token A",
+            symbol="MCTA",
+            coingecko_id="mixed-collection-token-a",
+        )
+        token_b = Crypto.objects.create(
+            name="Mixed Collection Token B",
+            symbol="MCTB",
+            coingecko_id="mixed-collection-token-b",
+        )
+        chain = Chain.objects.create(
+            name="Mixed Collection Chain",
+            code="mixed-collection-chain",
+            type=ChainType.EVM,
+            native_coin=native,
+            chain_id=10901,
+            rpc="http://localhost:8545",
+            active=True,
+        )
+        vault = Address.objects.create(
+            wallet=wallet,
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.Vault,
+            bip44_account=0,
+            address_index=0,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000a01"
+            ),
+        )
+        broadcast_task = BroadcastTask.objects.create(
+            chain=chain,
+            address=vault,
+            action_type=OnchainActionType.DepositCollection,
+        )
+        collection = DepositCollection.objects.create(broadcast_task=broadcast_task)
+        transfer_a = OnchainTransfer.objects.create(
+            chain=chain,
+            block=1,
+            hash="0x" + "a1" * 32,
+            event_id="erc20:mixed-a",
+            crypto=token_a,
+            from_address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000a11"
+            ),
+            to_address=vault.address,
+            value="1",
+            amount=Decimal("1"),
+            timestamp=1,
+            datetime=timezone.now(),
+            status=TransferStatus.CONFIRMED,
+            type=OnchainActionType.Deposit,
+        )
+        transfer_b = OnchainTransfer.objects.create(
+            chain=chain,
+            block=1,
+            hash="0x" + "b1" * 32,
+            event_id="erc20:mixed-b",
+            crypto=token_b,
+            from_address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000b11"
+            ),
+            to_address=vault.address,
+            value="1",
+            amount=Decimal("1"),
+            timestamp=1,
+            datetime=timezone.now(),
+            status=TransferStatus.CONFIRMED,
+            type=OnchainActionType.Deposit,
+        )
+        Deposit.objects.create(
+            customer=customer,
+            transfer=transfer_a,
+            status=DepositStatus.COMPLETED,
+            collection=collection,
+        )
+        Deposit.objects.create(
+            customer=customer,
+            transfer=transfer_b,
+            status=DepositStatus.COMPLETED,
+            collection=collection,
+        )
+
+        with self.assertRaisesMessage(ValueError, "contains mixed cryptos"):
+            DepositService.try_match_collection(transfer_a, broadcast_task)
 
     @patch("deposits.service.WebhookService.create_event")
     def test_pre_notify_enabled_emits_confirming_webhook(self, create_event_mock):
@@ -1588,11 +1672,6 @@ class CollectScheduleLifecycleTests(TestCase):
                 chain=fixture["chain"],
                 address=fixture["deposit_address"].address,
                 action_type=OnchainActionType.DepositCollection,
-                crypto=fixture["crypto"],
-                recipient=Web3.to_checksum_address(
-                    "0x0000000000000000000000000000000000000c02"
-                ),
-                amount=Decimal("12"),
             )
         )
 
@@ -1621,11 +1700,6 @@ class CollectScheduleLifecycleTests(TestCase):
             chain=fixture["chain"],
             address=fixture["deposit_address"].address,
             action_type=OnchainActionType.DepositCollection,
-            crypto=fixture["crypto"],
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000c03"
-            ),
-            amount=Decimal("5"),
         )
         collection = DepositCollection.objects.create(
             collection_hash="0x" + "c" * 64,
@@ -1718,11 +1792,6 @@ class CollectScheduleLifecycleTests(TestCase):
             chain=chain,
             address=addr,
             action_type=OnchainActionType.DepositCollection,
-            crypto=crypto,
-            recipient=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000d1"
-            ),
-            amount=Decimal("3"),
         )
         schedule_mock.return_value = SimpleNamespace(base_task=base_task)
         fake_addr = SimpleNamespace(
@@ -1875,11 +1944,6 @@ class CollectScheduleLifecycleTests(TestCase):
         collection_task = BroadcastTask.objects.create(
             chain=chain, address=addr,
             action_type=OnchainActionType.DepositCollection,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000005d1"
-            ),
-            amount=Decimal("3"),
         )
         schedule_mock.return_value = SimpleNamespace(base_task=collection_task)
 
@@ -2021,9 +2085,6 @@ class CollectScheduleLifecycleTests(TestCase):
             chain=chain,
             address=vault_addr,
             action_type=OnchainActionType.DepositCollection,
-            crypto=crypto,
-            recipient="0x0000000000000000000000000000000000000411",
-            amount=Decimal("3"),
         )
         collection_hash = "0x" + "e" * 64
         transfer1 = OnchainTransfer.objects.create(
@@ -2143,9 +2204,6 @@ class CollectScheduleLifecycleTests(TestCase):
             chain=chain,
             address=vault_addr,
             action_type=OnchainActionType.DepositCollection,
-            crypto=crypto,
-            recipient="0x0000000000000000000000000000000000000611",
-            amount=Decimal("3"),
         )
         transfer1 = OnchainTransfer.objects.create(
             chain=chain,
@@ -2252,9 +2310,6 @@ class CollectScheduleLifecycleTests(TestCase):
             chain=chain,
             address=vault_addr,
             action_type=OnchainActionType.DepositCollection,
-            crypto=crypto,
-            recipient="0x0000000000000000000000000000000000000711",
-            amount=Decimal("1"),
         )
 
         DepositService.release_failed_collection(broadcast_task=broadcast_task)
@@ -2348,11 +2403,6 @@ class CollectScheduleLifecycleTests(TestCase):
             chain=chain,
             address=addr,
             action_type=OnchainActionType.DepositCollection,
-            crypto=crypto,
-            recipient=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000003d1"
-            ),
-            amount=Decimal("3"),
         )
         schedule_mock.return_value = SimpleNamespace(base_task=base_task)
 
@@ -2919,17 +2969,24 @@ class DepositCollectionAnvilTests(TestCase):
     def _anvil_schedule(self, intent):
         """EvmBroadcastTask.schedule 的替代：按 intent 在 anvil 上真实转账。"""
         address = intent.address
-        crypto = intent.crypto
         chain = intent.chain
         from_addr = address.address if hasattr(address, "address") else address
-        tx_hash = self._impersonate_send_eth(from_addr, intent.recipient, intent.value)
-        decimals = crypto.get_decimals(chain)
+        tx_hash = self._impersonate_send_eth(from_addr, intent.to, intent.value)
         base_task = BroadcastTask.objects.create(
             chain=chain, address=address if isinstance(address, Address) else self.deposit_addr_obj,
-            action_type=intent.action_type, crypto=crypto,
-            recipient=intent.recipient,
-            amount=Decimal(intent.value) / Decimal(10**decimals),
+            action_type=intent.action_type,
             tx_hash=tx_hash,
+        )
+        EvmBroadcastTask.objects.create(
+            base_task=base_task,
+            address=address if isinstance(address, Address) else self.deposit_addr_obj,
+            chain=chain,
+            nonce=0,
+            to=intent.to,
+            value=intent.value,
+            data=intent.data,
+            gas=intent.gas,
+            tx_kind=intent.tx_kind,
         )
         return SimpleNamespace(base_task=base_task)
 

@@ -80,8 +80,6 @@ class ContractDeployCollectionService:
             address=deployer,
             chain=chain,
             salt=salt,
-            crypto=crypto,
-            expected_collect_value_raw=expected_collect_value_raw,
             collector_init_code=collector_init_code,
             gas=gas,
         )

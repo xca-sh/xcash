@@ -111,11 +111,7 @@ def make_broadcast_task(
         chain=chain,
         address=address,
         action_type=action_type,
-        crypto=crypto or chain.native_coin,
-        amount=amount,
-        recipient=Web3.to_checksum_address("0x" + recipient_suffix.rjust(40, "0")),
         tx_hash=make_tx_hash(tx_hash_suffix),
         stage=stage,
         result=result,
     )
-

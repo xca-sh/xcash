@@ -11,7 +11,6 @@ from chains.models import OnchainTransfer
 from chains.models import Wallet
 from common.admin import ModelAdmin
 from common.admin import ReadOnlyModelAdmin
-from common.utils.math import format_decimal_stripped
 
 # Register your models here.
 
@@ -192,17 +191,14 @@ class BroadcastTaskAdmin(ReadOnlyModelAdmin):
         "display_address",
         "display_chain",
         "display_action_type",
-        "display_crypto",
-        "display_recipient",
-        "display_amount",
         "display_tx_hash",
         "display_status",
         "display_failure_reason",
         "created_at",
     )
     list_filter = ("stage", "result", "action_type", "chain")
-    list_select_related = ("address", "chain", "crypto")
-    search_fields = ("tx_hash", "address__address", "recipient")
+    list_select_related = ("address", "chain")
+    search_fields = ("tx_hash", "address__address")
 
     @admin.display(ordering="address__address", description=_("地址"))
     def display_address(self, obj: BroadcastTask):
@@ -215,20 +211,6 @@ class BroadcastTaskAdmin(ReadOnlyModelAdmin):
     @admin.display(ordering="action_type", description=_("类型"))
     def display_action_type(self, obj: BroadcastTask):
         return obj.get_action_type_display()
-
-    @admin.display(ordering="crypto__symbol", description=_("代币"))
-    def display_crypto(self, obj: BroadcastTask):
-        return obj.crypto or "—"
-
-    @admin.display(ordering="recipient", description=_("收款地址"))
-    def display_recipient(self, obj: BroadcastTask):
-        return obj.recipient or "—"
-
-    @admin.display(description=_("数量"))
-    def display_amount(self, obj: BroadcastTask):
-        if obj.amount is None:
-            return "—"
-        return format_decimal_stripped(obj.amount)
 
     @admin.display(ordering="tx_hash", description=_("交易哈希"))
     def display_tx_hash(self, obj: BroadcastTask):

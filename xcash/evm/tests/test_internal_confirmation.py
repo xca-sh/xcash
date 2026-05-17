@@ -1,4 +1,3 @@
-import threading
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -6,13 +5,7 @@ from unittest.mock import Mock
 from unittest.mock import PropertyMock
 from unittest.mock import patch
 
-from django.contrib.admin.sites import AdminSite
-from django.core.cache import cache
-from django.db import connections
-from django.db import close_old_connections
 from django.test import TestCase
-from django.test import TransactionTestCase
-from django.test import override_settings
 from django.utils import timezone
 from web3 import Web3
 
@@ -28,23 +21,11 @@ from chains.models import OnchainTransfer
 from chains.models import OnchainActionType
 from chains.models import TxHash
 from chains.models import Wallet
-from chains.service import ObservedTransferPayload
-from chains.service import TransferService
 from common.consts import ERC20_TRANSFER_GAS
 from currencies.models import ChainToken
 from currencies.models import Crypto
-from evm.admin import EvmScanCursorAdmin
 from evm.choices import TxKind
 from evm.models import EvmBroadcastTask
-from evm.models import EvmScanCursor
-from evm.models import EvmScanCursorType
-from evm.scanner.erc20 import EvmErc20ScanResult
-from evm.scanner.erc20 import EvmErc20TransferScanner
-from evm.scanner.native import EvmNativeDirectScanner
-from evm.scanner.native import EvmNativeScanResult
-from evm.scanner.rpc import EvmScannerRpcError
-from projects.models import RecipientAddress
-from projects.models import RecipientAddressUsage
 
 
 
@@ -95,7 +76,6 @@ class EvmInternalTaskConfirmationTests(TestCase):
         *,
         tx_hash: str,
     ):
-        from chains.models import TxHash
         from projects.models import Project
         from withdrawals.models import Withdrawal
         from withdrawals.models import WithdrawalStatus
@@ -105,15 +85,18 @@ class EvmInternalTaskConfirmationTests(TestCase):
             wallet=self.wallet,
             webhook="https://example.com/webhook",
         )
+        recipient = Web3.to_checksum_address(
+            "0x00000000000000000000000000000000000000c3"
+        )
+        value_raw = 12_340_000
+        encoded_args = (
+            recipient.lower().replace("0x", "").rjust(64, "0")
+            + hex(value_raw)[2:].rjust(64, "0")
+        )
         base_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=self.token,
-            recipient=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000c3"
-            ),
-            amount=Decimal("12.34"),
             tx_hash=tx_hash,
             stage=BroadcastTaskStage.PENDING_CHAIN,
             result=BroadcastTaskResult.UNKNOWN,
@@ -132,7 +115,7 @@ class EvmInternalTaskConfirmationTests(TestCase):
             nonce=0,
             to=Web3.to_checksum_address("0x00000000000000000000000000000000000000c1"),
             value=0,
-            data="0xa9059cbb",
+            data=f"0xa9059cbb{encoded_args}",
             gas=ERC20_TRANSFER_GAS,
             tx_kind=TxKind.CONTRACT_CALL,
             gas_price=1,
@@ -145,7 +128,7 @@ class EvmInternalTaskConfirmationTests(TestCase):
             amount=Decimal("12.34"),
             worth=Decimal("12.34"),
             out_no=f"out-{tx_hash[-6:]}",
-            to=base_task.recipient,
+            to=recipient,
             broadcast_task=base_task,
             status=WithdrawalStatus.PENDING,
             hash=tx_hash,
@@ -154,7 +137,6 @@ class EvmInternalTaskConfirmationTests(TestCase):
 
     def _make_overdue(self, evm_task):
         """将 evm_task 的 last_attempt_at 设置为超过阈值。"""
-        from datetime import timedelta
 
         from evm.constants import EVM_PENDING_REBROADCAST_TIMEOUT
 
@@ -303,7 +285,6 @@ class EvmInternalTaskConfirmationTests(TestCase):
         chain_w3_mock,
     ):
         """当前 tx_hash 无 receipt 但历史 hash 有 receipt 时，通过历史 hash 喂回扫描器管线。"""
-        from chains.models import TxHash
         from web3.exceptions import TransactionNotFound
 
         from evm.coordinator import InternalEvmTaskCoordinator

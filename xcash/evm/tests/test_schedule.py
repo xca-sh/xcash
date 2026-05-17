@@ -1,4 +1,3 @@
-from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -64,9 +63,6 @@ class EvmBroadcastTaskScheduleTests(TestCase):
             "data": "",
             "gas": 21_000,
             "action_type": OnchainActionType.Withdrawal,
-            "crypto": self.native,
-            "recipient": self.recipient,
-            "amount": Decimal("1.23"),
             "verify_fn": None,
         }
         values.update(overrides)
@@ -96,9 +92,6 @@ class EvmBroadcastTaskScheduleTests(TestCase):
         self.assertEqual(base_task.chain, intent.chain)
         self.assertEqual(base_task.address, intent.address)
         self.assertEqual(base_task.action_type, intent.action_type)
-        self.assertEqual(base_task.crypto, intent.crypto)
-        self.assertEqual(base_task.recipient, intent.recipient)
-        self.assertEqual(base_task.amount, intent.amount)
         self.assertEqual(base_task.stage, BroadcastTaskStage.QUEUED)
         self.assertEqual(base_task.result, BroadcastTaskResult.UNKNOWN)
 

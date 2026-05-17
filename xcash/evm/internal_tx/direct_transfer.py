@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+import binascii
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
+import eth_abi
+from eth_abi.exceptions import DecodingError
+from web3 import Web3
+
+from currencies.models import ChainToken
+from evm.choices import TxKind
+from evm.internal_tx._log_utils import matches_transfer_log
+from evm.internal_tx._log_utils import normalize_log_index
+from evm.internal_tx.facts import MatchedTransferFact
+
+if TYPE_CHECKING:
+    from chains.models import BroadcastTask
+    from chains.models import Chain
+    from currencies.models import Crypto
+
+
+_ERC20_TRANSFER_SELECTOR = "0xa9059cbb"
+
+
+@dataclass(frozen=True)
+class DirectTransferFields:
+    crypto: Crypto
+    to_address: str
+    value: Decimal
+    amount: Decimal
+
+
+def _normalize_calldata(data: str) -> str:
+    if not data or data == "0x":
+        return "0x"
+    return data.lower() if data.startswith("0x") else f"0x{data.lower()}"
+
+
+def _crypto_for_token(*, chain: Chain, token_address: str) -> Crypto | None:
+    token_checksum = Web3.to_checksum_address(token_address)
+    chain_token = (
+        ChainToken.objects.select_related("crypto")
+        .filter(chain=chain, address__iexact=token_checksum)
+        .first()
+    )
+    return chain_token.crypto if chain_token else None
+
+
+def decode_direct_transfer_fields(
+    *,
+    chain: Chain,
+    broadcast_task: BroadcastTask,
+) -> DirectTransferFields | None:  # noqa: PLR0911
+    """从 EVM 执行任务本身解码直接 native/ERC20 transfer 的资产字段。
+
+    这里仅支持本系统内部 builder 产出的标准 ERC-20 transfer(address,uint256)，
+    不是通用 calldata 解析器；transferFrom、Permit2、多接收人合约等应走各自
+    独立的业务 matcher。
+    """
+    try:
+        evm_task = broadcast_task.evm_task
+    except AttributeError:
+        return None
+
+    if evm_task.tx_kind == TxKind.NATIVE_TRANSFER:
+        value = Decimal(evm_task.value)
+        return DirectTransferFields(
+            crypto=chain.native_coin,
+            to_address=Web3.to_checksum_address(evm_task.to),
+            value=value,
+            amount=value.scaleb(-chain.native_coin.get_decimals(chain)),
+        )
+
+    data = _normalize_calldata(evm_task.data)
+    if evm_task.tx_kind != TxKind.CONTRACT_CALL:
+        return None
+    if not data.startswith(_ERC20_TRANSFER_SELECTOR):
+        return None
+
+    crypto = _crypto_for_token(chain=chain, token_address=evm_task.to)
+    if crypto is None:
+        return None
+
+    try:
+        recipient, value_raw = eth_abi.decode(
+            ["address", "uint256"],
+            Web3.to_bytes(hexstr=f"0x{data[10:]}"),
+        )
+    except (ValueError, binascii.Error, DecodingError) as exc:
+        raise ValueError("invalid ERC20 transfer calldata") from exc
+
+    value = Decimal(value_raw)
+    return DirectTransferFields(
+        crypto=crypto,
+        to_address=Web3.to_checksum_address(recipient),
+        value=value,
+        amount=value.scaleb(-crypto.get_decimals(chain)),
+    )
+
+
+def match_direct_transfer_fact(
+    *,
+    chain: Chain,
+    broadcast_task: BroadcastTask,
+    receipt: dict,
+) -> MatchedTransferFact | None:
+    fields = decode_direct_transfer_fields(chain=chain, broadcast_task=broadcast_task)
+    if fields is None:
+        return None
+
+    from_address = Web3.to_checksum_address(broadcast_task.address.address)
+    if fields.crypto == chain.native_coin:
+        return MatchedTransferFact(
+            event_id="native:tx",
+            from_address=from_address,
+            to_address=fields.to_address,
+            crypto=fields.crypto,
+            value=fields.value,
+            amount=fields.amount,
+        )
+
+    token_addr = fields.crypto.address(chain)
+    matches = [
+        log
+        for log in receipt.get("logs") or []
+        if matches_transfer_log(
+            log,
+            token=token_addr,
+            from_address=from_address,
+            to_address=fields.to_address,
+            value=fields.value,
+        )
+    ]
+    if len(matches) != 1:
+        return None
+
+    log = matches[0]
+    return MatchedTransferFact(
+        event_id=f"erc20:{normalize_log_index(log.get('logIndex'))}",
+        from_address=from_address,
+        to_address=fields.to_address,
+        crypto=fields.crypto,
+        value=fields.value,
+        amount=fields.amount,
+    )

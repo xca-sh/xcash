@@ -1599,15 +1599,13 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
             chain_type=ChainType.EVM,
             usage=AddressUsage.Vault,
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000009"
+        )
         broadcast_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=crypto,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000009"
-            ),
-            amount=Decimal("0.01"),
             tx_hash="0x" + "9" * 64,
             stage=BroadcastTaskStage.PENDING_CONFIRM,
             result=BroadcastTaskResult.UNKNOWN,
@@ -1619,7 +1617,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
             event_id="native:tx",
             crypto=crypto,
             from_address=addr.address,
-            to_address=broadcast_task.recipient,
+            to_address=recipient,
             value=Decimal("1"),
             amount=Decimal("0.01"),
             timestamp=1,
@@ -1634,7 +1632,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
             chain=chain,
             crypto=crypto,
             amount=Decimal("0.01"),
-            to=broadcast_task.recipient,
+            to=recipient,
             hash=broadcast_task.tx_hash,
             broadcast_task=broadcast_task,
             transfer=transfer,

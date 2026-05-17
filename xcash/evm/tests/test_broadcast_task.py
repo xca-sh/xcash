@@ -83,15 +83,13 @@ class EvmBroadcastTaskTests(TestCase):
                 chain_type=ChainType.EVM,
                 address=addr,
             )
+        recipient = Web3.to_checksum_address(
+            f"0x00000000000000000000000000000000001{len(suffix):05d}"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=action_type,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                f"0x00000000000000000000000000000000001{len(suffix):05d}"
-            ),
-            amount=Decimal("1"),
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
         )
@@ -100,7 +98,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=10**18,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -342,15 +340,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=send_raw_mock,
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000102"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.DepositCollection,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000102"
-            ),
-            amount=Decimal("1"),
             tx_hash="0x" + "1" * 64,
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
@@ -360,7 +356,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=10**18,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -441,15 +437,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=Mock(),
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000112"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.DepositCollection,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000112"
-            ),
-            amount=Decimal("1"),
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
         )
@@ -458,7 +452,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=10**18,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -521,15 +515,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=send_raw_mock,
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000200"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000200"
-            ),
-            amount=Decimal("1"),
             tx_hash="0x" + "d" * 64,
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
@@ -539,7 +531,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=10**18,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -613,15 +605,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=send_raw_mock,
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000302"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.DepositCollection,
-            crypto=crypto,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000302"
-            ),
-            amount=Decimal("1"),
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
         )
@@ -655,7 +645,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=10**6,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -714,15 +704,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=send_raw_mock,
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000402"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000402"
-            ),
-            amount=Decimal("1"),
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
         )
@@ -731,7 +719,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=10**18,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -799,15 +787,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=send_raw_mock,
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000412"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000412"
-            ),
-            amount=Decimal("1"),
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
         )
@@ -816,7 +802,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=value,
             gas=chain.base_transfer_gas,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -876,9 +862,6 @@ class EvmBroadcastTaskTests(TestCase):
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=contract,
-            amount=Decimal("0"),
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
         )
@@ -938,15 +921,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=send_raw_mock,
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000405"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000405"
-            ),
-            amount=Decimal("1"),
             stage=BroadcastTaskStage.PENDING_CHAIN,
             result=BroadcastTaskResult.UNKNOWN,
         )
@@ -955,7 +936,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=10**18,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -1006,15 +987,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=send_raw_mock,
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000403"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000403"
-            ),
-            amount=Decimal("1"),
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
         )
@@ -1023,7 +1002,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=10**18,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -1077,15 +1056,13 @@ class EvmBroadcastTaskTests(TestCase):
                 )
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000104"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000104"
-            ),
-            amount=Decimal("1"),
             tx_hash="0x" + "2" * 64,
             stage=BroadcastTaskStage.PENDING_CHAIN,
             result=BroadcastTaskResult.UNKNOWN,
@@ -1095,7 +1072,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=0,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -1148,15 +1125,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=Mock(side_effect=RuntimeError("nonce too low"))
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000106"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000106"
-            ),
-            amount=Decimal("1"),
             tx_hash="0x" + "3" * 64,
             stage=BroadcastTaskStage.PENDING_CHAIN,
             result=BroadcastTaskResult.UNKNOWN,
@@ -1166,7 +1141,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=0,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -1215,15 +1190,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=send_raw_transaction_mock,
             )
         )
+        lower_recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000108"
+        )
         lower_base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000108"
-            ),
-            amount=Decimal("1"),
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
         )
@@ -1232,22 +1205,20 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=lower_base_task.recipient,
+            to=lower_recipient,
             value=0,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000109"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000109"
-            ),
-            amount=Decimal("1"),
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
         )
@@ -1256,7 +1227,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=1,
-            to=base_task.recipient,
+            to=recipient,
             value=0,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -1305,15 +1276,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=Mock(side_effect=RuntimeError("already known"))
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000108"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000108"
-            ),
-            amount=Decimal("1"),
             tx_hash="0x" + "4" * 64,
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
@@ -1323,7 +1292,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=0,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -1377,15 +1346,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=send_raw_mock,
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000110"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000110"
-            ),
-            amount=Decimal("1"),
             tx_hash=tx_hash,
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
@@ -1401,7 +1368,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=10**18,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
@@ -1460,15 +1427,13 @@ class EvmBroadcastTaskTests(TestCase):
                 send_raw_transaction=send_raw_mock,
             )
         )
+        recipient = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000112"
+        )
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
             action_type=OnchainActionType.Withdrawal,
-            crypto=native,
-            recipient=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000112"
-            ),
-            amount=Decimal("1"),
             tx_hash=tx_hash,
             stage=BroadcastTaskStage.QUEUED,
             result=BroadcastTaskResult.UNKNOWN,
@@ -1484,7 +1449,7 @@ class EvmBroadcastTaskTests(TestCase):
             address=addr,
             chain=chain,
             nonce=0,
-            to=base_task.recipient,
+            to=recipient,
             value=10**18,
             gas=21_000,
             tx_kind=TxKind.NATIVE_TRANSFER,
