@@ -15,7 +15,7 @@ def ensure_native_crypto_mapping_for_chain(
     created: bool,
     **kwargs,
 ):
-    # 新链落库后必须立即补齐原生币部署记录，保证 support_this_chain / Balance 等逻辑统一可用。
+    # 新链落库后必须立即补齐原生币部署记录，保证 support_this_chain 等逻辑统一可用。
     if not created:
         return
 

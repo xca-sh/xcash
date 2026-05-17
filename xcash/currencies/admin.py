@@ -16,7 +16,7 @@ def merge_placeholder_crypto(modeladmin, request, queryset):
     使用约定：同时勾选一个 active=True 的目标代币和一或多个 active=False 的占位符，
     action 自动从选中项中识别目标，无需额外字段或中间表单。
 
-    在单个事务内原子完成（无窗口期，防止 Balance 漏更新）：
+    在单个事务内原子完成：
     1. 占位符的所有 ChainToken 改指向目标代币
     2. 占位符关联的全部 OnchainTransfer.crypto（含 CONFIRMING 状态）更新为目标代币
     3. 删除占位符
@@ -63,7 +63,7 @@ def merge_placeholder_crypto(modeladmin, request, queryset):
                     # 占位符合并只改写 crypto 外键，不依赖 save() 信号，直接 update 更收敛。
                     ChainToken.objects.filter(pk=ct.pk).update(crypto=target)
 
-                # 步骤 2：全量更新 Transfer（含 CONFIRMING），确保 Balance 能正确关联
+                # 步骤 2：全量更新 Transfer（含 CONFIRMING），确保后续重归类使用目标币种
                 OnchainTransfer.objects.filter(crypto=placeholder).update(crypto=target)
 
                 # 步骤 3：删除占位符

@@ -129,7 +129,7 @@ class ChainToken(models.Model):
     """记录代币与链的部署关系，包含链上合约地址及可选的链特定精度覆盖。
 
     原生币（ETH/BTC 等）也在此建立记录，address 为空字符串，
-    以使 support_this_chain / Balance 等逻辑能统一通过此表查询。
+    以使 support_this_chain 等逻辑能统一通过此表查询。
     """
 
     crypto = models.ForeignKey(
