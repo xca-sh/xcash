@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from chains.models import BroadcastTask, Chain, TransferType
+from chains.models import BroadcastTask, Chain, OnchainActionType
 from evm.internal_tx.facts import MatchedTransferFact
 
 
@@ -18,11 +18,11 @@ class ReceiptMatcher(Protocol):
     ) -> MatchedTransferFact | None: ...
 
 
-MATCHERS: dict[TransferType, ReceiptMatcher] = {}
+MATCHERS: dict[OnchainActionType, ReceiptMatcher] = {}
 
 
-def get_matcher(transfer_type: TransferType) -> ReceiptMatcher:
-    return MATCHERS[transfer_type]
+def get_matcher(action_type: OnchainActionType) -> ReceiptMatcher:
+    return MATCHERS[action_type]
 
 
 from evm.internal_tx.deposit_collection import deposit_collection_matcher  # noqa: E402
@@ -31,8 +31,8 @@ from evm.internal_tx.gas_recharge import gas_recharge_matcher  # noqa: E402
 from evm.internal_tx.withdrawal import withdrawal_matcher  # noqa: E402
 from evm.internal_tx.x402 import x402_matcher  # noqa: E402
 
-MATCHERS[TransferType.Withdrawal] = withdrawal_matcher
-MATCHERS[TransferType.GasRecharge] = gas_recharge_matcher
-MATCHERS[TransferType.DepositCollection] = deposit_collection_matcher
-MATCHERS[TransferType.X402Facilitate] = x402_matcher
-MATCHERS[TransferType.ContractDeployCollect] = create2_matcher
+MATCHERS[OnchainActionType.Withdrawal] = withdrawal_matcher
+MATCHERS[OnchainActionType.GasRecharge] = gas_recharge_matcher
+MATCHERS[OnchainActionType.DepositCollection] = deposit_collection_matcher
+MATCHERS[OnchainActionType.X402Facilitate] = x402_matcher
+MATCHERS[OnchainActionType.ContractDeployCollect] = create2_matcher

@@ -26,7 +26,7 @@ from chains.models import AddressUsage
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import Wallet
 from core.models import PlatformSettings
 from currencies.models import Crypto
@@ -74,7 +74,7 @@ class RiskTestMixin:
             to_address="0x2222222222222222222222222222222222222222",
             value=10**18,
             amount=Decimal("1"),
-            type=TransferType.Invoice,
+            type=OnchainActionType.Invoice,
             timestamp=1_700_000_000,
             datetime=timezone.now(),
         )
@@ -105,7 +105,7 @@ class RiskTestMixin:
         )
 
     def make_deposit(self, *, worth: Decimal = Decimal("50")) -> Deposit:
-        self.transfer.type = TransferType.Deposit
+        self.transfer.type = OnchainActionType.Deposit
         self.transfer.save(update_fields=["type"])
         return Deposit.objects.create(
             customer=self.customer,

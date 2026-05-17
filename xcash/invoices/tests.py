@@ -21,7 +21,7 @@ from web3 import Web3
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import Wallet
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
@@ -344,7 +344,7 @@ class InvoicePaySlotTests(TestCase):
             second_slot.discard_reason,
             InvoicePaySlotDiscardReason.SETTLED,
         )
-        self.assertEqual(transfer.type, TransferType.Invoice)
+        self.assertEqual(transfer.type, OnchainActionType.Invoice)
 
     def test_drop_invoice_reactivates_matched_slot(self):
         # 若链上观测后来被回滚，命中过的槽位要恢复为可再次匹配，避免账单永久卡死。
@@ -488,7 +488,7 @@ class InvoicePaySlotTests(TestCase):
         self.assertEqual(invoice.status, InvoiceStatus.CONFIRMING)
         self.assertEqual(invoice.transfer_id, transfer.pk)
         self.assertEqual(first_slot.status, InvoicePaySlotStatus.MATCHED)
-        self.assertEqual(transfer.type, TransferType.Invoice)
+        self.assertEqual(transfer.type, OnchainActionType.Invoice)
 
 
 class InvoicePaySlotConcurrencyTests(TransactionTestCase):

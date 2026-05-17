@@ -29,7 +29,7 @@ from chains.models import ChainType
 from chains.models import ConfirmMode
 from chains.models import OnchainTransfer
 from chains.models import TransferStatus
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import TxHash
 from chains.models import Wallet
 from chains.service import ObservedTransferPayload
@@ -143,7 +143,7 @@ class BroadcastTaskValidationTests(TestCase):
         task = BroadcastTask(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.crypto,
             recipient="0x0000000000000000000000000000000000000002",
             amount="1",
@@ -161,7 +161,7 @@ class BroadcastTaskValidationTests(TestCase):
         task = BroadcastTask(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.crypto,
             recipient="0x0000000000000000000000000000000000000002",
             amount="1",
@@ -215,7 +215,7 @@ class TxHashModelTests(TestCase):
         self.task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.crypto,
             recipient="0x0000000000000000000000000000000000000012",
             amount="1",
@@ -311,7 +311,7 @@ class BroadcastTaskTxHashHistoryTests(TestCase):
         self.task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.crypto,
             recipient="0x0000000000000000000000000000000000000022",
             amount="1",
@@ -607,7 +607,7 @@ class TransferConfirmDispatchTests(TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.crypto,
             recipient=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000c2"
@@ -641,7 +641,7 @@ class TransferConfirmDispatchTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMING,
-            type=TransferType.Withdrawal,
+            type=OnchainActionType.Withdrawal,
         )
         withdrawal.transfer = transfer
         withdrawal.save(update_fields=["transfer", "updated_at"])
@@ -671,7 +671,7 @@ class TransferConfirmDispatchTests(TestCase):
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMING,
             confirm_mode=ConfirmMode.QUICK,
-            type=TransferType.Withdrawal,
+            type=OnchainActionType.Withdrawal,
             processed_at=timezone.now(),
         )
 
@@ -708,7 +708,7 @@ class TransferConfirmDispatchTests(TestCase):
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMING,
             confirm_mode=ConfirmMode.FULL,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
             processed_at=timezone.now(),
         )
         OnchainTransfer.objects.filter(pk=transfer.pk).update(
@@ -773,7 +773,7 @@ class TransferConfirmDispatchTests(TestCase):
             datetime=observed_at,
             status=TransferStatus.CONFIRMING,
             confirm_mode=ConfirmMode.FULL,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
             processed_at=timezone.now(),
         )
         OnchainTransfer.objects.filter(pk=transfer.pk).update(
@@ -1499,7 +1499,7 @@ class BroadcastTaskOnchainMatchTests(TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=chain,
             address=address,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=token,
             recipient=recipient,
             amount=Decimal("1.23"),
@@ -1533,7 +1533,7 @@ class BroadcastTaskOnchainMatchTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMING,
-            type=TransferType.Withdrawal,
+            type=OnchainActionType.Withdrawal,
         )
 
         self.assertTrue(broadcast_task.matches_onchain_transfer(transfer))
@@ -1571,7 +1571,7 @@ class BroadcastTaskTransitionTests(TestCase):
         self.task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.crypto,
             recipient=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000d2"
@@ -1801,7 +1801,7 @@ class BlockNumberUpdatedCompensationTests(TestCase):
                 datetime=timezone.now(),
                 status=TransferStatus.CONFIRMING,
                 confirm_mode=ConfirmMode.QUICK,
-                type=TransferType.Deposit,
+                type=OnchainActionType.Deposit,
                 processed_at=timezone.now(),
             )
 
@@ -1837,7 +1837,7 @@ class BlockNumberUpdatedCompensationTests(TestCase):
                 datetime=timezone.now(),
                 status=TransferStatus.CONFIRMING,
                 confirm_mode=ConfirmMode.QUICK,
-                type=TransferType.Deposit,
+                type=OnchainActionType.Deposit,
                 processed_at=timezone.now(),
             )
 
@@ -1847,14 +1847,14 @@ class BlockNumberUpdatedCompensationTests(TestCase):
         reschedule_mock.assert_not_called()
 
 
-def test_transfer_type_new_values_exist():
-    # 新加的 transfer_type 必须可被 enum 反查
-    assert TransferType.X402Facilitate.value == "x402_facilitate"
-    assert TransferType.ContractDeployCollect.value == "contract_deploy_collect"
-    assert TransferType("x402_facilitate") == TransferType.X402Facilitate
+def test_action_type_new_values_exist():
+    # 新加的 action_type 必须可被 enum 反查
+    assert OnchainActionType.X402Facilitate.value == "x402_facilitate"
+    assert OnchainActionType.ContractDeployCollect.value == "contract_deploy_collect"
+    assert OnchainActionType("x402_facilitate") == OnchainActionType.X402Facilitate
     assert (
-        TransferType("contract_deploy_collect")
-        == TransferType.ContractDeployCollect
+        OnchainActionType("contract_deploy_collect")
+        == OnchainActionType.ContractDeployCollect
     )
 
 
@@ -1913,7 +1913,7 @@ def test_address_send_crypto_schedules_native_transfer_intent():
             chain=chain,
             to="0x0000000000000000000000000000000000121202",
             amount=Decimal("1.5"),
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
         )
 
     assert result == tx_hash
@@ -1922,7 +1922,7 @@ def test_address_send_crypto_schedules_native_transfer_intent():
     assert intent.address == address
     assert intent.chain == chain
     assert intent.tx_kind == TxKind.NATIVE_TRANSFER
-    assert intent.transfer_type == TransferType.Withdrawal
+    assert intent.action_type == OnchainActionType.Withdrawal
     assert intent.crypto == native
     assert intent.value == 1_500_000_000_000_000_000
     assert intent.gas == chain.base_transfer_gas
@@ -1983,7 +1983,7 @@ def test_address_send_crypto_schedules_erc20_transfer_intent():
             chain=chain,
             to=recipient,
             amount=Decimal("2.25"),
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
         )
 
     assert result == tx_hash
@@ -1995,7 +1995,7 @@ def test_address_send_crypto_schedules_erc20_transfer_intent():
     assert intent.to == Web3.to_checksum_address(
         "0x00000000000000000000000000000000001212c0"
     )
-    assert intent.transfer_type == TransferType.DepositCollection
+    assert intent.action_type == OnchainActionType.DepositCollection
     assert intent.crypto == token
     assert intent.recipient == recipient
     assert intent.gas == chain.erc20_transfer_gas

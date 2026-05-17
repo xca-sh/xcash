@@ -10,14 +10,14 @@ import pytest
 from web3 import Web3
 
 import evm.intents as intents_module
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from evm.choices import TxKind
 from evm.intents import Eip3009Authorization
 from evm.intents import EvmTxIntent
 from evm.intents import X402Authorization
 from evm.intents import _normalize_hex_calldata
 from evm.intents import _require_bytes32
-from evm.intents import assert_transfer_type_implemented
+from evm.intents import assert_action_type_implemented
 from evm.intents import build_contract_call_intent
 from evm.intents import build_erc20_transfer_intent
 from evm.intents import build_native_transfer_intent
@@ -38,7 +38,7 @@ def simple_intent():
         value=0,
         data="",
         gas=21000,
-        transfer_type=TransferType.Withdrawal,
+        action_type=OnchainActionType.Withdrawal,
         crypto=None,
         recipient=None,
         amount=None,
@@ -109,32 +109,32 @@ def test_preflight_buffer_multiplier_for_native_and_call():
 
 
 def test_gas_rechargeable_for_deposit_collection_only():
-    assert is_gas_rechargeable(TransferType.DepositCollection) is True
-    assert is_gas_rechargeable(TransferType.Withdrawal) is False
-    assert is_gas_rechargeable(TransferType.GasRecharge) is False
-    assert is_gas_rechargeable(TransferType.Invoice) is False
-    assert is_gas_rechargeable(TransferType.Deposit) is False
-    assert is_gas_rechargeable(TransferType.X402Facilitate) is False
-    assert is_gas_rechargeable(TransferType.ContractDeployCollect) is False
+    assert is_gas_rechargeable(OnchainActionType.DepositCollection) is True
+    assert is_gas_rechargeable(OnchainActionType.Withdrawal) is False
+    assert is_gas_rechargeable(OnchainActionType.GasRecharge) is False
+    assert is_gas_rechargeable(OnchainActionType.Invoice) is False
+    assert is_gas_rechargeable(OnchainActionType.Deposit) is False
+    assert is_gas_rechargeable(OnchainActionType.X402Facilitate) is False
+    assert is_gas_rechargeable(OnchainActionType.ContractDeployCollect) is False
 
 
 def test_assert_allows_x402_facilitate_after_lifecycle_is_connected():
-    assert_transfer_type_implemented(TransferType.X402Facilitate)
+    assert_action_type_implemented(OnchainActionType.X402Facilitate)
 
 
 def test_assert_allows_contract_deploy_collect_after_lifecycle_is_connected():
-    assert_transfer_type_implemented(TransferType.ContractDeployCollect)
+    assert_action_type_implemented(OnchainActionType.ContractDeployCollect)
 
 
-def test_assert_allows_legacy_transfer_types():
+def test_assert_allows_legacy_action_types():
     for tt in [
-        TransferType.Withdrawal,
-        TransferType.DepositCollection,
-        TransferType.GasRecharge,
-        TransferType.Invoice,
-        TransferType.Deposit,
+        OnchainActionType.Withdrawal,
+        OnchainActionType.DepositCollection,
+        OnchainActionType.GasRecharge,
+        OnchainActionType.Invoice,
+        OnchainActionType.Deposit,
     ]:
-        assert_transfer_type_implemented(tt)
+        assert_action_type_implemented(tt)
 
 
 def _fake_crypto(symbol="USDT", decimals=6, token_address=None):
@@ -179,7 +179,7 @@ def test_build_native_transfer_intent_sets_basic_fields():
         chain=chain,
         to=recipient,
         value=value,
-        transfer_type=TransferType.Withdrawal,
+        action_type=OnchainActionType.Withdrawal,
     )
 
     assert intent.tx_kind == TxKind.NATIVE_TRANSFER
@@ -199,7 +199,7 @@ def test_build_native_transfer_intent_rejects_negative_value():
             chain=_fake_chain(),
             to="0x1111111111111111111111111111111111111111",
             value=-1,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
         )
 
 
@@ -216,7 +216,7 @@ def test_build_erc20_transfer_intent_sets_basic_fields():
         crypto=crypto,
         to=recipient,
         value_raw=value_raw,
-        transfer_type=TransferType.Withdrawal,
+        action_type=OnchainActionType.Withdrawal,
     )
 
     assert intent.tx_kind == TxKind.CONTRACT_CALL
@@ -247,7 +247,7 @@ def test_build_erc20_transfer_intent_rejects_negative_value_raw():
             crypto=crypto,
             to="0x3333333333333333333333333333333333333333",
             value_raw=-1,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
         )
 
 
@@ -262,7 +262,7 @@ def test_build_erc20_transfer_intent_rejects_crypto_not_deployed_on_chain():
             crypto=crypto,
             to="0x3333333333333333333333333333333333333333",
             value_raw=1,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
         )
 
 
@@ -277,7 +277,7 @@ def test_build_contract_call_intent_sets_basic_fields():
         contract_address=contract_address,
         data="A9059CBB",
         gas=50000,
-        transfer_type=TransferType.Invoice,
+        action_type=OnchainActionType.Invoice,
         value=7,
         recipient=recipient,
     )
@@ -297,7 +297,7 @@ def test_build_contract_call_intent_defaults_value_to_zero():
         contract_address="0x2222222222222222222222222222222222222222",
         data="0x",
         gas=50000,
-        transfer_type=TransferType.Invoice,
+        action_type=OnchainActionType.Invoice,
     )
 
     assert intent.value == 0
@@ -311,7 +311,7 @@ def test_build_contract_call_intent_rejects_non_positive_gas():
             contract_address="0x2222222222222222222222222222222222222222",
             data="0x",
             gas=0,
-            transfer_type=TransferType.Invoice,
+            action_type=OnchainActionType.Invoice,
         )
 
 
@@ -323,7 +323,7 @@ def test_build_contract_call_intent_rejects_negative_value():
             contract_address="0x2222222222222222222222222222222222222222",
             data="0x",
             gas=50000,
-            transfer_type=TransferType.Invoice,
+            action_type=OnchainActionType.Invoice,
             value=-1,
         )
 
@@ -336,7 +336,7 @@ def test_build_contract_call_intent_rejects_non_hex_data():
             contract_address="0x2222222222222222222222222222222222222222",
             data="zzzz",
             gas=50000,
-            transfer_type=TransferType.Invoice,
+            action_type=OnchainActionType.Invoice,
         )
 
 
@@ -384,7 +384,7 @@ def test_build_x402_eip3009_facilitate_intent_sets_contract_call_fields(
     assert intent.to == Web3.to_checksum_address(token_address)
     assert intent.to != Web3.to_checksum_address(authorization.to)
     assert intent.recipient == Web3.to_checksum_address(authorization.to)
-    assert intent.transfer_type == TransferType.X402Facilitate
+    assert intent.action_type == OnchainActionType.X402Facilitate
     assert intent.gas == 200000
     assert intent.data.startswith("0xe3ee160e")
     assert intent.amount == Decimal(authorization.value).scaleb(-6)
@@ -524,7 +524,7 @@ def test_build_payment_collector_deploy_intent_sets_contract_call_fields():
     assert intent.recipient == expected_collector
     assert intent.recipient != Web3.to_checksum_address(factory_address)
     assert intent.recipient != Web3.to_checksum_address(vault_address)
-    assert intent.transfer_type == TransferType.ContractDeployCollect
+    assert intent.action_type == OnchainActionType.ContractDeployCollect
     assert intent.gas == gas
     assert intent.amount == Decimal(expected_collect_value_raw).scaleb(-6)
     assert intent.crypto is crypto

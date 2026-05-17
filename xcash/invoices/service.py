@@ -12,7 +12,7 @@ from django.utils import timezone
 from risk.tasks import mark_invoice_risk
 
 from chains.models import ConfirmMode
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.service import ChainService
 from chains.service import TransferService
 from common.internal_callback import send_internal_callback
@@ -198,7 +198,7 @@ class InvoiceService:
             else ConfirmMode.FULL
         )
         transfer = TransferService.assign_type_and_mode(
-            transfer, TransferType.Invoice, confirm_mode
+            transfer, OnchainActionType.Invoice, confirm_mode
         )
 
         matched_at = timezone.now()

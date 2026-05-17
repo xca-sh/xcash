@@ -26,7 +26,7 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
 from chains.models import TransferStatus
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import Wallet
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
@@ -529,7 +529,7 @@ class DepositServiceCoreTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         deposit = Deposit.objects.create(
             customer=customer,
@@ -545,7 +545,7 @@ class DepositServiceCoreTests(TestCase):
         self.assertEqual(DepositCollection.objects.count(), 0)
         self.assertEqual(
             BroadcastTask.objects.filter(
-                transfer_type=TransferType.DepositCollection
+                action_type=OnchainActionType.DepositCollection
             ).count(),
             0,
         )
@@ -681,7 +681,7 @@ class DepositServiceDecimalsTests(TestCase):
         )
         self.assertEqual(intent.value, 0)
         self.assertEqual(intent.amount, Decimal("1"))
-        self.assertEqual(intent.transfer_type, TransferType.DepositCollection)
+        self.assertEqual(intent.action_type, OnchainActionType.DepositCollection)
 
     @patch.object(DepositService, "_lock_pending_group_ids", return_value={2})
     @patch("deposits.service.db_transaction.atomic", return_value=nullcontext())
@@ -822,7 +822,7 @@ class GasRechargeServiceTests(SimpleTestCase):
         intent = schedule_mock.call_args.args[0]
         # 补 gas 金额 = 10 * expected_collection_gas_cost = 10_000_000
         self.assertEqual(intent.value, 10 * expected_collection_gas_cost)
-        self.assertEqual(intent.transfer_type, TransferType.GasRecharge)
+        self.assertEqual(intent.action_type, OnchainActionType.GasRecharge)
         self.assertEqual(intent.address, vault_addr)
         self.assertEqual(
             intent.to,
@@ -930,7 +930,7 @@ class GasRechargeServiceIdempotencyDbTests(TestCase):
         pending_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.GasRecharge,
+            action_type=OnchainActionType.GasRecharge,
             crypto=native,
             amount=Decimal("1"),
         )
@@ -1009,7 +1009,7 @@ class GasRechargeServiceIdempotencyDbTests(TestCase):
         other_chain_task = BroadcastTask.objects.create(
             chain=chain_b,
             address=addr,
-            transfer_type=TransferType.GasRecharge,
+            action_type=OnchainActionType.GasRecharge,
             crypto=native_b,
             amount=Decimal("1"),
         )
@@ -1020,7 +1020,7 @@ class GasRechargeServiceIdempotencyDbTests(TestCase):
         current_task = BroadcastTask.objects.create(
             chain=chain_a,
             address=addr,
-            transfer_type=TransferType.GasRecharge,
+            action_type=OnchainActionType.GasRecharge,
             crypto=native_a,
             amount=Decimal("1"),
         )
@@ -1160,7 +1160,7 @@ class DepositTransferRematchTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         created = DepositService.try_create_deposit(transfer)
         self.assertTrue(created)
@@ -1227,7 +1227,7 @@ class DepositTransferRematchTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         created = DepositService.try_create_deposit(transfer)
         self.assertTrue(created)
@@ -1289,7 +1289,7 @@ class DepositTransferRematchTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         created = DepositService.try_create_deposit(transfer)
         self.assertTrue(created)
@@ -1350,7 +1350,7 @@ class DepositTransferRematchTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         created = DepositService.try_create_deposit(transfer)
         self.assertTrue(created)
@@ -1441,7 +1441,7 @@ class CollectScheduleLifecycleTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         deposit = Deposit.objects.create(
             customer=customer,
@@ -1587,7 +1587,7 @@ class CollectScheduleLifecycleTests(TestCase):
             base_task=BroadcastTask.objects.create(
                 chain=fixture["chain"],
                 address=fixture["deposit_address"].address,
-                transfer_type=TransferType.DepositCollection,
+                action_type=OnchainActionType.DepositCollection,
                 crypto=fixture["crypto"],
                 recipient=Web3.to_checksum_address(
                     "0x0000000000000000000000000000000000000c02"
@@ -1620,7 +1620,7 @@ class CollectScheduleLifecycleTests(TestCase):
         collection_task = BroadcastTask.objects.create(
             chain=fixture["chain"],
             address=fixture["deposit_address"].address,
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             crypto=fixture["crypto"],
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000c03"
@@ -1717,7 +1717,7 @@ class CollectScheduleLifecycleTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             crypto=crypto,
             recipient=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000d1"
@@ -1747,7 +1747,7 @@ class CollectScheduleLifecycleTests(TestCase):
                 timestamp=1,
                 datetime=timezone.now(),
                 status=TransferStatus.CONFIRMED,
-                type=TransferType.Deposit,
+                type=OnchainActionType.Deposit,
             )
             transfer2 = OnchainTransfer.objects.create(
                 chain=chain,
@@ -1762,7 +1762,7 @@ class CollectScheduleLifecycleTests(TestCase):
                 timestamp=2,
                 datetime=timezone.now(),
                 status=TransferStatus.CONFIRMED,
-                type=TransferType.Deposit,
+                type=OnchainActionType.Deposit,
             )
             deposit1 = Deposit.objects.create(
                 customer=customer,
@@ -1851,7 +1851,7 @@ class CollectScheduleLifecycleTests(TestCase):
             to_address=addr.address,
             value="1", amount=Decimal("1"), timestamp=1,
             datetime=timezone.now(),
-            status=TransferStatus.CONFIRMED, type=TransferType.Deposit,
+            status=TransferStatus.CONFIRMED, type=OnchainActionType.Deposit,
         )
         transfer2 = OnchainTransfer.objects.create(
             chain=chain, block=2, hash="0x" + "f2" * 32, event_id="native:mdc2",
@@ -1860,7 +1860,7 @@ class CollectScheduleLifecycleTests(TestCase):
             to_address=addr.address,
             value="2", amount=Decimal("2"), timestamp=2,
             datetime=timezone.now(),
-            status=TransferStatus.CONFIRMED, type=TransferType.Deposit,
+            status=TransferStatus.CONFIRMED, type=OnchainActionType.Deposit,
         )
         deposit1 = Deposit.objects.create(
             customer=customer, transfer=transfer1, status=DepositStatus.COMPLETED,
@@ -1874,7 +1874,7 @@ class CollectScheduleLifecycleTests(TestCase):
         )
         collection_task = BroadcastTask.objects.create(
             chain=chain, address=addr,
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000005d1"
@@ -1940,7 +1940,7 @@ class CollectScheduleLifecycleTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         transfer2 = OnchainTransfer.objects.create(
             chain=chain,
@@ -1955,7 +1955,7 @@ class CollectScheduleLifecycleTests(TestCase):
             timestamp=2,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         collection = DepositCollection.objects.create(collection_hash="0x" + "d" * 64)
         deposit1 = Deposit.objects.create(
@@ -2020,7 +2020,7 @@ class CollectScheduleLifecycleTests(TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=chain,
             address=vault_addr,
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             crypto=crypto,
             recipient="0x0000000000000000000000000000000000000411",
             amount=Decimal("3"),
@@ -2039,7 +2039,7 @@ class CollectScheduleLifecycleTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         transfer2 = OnchainTransfer.objects.create(
             chain=chain,
@@ -2054,7 +2054,7 @@ class CollectScheduleLifecycleTests(TestCase):
             timestamp=2,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         collection_transfer = OnchainTransfer.objects.create(
             chain=chain,
@@ -2069,7 +2069,7 @@ class CollectScheduleLifecycleTests(TestCase):
             timestamp=3,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.DepositCollection,
+            type=OnchainActionType.DepositCollection,
         )
         collection = DepositCollection.objects.create(
             collection_hash=collection_hash,
@@ -2142,7 +2142,7 @@ class CollectScheduleLifecycleTests(TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=chain,
             address=vault_addr,
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             crypto=crypto,
             recipient="0x0000000000000000000000000000000000000611",
             amount=Decimal("3"),
@@ -2160,7 +2160,7 @@ class CollectScheduleLifecycleTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         transfer2 = OnchainTransfer.objects.create(
             chain=chain,
@@ -2175,7 +2175,7 @@ class CollectScheduleLifecycleTests(TestCase):
             timestamp=2,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         deposit_addr = Address.objects.create(
             wallet=project.wallet,
@@ -2251,7 +2251,7 @@ class CollectScheduleLifecycleTests(TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=chain,
             address=vault_addr,
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             crypto=crypto,
             recipient="0x0000000000000000000000000000000000000711",
             amount=Decimal("1"),
@@ -2347,7 +2347,7 @@ class CollectScheduleLifecycleTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             crypto=crypto,
             recipient=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000003d1"
@@ -2369,7 +2369,7 @@ class CollectScheduleLifecycleTests(TestCase):
             timestamp=10,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         transfer2 = OnchainTransfer.objects.create(
             chain=chain,
@@ -2384,7 +2384,7 @@ class CollectScheduleLifecycleTests(TestCase):
             timestamp=11,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         deposit1 = Deposit.objects.create(
             customer=customer,
@@ -2767,7 +2767,7 @@ class DepositRemoteSignerFlowTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         deposit = Deposit.objects.create(
             customer=customer,
@@ -2926,7 +2926,7 @@ class DepositCollectionAnvilTests(TestCase):
         decimals = crypto.get_decimals(chain)
         base_task = BroadcastTask.objects.create(
             chain=chain, address=address if isinstance(address, Address) else self.deposit_addr_obj,
-            transfer_type=intent.transfer_type, crypto=crypto,
+            action_type=intent.action_type, crypto=crypto,
             recipient=intent.recipient,
             amount=Decimal(intent.value) / Decimal(10**decimals),
             tx_hash=tx_hash,
@@ -2958,7 +2958,7 @@ class DepositCollectionAnvilTests(TestCase):
             value=str(amount_raw), amount=amount,
             timestamp=seq, datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         return Deposit.objects.create(
             customer=self.customer, transfer=transfer,

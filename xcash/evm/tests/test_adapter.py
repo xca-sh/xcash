@@ -25,7 +25,7 @@ from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import TxHash
 from chains.models import Wallet
 from chains.service import ObservedTransferPayload

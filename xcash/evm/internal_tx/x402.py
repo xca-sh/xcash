@@ -6,8 +6,8 @@ from decimal import Decimal
 from chains.models import (
     BroadcastTask,
     BroadcastTaskFailureReason,
+    OnchainActionType,
     OnchainTransfer,
-    TransferType,
 )
 from django.db import transaction as db_transaction
 from django.utils import timezone
@@ -66,7 +66,7 @@ class X402Handler:
                 return False
             facilitation.transfer = transfer
             facilitation.save(update_fields=["transfer", "updated_at"])
-            transfer.type = TransferType.X402Facilitate
+            transfer.type = OnchainActionType.X402Facilitate
             transfer.save(update_fields=["type"])
         return True
 
@@ -102,4 +102,3 @@ class X402Handler:
 
 
 x402_handler = X402Handler()
-

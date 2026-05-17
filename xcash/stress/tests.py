@@ -48,7 +48,7 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
 from chains.models import TransferStatus
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import Wallet
 from core.models import PlatformSettings
 from currencies.models import ChainToken
@@ -1390,7 +1390,7 @@ class DepositCollectionVerificationTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         self.deposit = Deposit.objects.create(
             customer=self.customer,
@@ -1437,7 +1437,7 @@ class DepositCollectionVerificationTests(TestCase):
                                 "0x0000000000000000000000000000000000000d03"
                             ),
                         ),
-                        transfer_type=TransferType.DepositCollection,
+                        action_type=OnchainActionType.DepositCollection,
                         crypto=self.crypto,
                         recipient=Web3.to_checksum_address(
                             "0x0000000000000000000000000000000000000d04"

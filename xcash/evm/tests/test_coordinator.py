@@ -29,7 +29,7 @@ from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import Wallet
 from currencies.models import ChainToken
 from currencies.models import Crypto
@@ -207,7 +207,7 @@ class ObserveConfirmedNativeTest(TestCase):
         self.base_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.address,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.eth,
             recipient=_RECEIVER_HEX,
             amount=Decimal("1.5"),
@@ -311,7 +311,7 @@ class ObserveConfirmedErc20Test(TestCase):
         self.base_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.address,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.usdt,
             recipient=_RECEIVER_HEX,
             amount=Decimal("100"),
@@ -465,7 +465,7 @@ class CoordinatorIntegrationTest(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.token,
             recipient=_RECEIVER_HEX,
             amount=Decimal("100"),
@@ -518,7 +518,7 @@ class CoordinatorIntegrationTest(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.native,
             recipient=_RECEIVER_HEX,
             amount=Decimal("1.5"),
@@ -672,7 +672,7 @@ class CoordinatorIntegrationTest(TestCase):
         transfer.refresh_from_db()
         self.assertEqual(withdrawal.status, WithdrawalStatus.CONFIRMING)
         self.assertEqual(withdrawal.transfer, transfer)
-        self.assertEqual(transfer.type, TransferType.Withdrawal)
+        self.assertEqual(transfer.type, OnchainActionType.Withdrawal)
         self.assertIsNotNone(transfer.processed_at)
 
     def test_process_ignores_internal_withdrawal_when_transfer_value_mismatches(self):
@@ -740,7 +740,7 @@ class CoordinatorIntegrationTest(TestCase):
         transfer.refresh_from_db()
         self.assertEqual(withdrawal.status, WithdrawalStatus.CONFIRMING)
         self.assertEqual(withdrawal.transfer, transfer)
-        self.assertEqual(transfer.type, TransferType.Withdrawal)
+        self.assertEqual(transfer.type, OnchainActionType.Withdrawal)
         self.assertIsNotNone(transfer.processed_at)
 
     # ---- Test 4 ----

@@ -15,7 +15,7 @@ from chains.models import BroadcastTaskResult
 from chains.models import BroadcastTaskStage
 from chains.models import ChainType
 from chains.models import OnchainTransfer
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from common.internal_callback import send_internal_callback
 from common.utils.math import format_decimal_stripped
 from deposits.exceptions import DepositStatusError
@@ -98,7 +98,7 @@ class GasRechargeService:
                 chain=chain,
                 to=deposit_address.address.address,
                 value=recharge_raw,
-                transfer_type=TransferType.GasRecharge,
+                action_type=OnchainActionType.GasRecharge,
             )
             # schedule() 会分配 nonce 并创建 BroadcastTask；GasRecharge 落库失败时
             # 必须一起回滚，避免留下无法被幂等查询感知的孤儿广播任务。
@@ -212,7 +212,7 @@ class DepositService:
             return False
 
         # Deposit 不参与 ConfirmMode 判断，始终使用模型默认值 FULL，走完整区块确认流程。
-        transfer.type = TransferType.Deposit
+        transfer.type = OnchainActionType.Deposit
         transfer.save(update_fields=["type"])
 
         deposit = Deposit.objects.create(
@@ -313,7 +313,7 @@ class DepositService:
                 chain=params["chain"],
                 to=params["recipient_address"],
                 value=value_raw,
-                transfer_type=TransferType.DepositCollection,
+                action_type=OnchainActionType.DepositCollection,
             )
         else:
             intent = build_erc20_transfer_intent(
@@ -322,7 +322,7 @@ class DepositService:
                 chain=params["chain"],
                 to=params["recipient_address"],
                 value_raw=value_raw,
-                transfer_type=TransferType.DepositCollection,
+                action_type=OnchainActionType.DepositCollection,
             )
         task = EvmBroadcastTask.schedule(intent)
         collection = DepositCollection.objects.create(
@@ -491,7 +491,7 @@ class DepositService:
             )
             return False
 
-        transfer.type = TransferType.GasRecharge
+        transfer.type = OnchainActionType.GasRecharge
         transfer.save(update_fields=["type"])
 
         # 将链上转账关联到 GasRecharge 审计记录
@@ -526,7 +526,7 @@ class DepositService:
         if collection is None:
             return False
 
-        transfer.type = TransferType.DepositCollection
+        transfer.type = OnchainActionType.DepositCollection
         transfer.save(update_fields=["type"])
 
         collection.collection_hash = transfer.hash

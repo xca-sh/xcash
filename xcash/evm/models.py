@@ -22,7 +22,7 @@ from common.fields import EvmAddressField
 from common.models import UndeletableModel
 from evm.choices import TxKind
 from evm.constants import EVM_PIPELINE_DEPTH
-from evm.intents import assert_transfer_type_implemented
+from evm.intents import assert_action_type_implemented
 from evm.intents import get_preflight_buffer_multiplier
 
 if TYPE_CHECKING:
@@ -372,7 +372,7 @@ class EvmBroadcastTask(UndeletableModel):
         """判断当前任务是否适用"向其 address 补 gas"。
 
         条件：
-        - base_task.transfer_type 在 EVM gas 补给派发表中允许补给
+        - base_task.action_type 在 EVM gas 补给派发表中允许补给
         - self.address 已登记为有效 DepositAddress（排除其它用途的地址）
 
         Withdrawal 任务的 address 本身即 Vault，补 gas 会形成 vault→vault 死循环，
@@ -380,7 +380,7 @@ class EvmBroadcastTask(UndeletableModel):
         """
         if not self.base_task_id:
             return False
-        if not evm.intents.is_gas_rechargeable(self.base_task.transfer_type):
+        if not evm.intents.is_gas_rechargeable(self.base_task.action_type):
             return False
 
         from deposits.models import DepositAddress  # noqa: PLC0415
@@ -536,7 +536,7 @@ class EvmBroadcastTask(UndeletableModel):
         首次签名和首个 tx_hash 生成延后到 broadcast()；内部稳定身份只依赖
         (address, chain, nonce)。
         """
-        assert_transfer_type_implemented(intent.transfer_type)
+        assert_action_type_implemented(intent.action_type)
 
         with db_transaction.atomic():
             state = AddressChainState.acquire_for_update(
@@ -552,7 +552,7 @@ class EvmBroadcastTask(UndeletableModel):
             base_task = BroadcastTask.objects.create(
                 chain=intent.chain,
                 address=intent.address,
-                transfer_type=intent.transfer_type,
+                action_type=intent.action_type,
                 crypto=intent.crypto,
                 recipient=intent.recipient,
                 amount=intent.amount,

@@ -12,7 +12,7 @@ from chains.models import (
     BroadcastTaskStage,
     Chain,
     ChainType,
-    TransferType,
+    OnchainActionType,
     Wallet,
 )
 from currencies.models import Crypto
@@ -99,7 +99,7 @@ def make_broadcast_task(
     *,
     chain: Chain,
     address: Address,
-    transfer_type: TransferType = TransferType.Withdrawal,
+    action_type: OnchainActionType = OnchainActionType.Withdrawal,
     crypto: Crypto | None = None,
     amount: Decimal = Decimal("1.0"),
     recipient_suffix: str = "ff",
@@ -110,7 +110,7 @@ def make_broadcast_task(
     return BroadcastTask.objects.create(
         chain=chain,
         address=address,
-        transfer_type=transfer_type,
+        action_type=action_type,
         crypto=crypto or chain.native_coin,
         amount=amount,
         recipient=Web3.to_checksum_address("0x" + recipient_suffix.rjust(40, "0")),

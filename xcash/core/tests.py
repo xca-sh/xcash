@@ -29,7 +29,7 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
 from chains.models import TransferStatus
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import Wallet
 from chains.tasks import block_number_updated
 from chains.tasks import confirm_transfer
@@ -718,7 +718,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
                 chain=chain,
                 to=recipient,
                 value=int(amount * Decimal(10**18)),
-                transfer_type=TransferType.Withdrawal,
+                action_type=OnchainActionType.Withdrawal,
             )
         )
         withdrawal = Withdrawal.objects.create(
@@ -908,7 +908,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
 
         gas_task = EvmBroadcastTask.objects.filter(
             base_task__chain=chain,
-            base_task__transfer_type=TransferType.GasRecharge,
+            base_task__action_type=OnchainActionType.GasRecharge,
         ).latest("created_at")
         # 为 vault 充值以便 gas recharge 可以广播
         w3.eth.wait_for_transaction_receipt(
@@ -936,7 +936,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
         )
         collection_transfer.process()
         deposit.refresh_from_db()
-        self.assertEqual(collection_transfer.type, TransferType.DepositCollection)
+        self.assertEqual(collection_transfer.type, OnchainActionType.DepositCollection)
         self.assertEqual(deposit.collection.transfer_id, collection_transfer.id)
 
         collection_transfer.confirm()
@@ -1018,7 +1018,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
                 crypto=token_crypto,
                 to=recipient,
                 value_raw=transfer_amount_raw,
-                transfer_type=TransferType.Withdrawal,
+                action_type=OnchainActionType.Withdrawal,
             )
         )
         withdrawal = Withdrawal.objects.create(
@@ -1223,7 +1223,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
 
         gas_task = EvmBroadcastTask.objects.filter(
             base_task__chain=chain,
-            base_task__transfer_type=TransferType.GasRecharge,
+            base_task__action_type=OnchainActionType.GasRecharge,
         ).latest("created_at")
         # gas recharge 任务以系统最终选中的金库账户为准；这里再真实补足原生币，确保后续广播闭环。
         w3.eth.wait_for_transaction_receipt(
@@ -1254,7 +1254,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
         )
         collection_transfer.process()
         deposit.refresh_from_db()
-        self.assertEqual(collection_transfer.type, TransferType.DepositCollection)
+        self.assertEqual(collection_transfer.type, OnchainActionType.DepositCollection)
         self.assertEqual(deposit.collection.transfer_id, collection_transfer.id)
 
         collection_transfer.confirm()
@@ -1390,7 +1390,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
                 chain=chain,
                 to=recipient,
                 value=int(Decimal("0.01") * Decimal(10**18)),
-                transfer_type=TransferType.Withdrawal,
+                action_type=OnchainActionType.Withdrawal,
             )
         )
         withdrawal = Withdrawal.objects.create(
@@ -1602,7 +1602,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=crypto,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000009"
@@ -1625,7 +1625,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMING,
-            type=TransferType.Withdrawal,
+            type=OnchainActionType.Withdrawal,
             processed_at=timezone.now(),
         )
         withdrawal = Withdrawal.objects.create(
@@ -1745,7 +1745,7 @@ class LocalBitcoinIntegrationTests(LocalChainIntegrationMixin, TestCase):
         )
         transfer.process()
         invoice.refresh_from_db()
-        self.assertEqual(transfer.type, TransferType.Invoice)
+        self.assertEqual(transfer.type, OnchainActionType.Invoice)
         self.assertEqual(invoice.status, InvoiceStatus.CONFIRMING)
         self.assertEqual(invoice.transfer_id, transfer.pk)
 

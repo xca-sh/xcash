@@ -21,7 +21,7 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
 from chains.models import TransferStatus
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import TxHash
 from chains.models import Wallet
 from currencies.models import Crypto
@@ -40,7 +40,7 @@ class EvmBroadcastTaskTests(TestCase):
     def _make_gas_recharge_eligibility_task(
         self,
         *,
-        transfer_type: TransferType,
+        action_type: OnchainActionType,
         register_deposit_address: bool,
         suffix: str,
     ) -> EvmBroadcastTask:
@@ -86,7 +86,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=transfer_type,
+            action_type=action_type,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 f"0x00000000000000000000000000000000001{len(suffix):05d}"
@@ -110,7 +110,7 @@ class EvmBroadcastTaskTests(TestCase):
 
     def test_is_eligible_for_gas_recharge_uses_intent_dispatch_table(self):
         task = self._make_gas_recharge_eligibility_task(
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             register_deposit_address=True,
             suffix="dispatch",
         )
@@ -118,11 +118,11 @@ class EvmBroadcastTaskTests(TestCase):
         with patch("evm.intents.is_gas_rechargeable", return_value=True) as mock:
             self.assertTrue(task._is_eligible_for_gas_recharge())
 
-        mock.assert_called_once_with(TransferType.Withdrawal)
+        mock.assert_called_once_with(OnchainActionType.Withdrawal)
 
     def test_is_eligible_for_gas_recharge_requires_deposit_address(self):
         task = self._make_gas_recharge_eligibility_task(
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             register_deposit_address=False,
             suffix="nodeposit",
         )
@@ -130,11 +130,11 @@ class EvmBroadcastTaskTests(TestCase):
         with patch("evm.intents.is_gas_rechargeable", return_value=True) as mock:
             self.assertFalse(task._is_eligible_for_gas_recharge())
 
-        mock.assert_called_once_with(TransferType.DepositCollection)
+        mock.assert_called_once_with(OnchainActionType.DepositCollection)
 
     def test_is_eligible_for_gas_recharge_rejects_non_rechargeable_intent(self):
         task = self._make_gas_recharge_eligibility_task(
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             register_deposit_address=True,
             suffix="blocked",
         )
@@ -142,7 +142,7 @@ class EvmBroadcastTaskTests(TestCase):
         with patch("evm.intents.is_gas_rechargeable", return_value=False) as mock:
             self.assertFalse(task._is_eligible_for_gas_recharge())
 
-        mock.assert_called_once_with(TransferType.DepositCollection)
+        mock.assert_called_once_with(OnchainActionType.DepositCollection)
 
     def test_create_without_tx_kind_is_rejected_by_database(self):
         native = Crypto.objects.create(
@@ -216,7 +216,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             tx_hash="0x" + "a1" * 32,
             stage=BroadcastTaskStage.QUEUED,
         )
@@ -345,7 +345,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000102"
@@ -444,7 +444,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000112"
@@ -524,7 +524,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000200"
@@ -616,7 +616,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.DepositCollection,
+            action_type=OnchainActionType.DepositCollection,
             crypto=crypto,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000302"
@@ -642,7 +642,7 @@ class EvmBroadcastTaskTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Deposit,
+            type=OnchainActionType.Deposit,
         )
         deposit = Deposit.objects.create(
             customer=customer,
@@ -717,7 +717,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000402"
@@ -802,7 +802,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000412"
@@ -875,7 +875,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=contract,
             amount=Decimal("0"),
@@ -941,7 +941,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000405"
@@ -1009,7 +1009,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000403"
@@ -1080,7 +1080,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000104"
@@ -1151,7 +1151,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000106"
@@ -1218,7 +1218,7 @@ class EvmBroadcastTaskTests(TestCase):
         lower_base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000108"
@@ -1242,7 +1242,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000109"
@@ -1308,7 +1308,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000108"
@@ -1380,7 +1380,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000110"
@@ -1463,7 +1463,7 @@ class EvmBroadcastTaskTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000112"

@@ -12,7 +12,7 @@ from chains.models import BroadcastTaskResult
 from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import Wallet
 from currencies.models import Crypto
 from evm.choices import TxKind
@@ -63,7 +63,7 @@ class EvmBroadcastTaskScheduleTests(TestCase):
             "value": 1_230_000_000_000_000_000,
             "data": "",
             "gas": 21_000,
-            "transfer_type": TransferType.Withdrawal,
+            "action_type": OnchainActionType.Withdrawal,
             "crypto": self.native,
             "recipient": self.recipient,
             "amount": Decimal("1.23"),
@@ -95,7 +95,7 @@ class EvmBroadcastTaskScheduleTests(TestCase):
         base_task = task.base_task
         self.assertEqual(base_task.chain, intent.chain)
         self.assertEqual(base_task.address, intent.address)
-        self.assertEqual(base_task.transfer_type, intent.transfer_type)
+        self.assertEqual(base_task.action_type, intent.action_type)
         self.assertEqual(base_task.crypto, intent.crypto)
         self.assertEqual(base_task.recipient, intent.recipient)
         self.assertEqual(base_task.amount, intent.amount)
@@ -149,7 +149,7 @@ class EvmBroadcastTaskScheduleTests(TestCase):
         self.assertEqual(AddressChainState.objects.count(), 0)
 
     def test_schedule_allows_x402_facilitate_to_reach_lock(self):
-        intent = self._intent(transfer_type=TransferType.X402Facilitate)
+        intent = self._intent(action_type=OnchainActionType.X402Facilitate)
 
         with (
             patch.object(
@@ -166,7 +166,7 @@ class EvmBroadcastTaskScheduleTests(TestCase):
         self.assertEqual(EvmBroadcastTask.objects.count(), 0)
 
     def test_schedule_allows_contract_deploy_collect_to_reach_lock(self):
-        intent = self._intent(transfer_type=TransferType.ContractDeployCollect)
+        intent = self._intent(action_type=OnchainActionType.ContractDeployCollect)
 
         with (
             patch.object(

@@ -59,7 +59,7 @@ def _finalize_failed(
             reason=reason,
             expected_stage=None,
         )
-        handler = get_handler(broadcast_task.transfer_type)
+        handler = get_handler(broadcast_task.action_type)
         handler.finalize_failed(broadcast_task, reason)
 
 
@@ -91,7 +91,7 @@ def process_internal_transaction(
         )
         return
 
-    matcher = get_matcher(broadcast_task.transfer_type)
+    matcher = get_matcher(broadcast_task.action_type)
     fact = matcher(chain=chain, broadcast_task=broadcast_task, receipt=receipt)
     if fact is None:
         _finalize_failed(
@@ -102,7 +102,7 @@ def process_internal_transaction(
             "EVM 内部交易 receipt 成功但 matcher 未找到预期 Transfer",
             chain=chain.code,
             tx_hash=tx_hash,
-            transfer_type=broadcast_task.transfer_type,
+            action_type=broadcast_task.action_type,
             broadcast_task_id=broadcast_task.pk,
         )
         return

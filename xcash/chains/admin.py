@@ -191,7 +191,7 @@ class BroadcastTaskAdmin(ReadOnlyModelAdmin):
     list_display = (
         "display_address",
         "display_chain",
-        "display_transfer_type",
+        "display_action_type",
         "display_crypto",
         "display_recipient",
         "display_amount",
@@ -200,7 +200,7 @@ class BroadcastTaskAdmin(ReadOnlyModelAdmin):
         "display_failure_reason",
         "created_at",
     )
-    list_filter = ("stage", "result", "transfer_type", "chain")
+    list_filter = ("stage", "result", "action_type", "chain")
     list_select_related = ("address", "chain", "crypto")
     search_fields = ("tx_hash", "address__address", "recipient")
 
@@ -212,9 +212,9 @@ class BroadcastTaskAdmin(ReadOnlyModelAdmin):
     def display_chain(self, obj: BroadcastTask):
         return obj.chain
 
-    @admin.display(ordering="transfer_type", description=_("类型"))
-    def display_transfer_type(self, obj: BroadcastTask):
-        return obj.get_transfer_type_display()
+    @admin.display(ordering="action_type", description=_("类型"))
+    def display_action_type(self, obj: BroadcastTask):
+        return obj.get_action_type_display()
 
     @admin.display(ordering="crypto__symbol", description=_("代币"))
     def display_crypto(self, obj: BroadcastTask):

@@ -24,7 +24,7 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
 from chains.models import TransferStatus
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import Wallet
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
@@ -119,7 +119,7 @@ class WithdrawalBroadcastTaskTests(TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=crypto,
             recipient="0x0000000000000000000000000000000000000002",
             amount="1",
@@ -169,7 +169,7 @@ class WithdrawalBroadcastTaskTests(TestCase):
         self.assertTrue(matched)
         self.assertEqual(withdrawal.transfer_id, transfer.id)
         self.assertEqual(withdrawal.status, WithdrawalStatus.CONFIRMING)
-        self.assertEqual(transfer.type, TransferType.Withdrawal)
+        self.assertEqual(transfer.type, OnchainActionType.Withdrawal)
         self.assertEqual(broadcast_task.stage, BroadcastTaskStage.PENDING_CONFIRM)
         self.assertEqual(broadcast_task.result, BroadcastTaskResult.UNKNOWN)
 
@@ -207,7 +207,7 @@ class WithdrawalBroadcastTaskTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMED,
-            type=TransferType.Withdrawal,
+            type=OnchainActionType.Withdrawal,
         )
         withdrawal = Withdrawal.objects.create(
             project=project,
@@ -261,7 +261,7 @@ class WithdrawalBroadcastTaskTests(TestCase):
             timestamp=1,
             datetime=timezone.now(),
             status=TransferStatus.CONFIRMING,
-            type=TransferType.Withdrawal,
+            type=OnchainActionType.Withdrawal,
         )
         withdrawal = Withdrawal.objects.create(
             project=project,
@@ -1771,7 +1771,7 @@ class WithdrawalStateTransitionTests(TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             tx_hash=tx_hash,
             stage=BroadcastTaskStage.PENDING_CONFIRM,
         )
@@ -1816,7 +1816,7 @@ class WithdrawalStateTransitionTests(TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             tx_hash=tx_hash,
             stage=BroadcastTaskStage.FINALIZED,
             result=BroadcastTaskResult.FAILED,
@@ -1902,7 +1902,7 @@ class WithdrawalStateTransitionTests(TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             tx_hash=tx_hash,
             stage=BroadcastTaskStage.FINALIZED,
             result=BroadcastTaskResult.FAILED,
@@ -1993,7 +1993,7 @@ class WithdrawalTryMatchTests(TestCase):
         broadcast_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.crypto,
             recipient=recipient,
             amount=Decimal("1"),
@@ -2095,7 +2095,7 @@ class WithdrawalTryMatchTests(TestCase):
         self.assertEqual(broadcast_task.stage, BroadcastTaskStage.PENDING_CONFIRM)
 
         transfer.refresh_from_db()
-        self.assertEqual(transfer.type, TransferType.Withdrawal)
+        self.assertEqual(transfer.type, OnchainActionType.Withdrawal)
 
     @patch("chains.tasks.process_transfer.apply_async")
     def test_match_backfills_chain_when_null(self, _process_mock):

@@ -21,7 +21,7 @@ from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import TxHash
 from chains.models import Wallet
 from core.models import PLATFORM_SETTINGS_CACHE_KEY
@@ -87,7 +87,7 @@ class EvmReconcilePendingChainTests(TestCase):
         task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.native,
             recipient=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000a2"

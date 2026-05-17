@@ -10,7 +10,7 @@ from django.utils import timezone
 from chains.adapters import AdapterFactory
 from chains.models import AddressUsage, BroadcastTask
 from chains.models import ChainType
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.service import AddressService
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
@@ -298,7 +298,7 @@ class WithdrawalService:
                 chain=chain,
                 to=to,
                 value=value_raw,
-                transfer_type=TransferType.Withdrawal,
+                action_type=OnchainActionType.Withdrawal,
                 verify_fn=verify_fn,
             )
         else:
@@ -308,7 +308,7 @@ class WithdrawalService:
                 crypto=crypto,
                 to=to,
                 value_raw=value_raw,
-                transfer_type=TransferType.Withdrawal,
+                action_type=OnchainActionType.Withdrawal,
                 verify_fn=verify_fn,
             )
         task = EvmBroadcastTask.schedule(intent)
@@ -651,7 +651,7 @@ class WithdrawalService:
                 tx_hash=transfer.hash,
             )
 
-        transfer.type = TransferType.Withdrawal
+        transfer.type = OnchainActionType.Withdrawal
         transfer.save(update_fields=["type"])
         return True
 
@@ -771,7 +771,7 @@ class WithdrawalService:
                 project=vault.wallet.project,
                 transfer=transfer,
             )
-            transfer.type = TransferType.Prefunding
+            transfer.type = OnchainActionType.Prefunding
             transfer.save(update_fields=["type"])
         except ObjectDoesNotExist:
             return False

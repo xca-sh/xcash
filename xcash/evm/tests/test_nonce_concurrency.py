@@ -9,7 +9,7 @@ from chains.models import Address
 from chains.models import AddressUsage
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import Wallet
 from currencies.models import Crypto
 from evm.choices import TxKind
@@ -73,7 +73,7 @@ class EvmNonceConcurrencyTests(TransactionTestCase):
                         chain=self.chain,
                         to=recipient,
                         value=thread_idx + 1,
-                        transfer_type=TransferType.Withdrawal,
+                        action_type=OnchainActionType.Withdrawal,
                     )
                 )
                 results.append(task.nonce)
@@ -150,7 +150,7 @@ class EvmNonceConcurrencyTests(TransactionTestCase):
                         chain=self.chain,
                         to=recipient,
                         value=1,
-                        transfer_type=TransferType.Withdrawal,
+                        action_type=OnchainActionType.Withdrawal,
                     )
                 )
                 results.append((str(addr.address), task.nonce))
@@ -199,7 +199,7 @@ class EvmNonceConcurrencyTests(TransactionTestCase):
                         chain=self.chain,
                         to=recipient,
                         value=1,
-                        transfer_type=TransferType.Withdrawal,
+                        action_type=OnchainActionType.Withdrawal,
                     )
                 )
                 with lock:

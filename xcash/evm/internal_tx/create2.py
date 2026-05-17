@@ -6,8 +6,8 @@ from decimal import Decimal
 from chains.models import (
     BroadcastTask,
     BroadcastTaskFailureReason,
+    OnchainActionType,
     OnchainTransfer,
-    TransferType,
 )
 from django.db import transaction as db_transaction
 from django.utils import timezone
@@ -66,7 +66,7 @@ class ContractDeployCollectionHandler:
                 return False
             collection.transfer = transfer
             collection.save(update_fields=["transfer", "updated_at"])
-            transfer.type = TransferType.ContractDeployCollect
+            transfer.type = OnchainActionType.ContractDeployCollect
             transfer.save(update_fields=["type"])
         return True
 
@@ -102,4 +102,3 @@ class ContractDeployCollectionHandler:
 
 
 contract_deploy_collection_handler = ContractDeployCollectionHandler()
-

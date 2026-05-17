@@ -25,7 +25,7 @@ from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import OnchainTransfer
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import TxHash
 from chains.models import Wallet
 from chains.service import ObservedTransferPayload
@@ -108,7 +108,7 @@ class EvmInternalTaskConfirmationTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=self.chain,
             address=self.addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=self.token,
             recipient=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000c3"

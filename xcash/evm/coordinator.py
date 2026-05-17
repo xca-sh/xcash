@@ -158,11 +158,11 @@ class InternalEvmTaskCoordinator:
             return False
 
         try:
-            handler = get_handler(base_task.transfer_type)
+            handler = get_handler(base_task.action_type)
         except KeyError:
             logger.warning(
                 "coordinator 收口失败但 handler 未注册",
-                transfer_type=base_task.transfer_type,
+                action_type=base_task.action_type,
                 base_task_id=base_task.pk,
             )
             return True

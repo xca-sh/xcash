@@ -508,7 +508,7 @@ class Address(UndeletableModel):
         chain: Chain,
         to: str,
         amount: Decimal,
-        transfer_type: TransferType,
+        action_type: OnchainActionType,
     ) -> str:
         """使用本账户私钥签名并发送转账，返回 tx hash / signature。
 
@@ -528,7 +528,7 @@ class Address(UndeletableModel):
                     chain=chain,
                     to=to,
                     value=value_raw,
-                    transfer_type=transfer_type,
+                    action_type=action_type,
                 )
             else:
                 intent = build_erc20_transfer_intent(
@@ -537,7 +537,7 @@ class Address(UndeletableModel):
                     crypto=crypto,
                     to=to,
                     value_raw=value_raw,
-                    transfer_type=transfer_type,
+                    action_type=action_type,
                 )
             task = EvmBroadcastTask.schedule(intent)
             return task.base_task.tx_hash
@@ -547,7 +547,7 @@ class Address(UndeletableModel):
 
 
 
-class TransferType(models.TextChoices):
+class OnchainActionType(models.TextChoices):
     Invoice = "iv", _("💳 支付")
     Deposit = "deposit", "💰 充币"
     Withdrawal = "withdrawal", "🏧 提币"
@@ -650,9 +650,9 @@ class BroadcastTask(UndeletableModel):
         on_delete=models.PROTECT,
         verbose_name=_("地址"),
     )
-    transfer_type = models.CharField(
+    action_type = models.CharField(
         _("类型"),
-        choices=TransferType,
+        choices=OnchainActionType,
     )
     crypto = models.ForeignKey(
         "currencies.Crypto",
@@ -857,7 +857,7 @@ class BroadcastTask(UndeletableModel):
             tx_hash=tx_hash,
             updated_at=timezone.now(),
         )
-        if locked_task.transfer_type == TransferType.Withdrawal:
+        if locked_task.action_type == OnchainActionType.Withdrawal:
             from withdrawals.models import Withdrawal
 
             Withdrawal.objects.filter(broadcast_task=locked_task).update(
@@ -911,7 +911,7 @@ class BroadcastTask(UndeletableModel):
                 updated_at=timezone.now(),
             )
         )
-        if updated and task.transfer_type == TransferType.Withdrawal:
+        if updated and task.action_type == OnchainActionType.Withdrawal:
             from withdrawals.models import Withdrawal
 
             Withdrawal.objects.filter(broadcast_task=task).update(
@@ -965,7 +965,7 @@ class BroadcastTask(UndeletableModel):
             failure_reason="",
             updated_at=timezone.now(),
         )
-        if updated and task.transfer_type == TransferType.Withdrawal:
+        if updated and task.action_type == OnchainActionType.Withdrawal:
             from withdrawals.models import Withdrawal
 
             Withdrawal.objects.filter(broadcast_task=task).update(
@@ -997,7 +997,7 @@ class BroadcastTask(UndeletableModel):
                 updated_at=timezone.now(),
             )
         )
-        if updated and task.transfer_type == TransferType.Withdrawal:
+        if updated and task.action_type == OnchainActionType.Withdrawal:
             from withdrawals.models import Withdrawal
 
             Withdrawal.objects.filter(broadcast_task=task).update(
@@ -1059,7 +1059,7 @@ class OnchainTransfer(models.Model):
 
     type = models.CharField(
         _("类型"),
-        choices=TransferType,
+        choices=OnchainActionType,
         blank=True,
         default="",
     )
@@ -1206,12 +1206,12 @@ class OnchainTransfer(models.Model):
             try:
                 from evm.internal_tx.handlers import get_handler
 
-                handler = get_handler(TransferType(broadcast_task.transfer_type))
+                handler = get_handler(OnchainActionType(broadcast_task.action_type))
             except (KeyError, ValueError):
                 logger.warning(
                     "EVM 内部交易缺少 handler 注册",
                     transfer_id=self.pk,
-                    transfer_type=broadcast_task.transfer_type,
+                    action_type=broadcast_task.action_type,
                 )
                 return False
             return handler.match(self, broadcast_task)
@@ -1222,12 +1222,12 @@ class OnchainTransfer(models.Model):
         from deposits.service import DepositService
         from withdrawals.service import WithdrawalService
 
-        tt = broadcast_task.transfer_type
-        if tt == TransferType.GasRecharge:
+        tt = broadcast_task.action_type
+        if tt == OnchainActionType.GasRecharge:
             return DepositService.try_match_gas_recharge(self, broadcast_task)
-        if tt == TransferType.DepositCollection:
+        if tt == OnchainActionType.DepositCollection:
             return DepositService.try_match_collection(self, broadcast_task)
-        if tt == TransferType.Withdrawal:
+        if tt == OnchainActionType.Withdrawal:
             return WithdrawalService.try_match_withdrawal(self, broadcast_task)
         return False
 
@@ -1296,12 +1296,12 @@ class OnchainTransfer(models.Model):
         }
 
     def _dispatch_business_confirm(self) -> None:
-        """统一按 TransferType 分发确认动作，confirm() 专用。"""
+        """统一按已归类的业务类型分发确认动作，confirm() 专用。"""
         if self.chain.type == ChainType.EVM and self.type:
             try:
                 from evm.internal_tx.handlers import get_handler
 
-                handler = get_handler(TransferType(self.type))
+                handler = get_handler(OnchainActionType(self.type))
             except (KeyError, ValueError):
                 handler = None
             if handler is not None:
@@ -1315,34 +1315,34 @@ class OnchainTransfer(models.Model):
         from invoices.service import InvoiceService
         from withdrawals.service import WithdrawalService
 
-        if self.type == TransferType.Invoice:
+        if self.type == OnchainActionType.Invoice:
             InvoiceService.confirm_invoice(self.invoice)
-        elif self.type == TransferType.Deposit:
+        elif self.type == OnchainActionType.Deposit:
             DepositService.confirm_deposit(self.deposit)
-        elif self.type == TransferType.DepositCollection:
+        elif self.type == OnchainActionType.DepositCollection:
             from deposits.models import DepositCollection  # noqa: WPS433
 
             with contextlib.suppress(DepositCollection.DoesNotExist):
                 DepositService.confirm_collection(self.deposit_collection)
-        elif self.type == TransferType.GasRecharge:
+        elif self.type == OnchainActionType.GasRecharge:
             from deposits.models import GasRecharge  # noqa: WPS433
 
             GasRecharge.objects.filter(transfer=self).update(
                 recharged_at=timezone.now()
             )
-        elif self.type == TransferType.Withdrawal:
+        elif self.type == OnchainActionType.Withdrawal:
             from withdrawals.models import Withdrawal  # noqa: WPS433
 
             with contextlib.suppress(Withdrawal.DoesNotExist):
                 WithdrawalService.confirm_withdrawal(self)
 
     def _dispatch_business_drop(self) -> None:
-        """统一按 TransferType 分发回退动作，drop() 专用。"""
+        """统一按已归类的业务类型分发回退动作，drop() 专用。"""
         if self.chain.type == ChainType.EVM and self.type:
             try:
                 from evm.internal_tx.handlers import get_handler
 
-                handler = get_handler(TransferType(self.type))
+                handler = get_handler(OnchainActionType(self.type))
             except (KeyError, ValueError):
                 handler = None
             if handler is not None:
@@ -1356,16 +1356,16 @@ class OnchainTransfer(models.Model):
         from invoices.service import InvoiceService
         from withdrawals.service import WithdrawalService
 
-        if self.type == TransferType.Invoice:
+        if self.type == OnchainActionType.Invoice:
             InvoiceService.drop_invoice(self.invoice)
-        elif self.type == TransferType.Deposit:
+        elif self.type == OnchainActionType.Deposit:
             DepositService.drop_deposit(self.deposit)
-        elif self.type == TransferType.DepositCollection:
+        elif self.type == OnchainActionType.DepositCollection:
             from deposits.models import DepositCollection  # noqa: WPS433
 
             with contextlib.suppress(DepositCollection.DoesNotExist):
                 DepositService.drop_collection(self.deposit_collection)
-        elif self.type == TransferType.Withdrawal:
+        elif self.type == OnchainActionType.Withdrawal:
             from withdrawals.models import Withdrawal  # noqa: WPS433
 
             with contextlib.suppress(Withdrawal.DoesNotExist):

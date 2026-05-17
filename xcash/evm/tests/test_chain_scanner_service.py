@@ -16,7 +16,7 @@ from chains.models import BroadcastTaskResult
 from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import TxHash
 from chains.models import Wallet
 from chains.service import ObservedTransferPayload
@@ -354,7 +354,7 @@ class EvmChainScannerServiceTests(TestCase):
                     "0x00000000000000000000000000000000000000f2"
                 ),
                 value=123,
-                transfer_type=TransferType.Withdrawal,
+                action_type=OnchainActionType.Withdrawal,
             )
         )
 
@@ -412,7 +412,7 @@ class EvmChainScannerServiceTests(TestCase):
                     "0x00000000000000000000000000000000000000fb"
                 ),
                 value=123,
-                transfer_type=TransferType.Withdrawal,
+                action_type=OnchainActionType.Withdrawal,
             )
         )
 
@@ -468,7 +468,7 @@ class EvmChainScannerServiceTests(TestCase):
             filler_base = BroadcastTask.objects.create(
                 chain=chain,
                 address=addr,
-                transfer_type=TransferType.Withdrawal,
+                action_type=OnchainActionType.Withdrawal,
                 stage=BroadcastTaskStage.FINALIZED,
                 result=BroadcastTaskResult.SUCCESS,
             )
@@ -488,7 +488,7 @@ class EvmChainScannerServiceTests(TestCase):
         base_task = BroadcastTask.objects.create(
             chain=chain,
             address=addr,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             crypto=native,
             recipient=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000f6"
@@ -526,7 +526,7 @@ class EvmChainScannerServiceTests(TestCase):
                     "0x00000000000000000000000000000000000000f7"
                 ),
                 value=123,
-                transfer_type=TransferType.Withdrawal,
+                action_type=OnchainActionType.Withdrawal,
             )
         )
 
@@ -586,7 +586,7 @@ class EvmChainScannerServiceTests(TestCase):
                     "0x00000000000000000000000000000000000000f9"
                 ),
                 value=123,
-                transfer_type=TransferType.Withdrawal,
+                action_type=OnchainActionType.Withdrawal,
             )
         )
 

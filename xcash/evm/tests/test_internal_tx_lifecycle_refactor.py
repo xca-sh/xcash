@@ -9,7 +9,7 @@ from chains.models import (
     BroadcastTaskResult,
     BroadcastTaskStage,
     OnchainTransfer,
-    TransferType,
+    OnchainActionType,
 )
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
@@ -116,7 +116,7 @@ class X402InternalLifecycleTests(TestCase):
         self.facilitation.refresh_from_db()
         assert self.facilitation.transfer_id == transfer.pk
         assert self.facilitation.status == X402FacilitationStatus.BROADCASTED
-        assert transfer.type == TransferType.X402Facilitate
+        assert transfer.type == OnchainActionType.X402Facilitate
 
     def test_missing_expected_transfer_fails_closed(self):
         tx = {"hash": self.base_task.tx_hash, "from": self.facilitator.address}
@@ -192,7 +192,7 @@ class Create2InternalLifecycleTests(TestCase):
         collection.refresh_from_db()
         assert collection.transfer_id == transfer.pk
         assert collection.status == ContractDeployCollectionStatus.BROADCASTED
-        assert transfer.type == TransferType.ContractDeployCollect
+        assert transfer.type == OnchainActionType.ContractDeployCollect
 
 
 class ProcessorFailureAtomicityTests(TransactionTestCase):
@@ -202,14 +202,14 @@ class ProcessorFailureAtomicityTests(TransactionTestCase):
         task = make_broadcast_task(
             chain=chain,
             address=address,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             tx_hash_suffix="fa11",
             stage=BroadcastTaskStage.PENDING_CHAIN,
         )
-        original_handler = handlers_mod.HANDLERS[TransferType.Withdrawal]
+        original_handler = handlers_mod.HANDLERS[OnchainActionType.Withdrawal]
         handler = MagicMock()
         handler.finalize_failed.side_effect = RuntimeError("business failure")
-        handlers_mod.HANDLERS[TransferType.Withdrawal] = handler
+        handlers_mod.HANDLERS[OnchainActionType.Withdrawal] = handler
         try:
             with self.assertRaisesRegex(RuntimeError, "business failure"):
                 process_internal_transaction(
@@ -218,7 +218,7 @@ class ProcessorFailureAtomicityTests(TransactionTestCase):
                     receipt={"status": 0, "logs": [], "blockNumber": 1},
                 )
         finally:
-            handlers_mod.HANDLERS[TransferType.Withdrawal] = original_handler
+            handlers_mod.HANDLERS[OnchainActionType.Withdrawal] = original_handler
 
         task.refresh_from_db()
         assert task.stage == BroadcastTaskStage.PENDING_CHAIN
@@ -233,7 +233,7 @@ class ProcessorTimestampReuseTests(TestCase):
         task = make_broadcast_task(
             chain=chain,
             address=address,
-            transfer_type=TransferType.Withdrawal,
+            action_type=OnchainActionType.Withdrawal,
             tx_hash_suffix="55",
             stage=BroadcastTaskStage.PENDING_CHAIN,
         )
@@ -245,8 +245,8 @@ class ProcessorTimestampReuseTests(TestCase):
             value=Decimal("1000000000000000000"),
             amount=Decimal("1"),
         )
-        original_matcher = matchers_mod.MATCHERS[TransferType.Withdrawal]
-        matchers_mod.MATCHERS[TransferType.Withdrawal] = (
+        original_matcher = matchers_mod.MATCHERS[OnchainActionType.Withdrawal]
+        matchers_mod.MATCHERS[OnchainActionType.Withdrawal] = (
             lambda *, chain, broadcast_task, receipt: fact
         )
         try:
@@ -265,4 +265,4 @@ class ProcessorTimestampReuseTests(TestCase):
                 )
             lookup.assert_not_called()
         finally:
-            matchers_mod.MATCHERS[TransferType.Withdrawal] = original_matcher
+            matchers_mod.MATCHERS[OnchainActionType.Withdrawal] = original_matcher

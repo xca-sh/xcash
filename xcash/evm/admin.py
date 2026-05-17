@@ -14,7 +14,7 @@ class EvmBroadcastTaskAdmin(ReadOnlyModelAdmin):
     list_display = (
         "display_address",
         "display_chain",
-        "transfer_type",
+        "action_type",
         "tx_kind",
         "display_crypto",
         "display_recipient",
@@ -50,9 +50,9 @@ class EvmBroadcastTaskAdmin(ReadOnlyModelAdmin):
     def display_status(self, instance: EvmBroadcastTask):
         return instance.status
 
-    @admin.display(description="类型", ordering="base_task__transfer_type")
-    def transfer_type(self, obj: EvmBroadcastTask):  # pragma: no cover
-        return obj.base_task.get_transfer_type_display() if obj.base_task_id else "—"
+    @admin.display(description="类型", ordering="base_task__action_type")
+    def action_type(self, obj: EvmBroadcastTask):  # pragma: no cover
+        return obj.base_task.get_action_type_display() if obj.base_task_id else "—"
 
     @admin.display(description="代币", ordering="base_task__crypto__symbol")
     def display_crypto(self, obj: EvmBroadcastTask):  # pragma: no cover

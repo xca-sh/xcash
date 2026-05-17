@@ -15,7 +15,7 @@ from chains.models import ChainType
 from chains.models import ConfirmMode
 from chains.models import OnchainTransfer
 from chains.models import TransferStatus
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from chains.models import Wallet
 
 if TYPE_CHECKING:
@@ -345,7 +345,7 @@ class TransferService:
     @staticmethod
     def assign_type_and_mode(
         transfer: OnchainTransfer,
-        transfer_type: TransferType,
+        transfer_type: OnchainActionType,
         confirm_mode: ConfirmMode,
     ) -> OnchainTransfer:
         transfer.type = transfer_type

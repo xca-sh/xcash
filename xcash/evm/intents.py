@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import eth_abi
 from web3 import Web3
 
-from chains.models import TransferType
+from chains.models import OnchainActionType
 from evm.choices import TxKind
 from evm.constants import get_x402_eip3009_facilitate_gas
 
@@ -32,7 +32,7 @@ class EvmTxIntent:
     value: int
     data: str
     gas: int
-    transfer_type: TransferType
+    action_type: OnchainActionType
     crypto: Crypto | None
     recipient: str | None
     amount: Decimal | None
@@ -44,11 +44,11 @@ _PREFLIGHT_BUFFER_MULTIPLIER = {
     TxKind.CONTRACT_CALL: 2,
 }
 
-_GAS_RECHARGEABLE_TRANSFER_TYPES = frozenset({TransferType.DepositCollection})
+_GAS_RECHARGEABLE_ACTION_TYPES = frozenset({OnchainActionType.DepositCollection})
 
 # §11 前的显式业务闸门：builder 已能构造低层 calldata，但业务回执匹配、
 # 状态流转与调用方接线尚未接通前，schedule 入口必须继续阻断这些类型。
-_UNIMPLEMENTED_BUSINESS_TRANSFER_TYPES: frozenset[TransferType] = frozenset()
+_UNIMPLEMENTED_BUSINESS_ACTION_TYPES: frozenset[OnchainActionType] = frozenset()
 
 
 def _normalize_hex_calldata(data: str) -> str:
@@ -82,14 +82,14 @@ def get_preflight_buffer_multiplier(tx_kind: TxKind) -> int:
     return _PREFLIGHT_BUFFER_MULTIPLIER[tx_kind]
 
 
-def is_gas_rechargeable(transfer_type: TransferType) -> bool:
-    return transfer_type in _GAS_RECHARGEABLE_TRANSFER_TYPES
+def is_gas_rechargeable(action_type: OnchainActionType) -> bool:
+    return action_type in _GAS_RECHARGEABLE_ACTION_TYPES
 
 
-def assert_transfer_type_implemented(transfer_type: TransferType) -> None:
-    if transfer_type in _UNIMPLEMENTED_BUSINESS_TRANSFER_TYPES:
+def assert_action_type_implemented(action_type: OnchainActionType) -> None:
+    if action_type in _UNIMPLEMENTED_BUSINESS_ACTION_TYPES:
         raise NotImplementedError(
-            f"{transfer_type.label} EVM builder will be implemented in §11"
+            f"{action_type.label} EVM builder will be implemented in §11"
         )
 
 
@@ -102,7 +102,7 @@ def build_native_transfer_intent(
     chain: Chain,
     to: str,
     value: int,
-    transfer_type: TransferType,
+    action_type: OnchainActionType,
     verify_fn: Callable[[], None] | None = None,
 ) -> EvmTxIntent:
     if value < 0:
@@ -119,7 +119,7 @@ def build_native_transfer_intent(
         value=value,
         data="",
         gas=chain.base_transfer_gas,
-        transfer_type=transfer_type,
+        action_type=action_type,
         crypto=native,
         recipient=to_checksum,
         amount=Decimal(value).scaleb(-native.decimals),
@@ -134,7 +134,7 @@ def build_erc20_transfer_intent(
     crypto: Crypto,
     to: str,
     value_raw: int,
-    transfer_type: TransferType,
+    action_type: OnchainActionType,
     verify_fn: Callable[[], None] | None = None,
 ) -> EvmTxIntent:
     if value_raw < 0:
@@ -158,7 +158,7 @@ def build_erc20_transfer_intent(
         value=0,
         data=f"{_ERC20_TRANSFER_SELECTOR}{encoded_args}",
         gas=chain.erc20_transfer_gas,
-        transfer_type=transfer_type,
+        action_type=action_type,
         crypto=crypto,
         recipient=to_checksum,
         amount=Decimal(value_raw).scaleb(-crypto.get_decimals(chain)),
@@ -173,7 +173,7 @@ def build_contract_call_intent(
     contract_address: str,
     data: str,
     gas: int,
-    transfer_type: TransferType,
+    action_type: OnchainActionType,
     value: int = 0,
     crypto: Crypto | None = None,
     recipient: str | None = None,
@@ -195,7 +195,7 @@ def build_contract_call_intent(
         value=value,
         data=_normalize_hex_calldata(data),
         gas=gas,
-        transfer_type=transfer_type,
+        action_type=action_type,
         crypto=crypto,
         recipient=recipient_checksum,
         amount=amount,
@@ -283,7 +283,7 @@ def build_x402_eip3009_facilitate_intent(
         contract_address=contract_addr,
         data=f"{_EIP3009_TRANSFER_WITH_AUTH_SELECTOR}{encoded_args}",
         gas=get_x402_eip3009_facilitate_gas(chain),
-        transfer_type=TransferType.X402Facilitate,
+        action_type=OnchainActionType.X402Facilitate,
         crypto=crypto,
         recipient=auth_to,
         amount=Decimal(authorization.value).scaleb(-crypto.get_decimals(chain)),
@@ -365,7 +365,7 @@ def build_payment_collector_deploy_intent(
         contract_address=factory_address,
         data=f"{_PAYMENT_COLLECTOR_FACTORY_SELECTOR}{encoded_args}",
         gas=gas,
-        transfer_type=TransferType.ContractDeployCollect,
+        action_type=OnchainActionType.ContractDeployCollect,
         crypto=crypto,
         recipient=collector_address,
         amount=Decimal(expected_collect_value_raw).scaleb(-crypto.get_decimals(chain)),
