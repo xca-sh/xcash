@@ -5,7 +5,6 @@ volumes:
   redis_data: {}
   # anvil 会在 $HOME/.foundry/anvil/tmp 下按会话堆放每块 trace/receipt，独立卷便于排查与单独清理。
   foundry_home: {}
-  bitcoin_data: {}
   signer_db_data: {}
 
 services:
@@ -83,19 +82,6 @@ services:
       # 1s 出块下 10000 块 ≈ 2.8h 历史，覆盖典型 dev 调试场景。
       - --prune-history
       - "10000"
-
-  bitcoin:
-    # 与生产环境统一使用 Bitcoin Core 官方镜像，减少环境差异。
-    image: bitcoin/bitcoin:28
-    container_name: xcash_dev_bitcoin
-    restart: unless-stopped
-    ports:
-      - "${LOCAL_BTC_RPC_PORT:-18443}:18443"
-    volumes:
-      - bitcoin_data:/root/.bitcoin
-      - ./compose/dev/bitcoin/bitcoin.conf:/root/.bitcoin/bitcoin.conf:ro
-      - ./compose/dev/bitcoin/start:/usr/local/bin/start-bitcoin:ro
-    command: ["sh", "/usr/local/bin/start-bitcoin"]
 
   signer-db:
     image: postgres:18.3-trixie
