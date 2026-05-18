@@ -3,7 +3,6 @@ from celery import shared_task
 from django.core.cache import cache
 from django.db import transaction as db_transaction
 from django.db.models import Exists
-from django.db.models import Min
 from django.db.models import OuterRef
 from django.db.models import Q
 
@@ -80,7 +79,6 @@ def _chain_dispatch_next(completed_task: EvmBroadcastTask) -> None:
             address=completed_task.address,
             chain=completed_task.chain,
             base_task__stage=BroadcastTaskStage.QUEUED,
-            base_task__result=BroadcastTaskResult.UNKNOWN,
         )
         .order_by("nonce")
         .first()
@@ -106,27 +104,15 @@ def dispatch_due_evm_broadcast_tasks() -> None:
     """
     from deposits.models import GasRecharge
 
-    # ── 第一步：找出每个 (address, chain) 组的最小 QUEUED nonce ──
-    candidates = (
-        EvmBroadcastTask.objects.filter(
-            base_task__stage=BroadcastTaskStage.QUEUED,
-            base_task__result=BroadcastTaskResult.UNKNOWN,
-        )
-        .values("address_id", "chain_id")
-        .annotate(min_nonce=Min("nonce"))
+    # 反关联用法：Exists(subquery) 会把“是否存在匹配的子查询记录”标成布尔值。
+    # 这里筛掉存在更小 QUEUED nonce 的任务，剩下的就是每个 (address, chain)
+    # 当前应该尝试广播的队头任务。
+    lower_queued_task_subquery = EvmBroadcastTask.objects.filter(
+        address_id=OuterRef("address_id"),
+        chain_id=OuterRef("chain_id"),
+        base_task__stage=BroadcastTaskStage.QUEUED,
+        nonce__lt=OuterRef("nonce"),
     )
-    # 构造 Q(address_id=a, chain_id=c, nonce=min_n) 的 OR 条件
-    nonce_filters = Q()
-    for row in candidates:
-        nonce_filters |= Q(
-            address_id=row["address_id"],
-            chain_id=row["chain_id"],
-            nonce=row["min_nonce"],
-        )
-    if not nonce_filters:
-        return
-
-    # ── 第二步：用最小 nonce 条件精确捞出待广播任务，加锁后逐条投递 ──
     # "地址正在等 gas" 的判定：GasRecharge.recharged_at 仍为空（未到账），
     # 且其配套 broadcast_task 还处于 QUEUED/PENDING_CHAIN/PENDING_CONFIRM 任一活跃态。
     # 已 FINALIZED+FAILED 的 recharge 不再阻塞 dispatch，避免死锁。
@@ -143,13 +129,15 @@ def dispatch_due_evm_broadcast_tasks() -> None:
     tasks = (
         EvmBroadcastTask.objects.select_for_update()
         .select_related("base_task")
-        .annotate(has_pending_recharge=Exists(pending_recharge_subquery))
+        .annotate(
+            has_lower_queued_task=Exists(lower_queued_task_subquery),
+            has_pending_recharge=Exists(pending_recharge_subquery),
+        )
         .filter(
-            nonce_filters,
             Q(last_attempt_at__isnull=True) | Q(last_attempt_at__lt=ago(minutes=4)),
             created_at__lt=ago(seconds=1),
             base_task__stage=BroadcastTaskStage.QUEUED,
-            base_task__result=BroadcastTaskResult.UNKNOWN,
+            has_lower_queued_task=False,
             has_pending_recharge=False,
         )
         .order_by("created_at")[:8]
