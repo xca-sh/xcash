@@ -93,6 +93,10 @@ STRESS_WEBHOOK_BASE_URL = "http://localhost:8000"
 # 压力测试允许的链代码；EVM 走 Ethereum Local，非本地链无法支付
 STRESS_ALLOWED_CHAINS = ["ethereum-local"]
 
+# StressRun 的 self-webhook 走 http://localhost:8000，反 SSRF 校验默认会拒；
+# 仅在开发环境放行内部目标，生产仍保持 base.py 默认的拒绝策略。
+WEBHOOK_ALLOW_INTERNAL_TARGETS = True
+
 # 本地压测会以匿名方式高并发访问公开接口，沿用基础配置的 256/minute 很容易在建单阶段触发 429。
 # 仅开发环境放宽匿名限流，生产仍继续使用 base.py 中的保守默认值。
 REST_FRAMEWORK = deepcopy(BASE_REST_FRAMEWORK)

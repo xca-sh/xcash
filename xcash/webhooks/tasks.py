@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import environ
 import httpx
 from celery import shared_task
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -43,6 +44,11 @@ def _is_safe_delivery_url(url: str) -> bool:
         parsed = urlsplit(url)
     except ValueError:
         return False
+
+    # 仅放过 hostname 解析；scheme / 私有网段 / localhost 校验整体跳过，
+    # 用于本地压测等"主动信任内网目标"的开发场景。生产保持默认 False。
+    if getattr(settings, "WEBHOOK_ALLOW_INTERNAL_TARGETS", False):
+        return bool(parsed.hostname)
 
     if parsed.scheme != "https" or not parsed.hostname:
         return False

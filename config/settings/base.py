@@ -72,6 +72,14 @@ TRON_RPC_TIMEOUT = 8.0
 # 默认留空，生产环境必须显式配置，例如 127.0.0.1、::1 或反向代理容器网段。
 TRUSTED_PROXY_IPS = env.list("TRUSTED_PROXY_IPS", default=[])
 
+# Webhook
+# ------------------------------------------------------------------------------
+# 投递目标默认拒绝 http / localhost / 私有网段，反 SSRF。
+# 仅开发/压测环境需要给本地回调（如 StressRun self-webhook）放行时打开。
+WEBHOOK_ALLOW_INTERNAL_TARGETS = env.bool(
+    "WEBHOOK_ALLOW_INTERNAL_TARGETS", default=False
+)
+
 # Rate Limit
 RATELIMIT_BACKEND = "redis"
 RATELIMIT_REDIS = {

@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import TestCase
+from django.test import override_settings
 from django.utils import timezone
 
 from chains.models import Wallet
@@ -275,6 +276,21 @@ class DeliverEventTests(TestCase):
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
         self.assertIn("Unsafe webhook URL", event.last_error)
         mock_http.assert_not_called()
+
+    @override_settings(WEBHOOK_ALLOW_INTERNAL_TARGETS=True)
+    @patch("webhooks.tasks._execute_http_delivery")
+    def test_internal_target_allowed_when_switch_on(self, mock_http):
+        # 开发/压测开关开启时，http + localhost + 私有 IP 应一并放行，
+        # 让 StressRun 等本地回调能完成端到端联调。
+        mock_http.return_value = (True, 200, {}, "ok", "", 50)
+        project = _make_project(webhook="http://localhost:8000/stress/webhook")
+        event = self._create_event(project=project)
+
+        deliver_event(event.pk)
+
+        event.refresh_from_db()
+        self.assertEqual(event.status, WebhookEvent.Status.SUCCEEDED)
+        mock_http.assert_called_once()
 
     # ── webhook_open=False ──
 
