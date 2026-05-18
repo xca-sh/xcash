@@ -19,9 +19,9 @@ from internal_api.viewsets.operations import GasRechargeViewSet
 from internal_api.viewsets.operations import VaultFundingViewSet
 from internal_api.viewsets.operations import WithdrawalReviewLogViewSet
 from internal_api.viewsets.recipient_addresses import RecipientAddressViewSet
+from internal_api.viewsets.stats import StatsViewSet
 from internal_api.viewsets.webhooks import DeliveryAttemptViewSet
 from internal_api.viewsets.webhooks import WebhookEventViewSet
-from internal_api.viewsets.stats import StatsViewSet
 from internal_api.viewsets.withdrawals import InternalWithdrawalViewSet
 
 project_router = SimpleRouter(trailing_slash=False)

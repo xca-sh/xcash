@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import contextlib
-from decimal import Decimal
 import enum
+from decimal import Decimal
 from functools import cached_property
 from typing import TYPE_CHECKING
 from typing import Any
@@ -164,8 +164,9 @@ class Chain(models.Model):
         if self.type != ChainType.TRON or not self.active:
             return
 
-        from currencies.models import ChainToken
         from tron.models import TronWatchCursor
+
+        from currencies.models import ChainToken
 
         usdt_mapping = (
             ChainToken.objects.filter(
@@ -1068,10 +1069,9 @@ class OnchainTransfer(models.Model):
                 return
 
         # 非内部广播交易，且 EVM tx.from 已确认不是系统地址时，才按外部收款逻辑逐一尝试匹配。
+        from deposits.service import DepositService
         from invoices.service import InvoiceService
         from withdrawals.service import WithdrawalService
-
-        from deposits.service import DepositService
 
         (
             InvoiceService.try_match_invoice(self)
@@ -1123,7 +1123,7 @@ class OnchainTransfer(models.Model):
             processed_at=self.processed_at
         )
 
-    def _match_internal(self, broadcast_task: "BroadcastTask") -> bool:
+    def _match_internal(self, broadcast_task: BroadcastTask) -> bool:
         """通过已解析的 BroadcastTask 直接分发到对应内部业务处理器。"""
         if self.chain.type == ChainType.EVM:
             try:
@@ -1141,7 +1141,7 @@ class OnchainTransfer(models.Model):
 
         return self._legacy_match_internal_non_evm(broadcast_task)
 
-    def _legacy_match_internal_non_evm(self, broadcast_task: "BroadcastTask") -> bool:
+    def _legacy_match_internal_non_evm(self, broadcast_task: BroadcastTask) -> bool:
         from deposits.service import DepositService
         from withdrawals.service import WithdrawalService
 
@@ -1240,18 +1240,18 @@ class OnchainTransfer(models.Model):
         elif self.type == OnchainActionType.Deposit:
             DepositService.confirm_deposit(self.deposit)
         elif self.type == OnchainActionType.DepositCollection:
-            from deposits.models import DepositCollection  # noqa: WPS433
+            from deposits.models import DepositCollection
 
             with contextlib.suppress(DepositCollection.DoesNotExist):
                 DepositService.confirm_collection(self.deposit_collection)
         elif self.type == OnchainActionType.GasRecharge:
-            from deposits.models import GasRecharge  # noqa: WPS433
+            from deposits.models import GasRecharge
 
             GasRecharge.objects.filter(transfer=self).update(
                 recharged_at=timezone.now()
             )
         elif self.type == OnchainActionType.Withdrawal:
-            from withdrawals.models import Withdrawal  # noqa: WPS433
+            from withdrawals.models import Withdrawal
 
             with contextlib.suppress(Withdrawal.DoesNotExist):
                 WithdrawalService.confirm_withdrawal(self)
@@ -1281,12 +1281,12 @@ class OnchainTransfer(models.Model):
         elif self.type == OnchainActionType.Deposit:
             DepositService.drop_deposit(self.deposit)
         elif self.type == OnchainActionType.DepositCollection:
-            from deposits.models import DepositCollection  # noqa: WPS433
+            from deposits.models import DepositCollection
 
             with contextlib.suppress(DepositCollection.DoesNotExist):
                 DepositService.drop_collection(self.deposit_collection)
         elif self.type == OnchainActionType.Withdrawal:
-            from withdrawals.models import Withdrawal  # noqa: WPS433
+            from withdrawals.models import Withdrawal
 
             with contextlib.suppress(Withdrawal.DoesNotExist):
                 WithdrawalService.drop_withdrawal(self)

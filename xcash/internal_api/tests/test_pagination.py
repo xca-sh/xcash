@@ -13,13 +13,14 @@ common.pagination.PageNumberSizePagination 真的作用于内网 API 列表端�
 """
 
 import pytest
-from chains.models import Wallet
 from internal_api.viewsets.deposits import InternalDepositViewSet
 from internal_api.viewsets.operations import DepositCollectionViewSet
 from internal_api.viewsets.operations import GasRechargeViewSet
 from internal_api.viewsets.operations import VaultFundingViewSet
 from internal_api.viewsets.recipient_addresses import RecipientAddressViewSet
 from internal_api.viewsets.withdrawals import InternalWithdrawalViewSet
+
+from chains.models import Wallet
 from projects.models import Project
 from webhooks.models import WebhookEvent
 

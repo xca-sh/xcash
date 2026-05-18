@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from chains.models import (
-    BroadcastTask,
-    BroadcastTaskFailureReason,
-    Chain,
-    OnchainTransfer,
-)
+from chains.models import BroadcastTask
+from chains.models import BroadcastTaskFailureReason
+from chains.models import Chain
+from chains.models import OnchainTransfer
 from evm.internal_tx.direct_transfer import match_direct_transfer_fact
 from evm.internal_tx.facts import MatchedTransferFact
 

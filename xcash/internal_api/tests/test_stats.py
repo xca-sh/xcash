@@ -1,12 +1,15 @@
 """internal_api /projects/{appid}/stats/ 路由与鉴权。"""
 import itertools
-from datetime import datetime, timedelta
-from datetime import timezone as dt_tz
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+
 from chains.models import Wallet
-from invoices.models import Invoice, InvoiceStatus
+from invoices.models import Invoice
+from invoices.models import InvoiceStatus
 from projects.models import Project
 
 AUTH = "Bearer test-internal-token"
@@ -94,19 +97,19 @@ class TestStatsSummaryAggregation:
     def test_gmv_sums_completed_invoices_in_window(self, client, project):
         # 当期 4 月 completed → 计入
         _make_invoice(project, worth="100.50", status=InvoiceStatus.COMPLETED,
-                      started_at=datetime(2026, 4, 5, tzinfo=dt_tz.utc),
-                      updated_at=datetime(2026, 4, 10, tzinfo=dt_tz.utc))
+                      started_at=datetime(2026, 4, 5, tzinfo=UTC),
+                      updated_at=datetime(2026, 4, 10, tzinfo=UTC))
         _make_invoice(project, worth="200.25", status=InvoiceStatus.COMPLETED,
-                      started_at=datetime(2026, 4, 6, tzinfo=dt_tz.utc),
-                      updated_at=datetime(2026, 4, 15, tzinfo=dt_tz.utc))
+                      started_at=datetime(2026, 4, 6, tzinfo=UTC),
+                      updated_at=datetime(2026, 4, 15, tzinfo=UTC))
         # waiting 不计入 GMV
         _make_invoice(project, worth="999.00", status=InvoiceStatus.WAITING,
-                      started_at=datetime(2026, 4, 7, tzinfo=dt_tz.utc),
-                      updated_at=datetime(2026, 4, 7, tzinfo=dt_tz.utc))
+                      started_at=datetime(2026, 4, 7, tzinfo=UTC),
+                      updated_at=datetime(2026, 4, 7, tzinfo=UTC))
         # 上期 3 月 completed → 计入 prev
         _make_invoice(project, worth="50.00", status=InvoiceStatus.COMPLETED,
-                      started_at=datetime(2026, 3, 5, tzinfo=dt_tz.utc),
-                      updated_at=datetime(2026, 3, 10, tzinfo=dt_tz.utc))
+                      started_at=datetime(2026, 3, 5, tzinfo=UTC),
+                      updated_at=datetime(2026, 3, 10, tzinfo=UTC))
 
         resp = client.get(self._url(project), HTTP_AUTHORIZATION=AUTH)
         assert resp.status_code == 200
@@ -121,12 +124,12 @@ class TestStatsSummaryAggregation:
             InvoiceStatus.EXPIRED, InvoiceStatus.CONFIRMING,
         ]):
             _make_invoice(project, worth="1.00", status=status,
-                          started_at=datetime(2026, 4, 2 + i, tzinfo=dt_tz.utc),
-                          updated_at=datetime(2026, 4, 2 + i, tzinfo=dt_tz.utc))
+                          started_at=datetime(2026, 4, 2 + i, tzinfo=UTC),
+                          updated_at=datetime(2026, 4, 2 + i, tzinfo=UTC))
         # 上期 3 月 1 张 completed
         _make_invoice(project, worth="1.00", status=InvoiceStatus.COMPLETED,
-                      started_at=datetime(2026, 3, 5, tzinfo=dt_tz.utc),
-                      updated_at=datetime(2026, 3, 5, tzinfo=dt_tz.utc))
+                      started_at=datetime(2026, 3, 5, tzinfo=UTC),
+                      updated_at=datetime(2026, 3, 5, tzinfo=UTC))
 
         resp = client.get(self._url(project), HTTP_AUTHORIZATION=AUTH).json()
         assert resp["invoice_count"] == 4
@@ -137,11 +140,11 @@ class TestStatsSummaryAggregation:
     def test_boundaries_are_half_open(self, client, project):
         # 正好 cur_start 的账单应被包含，正好 cur_end 的应被排除
         _make_invoice(project, worth="10.00", status=InvoiceStatus.COMPLETED,
-                      started_at=datetime(2026, 4, 1, 0, 0, tzinfo=dt_tz.utc),
-                      updated_at=datetime(2026, 4, 1, 0, 0, tzinfo=dt_tz.utc))
+                      started_at=datetime(2026, 4, 1, 0, 0, tzinfo=UTC),
+                      updated_at=datetime(2026, 4, 1, 0, 0, tzinfo=UTC))
         _make_invoice(project, worth="20.00", status=InvoiceStatus.COMPLETED,
-                      started_at=datetime(2026, 4, 18, 0, 0, tzinfo=dt_tz.utc),
-                      updated_at=datetime(2026, 4, 18, 0, 0, tzinfo=dt_tz.utc))
+                      started_at=datetime(2026, 4, 18, 0, 0, tzinfo=UTC),
+                      updated_at=datetime(2026, 4, 18, 0, 0, tzinfo=UTC))
         resp = client.get(self._url(project), HTTP_AUTHORIZATION=AUTH).json()
         # GMV 只计 updated_at 在 [cur_start, cur_end) 内的，cur_end 边界被排除
         assert Decimal(resp["gmv_usd"]) == Decimal("10.00")
@@ -207,8 +210,8 @@ class TestStatsDaily:
     def test_groups_completed_invoices_by_utc_day(self, client, project):
         from django.utils import timezone as django_tz
         # 用相对"今天"的日期，避免测试在未来某日过期
-        today = django_tz.now().astimezone(dt_tz.utc).date()
-        base = datetime(today.year, today.month, today.day, 10, 0, tzinfo=dt_tz.utc) - timedelta(days=3)
+        today = django_tz.now().astimezone(UTC).date()
+        base = datetime(today.year, today.month, today.day, 10, 0, tzinfo=UTC) - timedelta(days=3)
 
         for offset, worth in [(0, "100.00"), (1, "50.50"), (2, "25.00")]:
             _make_invoice(

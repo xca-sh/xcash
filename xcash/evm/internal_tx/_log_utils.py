@@ -3,8 +3,9 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 from web3 import Web3
+
+from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 
 
 def matches_transfer_log(

@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from chains.models import (
-    BroadcastTask,
-    BroadcastTaskFailureReason,
-    OnchainActionType,
-    OnchainTransfer,
-)
+from chains.models import BroadcastTask
+from chains.models import BroadcastTaskFailureReason
+from chains.models import OnchainActionType
+from chains.models import OnchainTransfer
 
 
 class InternalTransferHandler(Protocol):
@@ -33,8 +31,8 @@ def get_handler(action_type: OnchainActionType) -> InternalTransferHandler:
     return HANDLERS[action_type]
 
 
-from evm.internal_tx.deposit_collection import deposit_collection_handler  # noqa: E402
 from evm.internal_tx.create2 import contract_deploy_collection_handler  # noqa: E402
+from evm.internal_tx.deposit_collection import deposit_collection_handler  # noqa: E402
 from evm.internal_tx.gas_recharge import gas_recharge_handler  # noqa: E402
 from evm.internal_tx.withdrawal import withdrawal_handler  # noqa: E402
 from evm.internal_tx.x402 import x402_handler  # noqa: E402

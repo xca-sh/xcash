@@ -20,8 +20,8 @@ from web3 import Web3
 
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import OnchainTransfer
 from chains.models import OnchainActionType
+from chains.models import OnchainTransfer
 from chains.models import Wallet
 from common.error_codes import ErrorCode
 from common.exceptions import APIError

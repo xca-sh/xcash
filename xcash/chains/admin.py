@@ -39,7 +39,7 @@ class ChainAdmin(ModelAdmin):
         "confirm_block_count",
         "evm_log_max_block_range",
     )
-    list_filter = ("active", "type",)
+    list_filter = ("active", "type")
     list_select_related = ("native_coin",)
     search_fields = ("name", "code")
 

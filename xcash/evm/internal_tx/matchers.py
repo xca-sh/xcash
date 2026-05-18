@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from chains.models import BroadcastTask, Chain, OnchainActionType
+from chains.models import BroadcastTask
+from chains.models import Chain
+from chains.models import OnchainActionType
 from evm.internal_tx.facts import MatchedTransferFact
 
 
@@ -25,8 +27,8 @@ def get_matcher(action_type: OnchainActionType) -> ReceiptMatcher:
     return MATCHERS[action_type]
 
 
-from evm.internal_tx.deposit_collection import deposit_collection_matcher  # noqa: E402
 from evm.internal_tx.create2 import create2_matcher  # noqa: E402
+from evm.internal_tx.deposit_collection import deposit_collection_matcher  # noqa: E402
 from evm.internal_tx.gas_recharge import gas_recharge_matcher  # noqa: E402
 from evm.internal_tx.withdrawal import withdrawal_matcher  # noqa: E402
 from evm.internal_tx.x402 import x402_matcher  # noqa: E402

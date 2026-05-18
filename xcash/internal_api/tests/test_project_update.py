@@ -11,6 +11,7 @@
 from decimal import Decimal
 
 import pytest
+
 from chains.models import Wallet
 from projects.models import Project
 

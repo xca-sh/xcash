@@ -29,18 +29,17 @@ from chains.models import BroadcastTaskResult
 from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import OnchainTransfer
 from chains.models import OnchainActionType
+from chains.models import OnchainTransfer
 from chains.models import Wallet
 from currencies.models import ChainToken
 from currencies.models import Crypto
-from evm.coordinator import InternalEvmTaskCoordinator
 from evm.choices import TxKind
+from evm.coordinator import InternalEvmTaskCoordinator
 from evm.internal_tx._log_utils import matches_transfer_log
 from evm.internal_tx._log_utils import normalize_log_index
 from evm.models import EvmBroadcastTask
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
-
 
 # ---------------------------------------------------------------------------
 # 公共测试地址（已通过 Web3.to_checksum_address 转换，满足 EIP-55 checksum 要求）

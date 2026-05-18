@@ -1,3 +1,7 @@
+from internal_api.authentication import InternalTokenAuthentication
+from internal_api.serializers.projects import ProjectCreateSerializer
+from internal_api.serializers.projects import ProjectDetailSerializer
+from internal_api.serializers.projects import ProjectUpdateSerializer
 from rest_framework import status as drf_status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -5,10 +9,6 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from chains.models import Wallet
-from internal_api.authentication import InternalTokenAuthentication
-from internal_api.serializers.projects import ProjectCreateSerializer
-from internal_api.serializers.projects import ProjectDetailSerializer
-from internal_api.serializers.projects import ProjectUpdateSerializer
 from invoices.models import EpayMerchant
 from projects.models import Project
 

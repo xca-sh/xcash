@@ -267,7 +267,7 @@ class EpaySubmitService:
         return urlunparse(parsed._replace(query=urlencode(merged_query)))
 
     @classmethod
-    def enqueue_paid_notify(cls, invoice: Invoice) -> "WebhookEvent":
+    def enqueue_paid_notify(cls, invoice: Invoice) -> WebhookEvent:
         from webhooks.models import WebhookEvent
         from webhooks.service import WebhookService
 

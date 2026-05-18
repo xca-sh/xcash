@@ -8,7 +8,8 @@ from django.db.models import Sum
 from django.utils import timezone
 
 from chains.adapters import AdapterFactory
-from chains.models import AddressUsage, BroadcastTask
+from chains.models import AddressUsage
+from chains.models import BroadcastTask
 from chains.models import ChainType
 from chains.models import OnchainActionType
 from chains.service import AddressService

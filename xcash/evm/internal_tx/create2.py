@@ -3,15 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from chains.models import (
-    BroadcastTask,
-    BroadcastTaskFailureReason,
-    OnchainActionType,
-    OnchainTransfer,
-)
 from django.db import transaction as db_transaction
 from django.utils import timezone
-from evm.internal_tx._log_utils import matches_transfer_log, normalize_log_index
+
+from chains.models import BroadcastTask
+from chains.models import BroadcastTaskFailureReason
+from chains.models import OnchainActionType
+from chains.models import OnchainTransfer
+from evm.internal_tx._log_utils import matches_transfer_log
+from evm.internal_tx._log_utils import normalize_log_index
 from evm.internal_tx.facts import MatchedTransferFact
 
 
@@ -71,7 +71,8 @@ class ContractDeployCollectionHandler:
         return True
 
     def confirm(self, transfer: OnchainTransfer) -> None:
-        from evm.models import ContractDeployCollection, ContractDeployCollectionStatus
+        from evm.models import ContractDeployCollection
+        from evm.models import ContractDeployCollectionStatus
 
         ContractDeployCollection.objects.filter(transfer=transfer).update(
             status=ContractDeployCollectionStatus.CONFIRMED,
@@ -79,7 +80,8 @@ class ContractDeployCollectionHandler:
         )
 
     def drop(self, transfer: OnchainTransfer) -> None:
-        from evm.models import ContractDeployCollection, ContractDeployCollectionStatus
+        from evm.models import ContractDeployCollection
+        from evm.models import ContractDeployCollectionStatus
 
         ContractDeployCollection.objects.filter(transfer=transfer).update(
             transfer=None,
@@ -92,7 +94,8 @@ class ContractDeployCollectionHandler:
         broadcast_task: BroadcastTask,
         reason: BroadcastTaskFailureReason,
     ) -> None:
-        from evm.models import ContractDeployCollection, ContractDeployCollectionStatus
+        from evm.models import ContractDeployCollection
+        from evm.models import ContractDeployCollectionStatus
 
         ContractDeployCollection.objects.filter(broadcast_task=broadcast_task).update(
             status=ContractDeployCollectionStatus.FAILED,

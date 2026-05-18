@@ -2,13 +2,13 @@ from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest
+from web3 import Web3
+
 from chains.models import ChainType
 from chains.models import Wallet
 from projects.models import Project
 from projects.models import RecipientAddress
 from projects.models import RecipientAddressUsage
-from web3 import Web3
-
 
 AUTH_HEADER = "Bearer test-internal-token"
 

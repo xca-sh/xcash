@@ -16,13 +16,12 @@ from rest_framework import serializers
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from wallets.error_codes import ErrorCode
 from wallets.models import ChainType
 from wallets.models import SignerAddress
 from wallets.models import SignerRequestAudit
 from wallets.models import SignerWallet
 from web3 import Web3
-
-from wallets.error_codes import ErrorCode
 
 SIGNER_REQUEST_ID_HEADER = "X-Signer-Request-Id"
 SIGNER_SIGNATURE_HEADER = "X-Signer-Signature"

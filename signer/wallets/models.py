@@ -15,9 +15,8 @@ if TYPE_CHECKING:
     from bip_utils.bip.bip44_base import Bip44Base
 from django.conf import settings
 from django.db import models
-from web3 import Web3
-
 from wallets.crypto import AESCipher
+from web3 import Web3
 
 
 class ChainType(models.TextChoices):

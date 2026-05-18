@@ -1,14 +1,21 @@
-from chains.models import Address, AddressUsage, Chain, ChainType, Wallet
-from currencies.models import ChainToken, Crypto
 from django.core.cache import cache
-from django.test import TestCase, override_settings
-from evm.scanner.watchers import (
-    clear_evm_watch_set_cache,
-    load_evm_system_addresses,
-    load_watch_set,
-)
-from projects.models import Project, RecipientAddress, RecipientAddressUsage
+from django.test import TestCase
+from django.test import override_settings
 from web3 import Web3
+
+from chains.models import Address
+from chains.models import AddressUsage
+from chains.models import Chain
+from chains.models import ChainType
+from chains.models import Wallet
+from currencies.models import ChainToken
+from currencies.models import Crypto
+from evm.scanner.watchers import clear_evm_watch_set_cache
+from evm.scanner.watchers import load_evm_system_addresses
+from evm.scanner.watchers import load_watch_set
+from projects.models import Project
+from projects.models import RecipientAddress
+from projects.models import RecipientAddressUsage
 
 WATCHER_TEST_CACHES = {
     "default": {

@@ -5,17 +5,17 @@
 
 窗口边界由调用方（SaaS）传入；xcash 只负责数据库聚合，不自行决定"本月"语义。
 """
+from datetime import UTC
 from datetime import datetime as _dt
 from datetime import timedelta
-from datetime import timezone as dt_tz
 from decimal import Decimal
 
-from django.db.models import Count, Sum
+from django.db.models import Count
+from django.db.models import Sum
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from internal_api.authentication import InternalTokenAuthentication
-from invoices.models import Invoice, InvoiceStatus
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -23,6 +23,8 @@ from rest_framework.viewsets import GenericViewSet
 
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
+from invoices.models import Invoice
+from invoices.models import InvoiceStatus
 from projects.models import Project
 
 
@@ -106,8 +108,8 @@ class StatsViewSet(GenericViewSet):
         now = timezone.now()
         end_date = now.date()
         start_date = end_date - timedelta(days=days - 1)
-        start_dt = _dt.combine(start_date, _dt.min.time()).replace(tzinfo=dt_tz.utc)
-        end_dt = _dt.combine(end_date + timedelta(days=1), _dt.min.time()).replace(tzinfo=dt_tz.utc)
+        start_dt = _dt.combine(start_date, _dt.min.time()).replace(tzinfo=UTC)
+        end_dt = _dt.combine(end_date + timedelta(days=1), _dt.min.time()).replace(tzinfo=UTC)
 
         # 按 UTC 日期分组，汇总 completed 账单的 worth
         rows = (

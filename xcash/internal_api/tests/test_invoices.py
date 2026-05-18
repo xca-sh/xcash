@@ -1,7 +1,6 @@
 from decimal import Decimal
 
 from django.test import SimpleTestCase
-
 from internal_api.serializers.invoices import InternalInvoiceCreateSerializer
 
 

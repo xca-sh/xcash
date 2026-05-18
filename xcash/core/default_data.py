@@ -3,6 +3,7 @@ from __future__ import annotations
 import environ
 from django.conf import settings
 from django.db import transaction
+from tron.codec import TronAddressCodec
 from web3 import Web3
 
 from chains.models import Chain
@@ -13,7 +14,6 @@ from currencies.models import Fiat
 from evm.local_erc20 import LOCAL_EVM_ERC20_ABI
 from evm.local_erc20 import LOCAL_EVM_ERC20_BYTECODE
 from evm.local_erc20 import has_standard_erc20_interface
-from tron.codec import TronAddressCodec
 
 env = environ.Env()
 

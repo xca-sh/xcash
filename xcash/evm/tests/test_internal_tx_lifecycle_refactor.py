@@ -28,20 +28,20 @@ from evm.internal_tx import handlers as handlers_mod
 from evm.internal_tx import matchers as matchers_mod
 from evm.internal_tx.facts import MatchedTransferFact
 from evm.internal_tx.processor import process_internal_transaction
-from evm.models import EvmBroadcastTask
 from evm.models import ContractDeployCollectionStatus
+from evm.models import EvmBroadcastTask
 from evm.models import X402FacilitationStatus
 from evm.services.create2 import ContractDeployCollectionService
 from evm.services.x402 import X402FacilitationService
-from projects.models import Project
-from users.models import Customer
-from withdrawals.models import Withdrawal
-from withdrawals.models import WithdrawalStatus
 from evm.tests._fixtures import make_broadcast_task
 from evm.tests._fixtures import make_erc20_token
 from evm.tests._fixtures import make_evm_chain
 from evm.tests._fixtures import make_evm_system_address
 from evm.tests._fixtures import make_tx_hash
+from projects.models import Project
+from users.models import Customer
+from withdrawals.models import Withdrawal
+from withdrawals.models import WithdrawalStatus
 
 
 def _erc20_transfer_log(*, token, from_addr, to_addr, value_raw, log_index):

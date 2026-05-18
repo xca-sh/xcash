@@ -7,14 +7,14 @@ from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from chains.models import Chain
 from chains.capabilities import ChainProductCapabilityService
+from chains.models import Chain
 from common.consts import APPID_HEADER
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from common.permission_check import check_saas_permission
-from core.runtime_settings import get_open_native_scanner
 from common.throttles import DepositAddressThrottle
+from core.runtime_settings import get_open_native_scanner
 from currencies.service import CryptoService
 from deposits.models import DepositAddress
 from projects.models import Project

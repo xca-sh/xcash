@@ -14,8 +14,8 @@ from chains.models import BroadcastTask
 from chains.models import BroadcastTaskResult
 from chains.models import BroadcastTaskStage
 from chains.models import ChainType
-from chains.models import OnchainTransfer
 from chains.models import OnchainActionType
+from chains.models import OnchainTransfer
 from chains.transfer_matching import raw_amount
 from chains.transfer_matching import transfer_matches
 from common.internal_callback import send_internal_callback
@@ -494,7 +494,9 @@ class DepositService:
         if recharge is None:
             return False
 
-        from evm.internal_tx.direct_transfer import decode_direct_transfer_fields  # noqa: PLC0415
+        from evm.internal_tx.direct_transfer import (
+            decode_direct_transfer_fields,  # noqa: PLC0415
+        )
 
         try:
             fields = decode_direct_transfer_fields(
@@ -567,7 +569,9 @@ class DepositService:
         amount = cls._calculate_collection_amount(deposits)
         expected_value = raw_amount(amount=amount, crypto=crypto, chain=transfer.chain)
 
-        from evm.internal_tx.direct_transfer import decode_direct_transfer_fields  # noqa: PLC0415
+        from evm.internal_tx.direct_transfer import (
+            decode_direct_transfer_fields,  # noqa: PLC0415
+        )
 
         try:
             fields = decode_direct_transfer_fields(

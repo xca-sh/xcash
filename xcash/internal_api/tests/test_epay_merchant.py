@@ -11,6 +11,7 @@ from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest
+
 from chains.models import Wallet
 from invoices.models import EpayMerchant
 from projects.models import Project

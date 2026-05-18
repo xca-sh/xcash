@@ -21,7 +21,6 @@ from evm.choices import TxKind
 from evm.models import EvmBroadcastTask
 
 
-
 class EvmTaskQueueTests(TestCase):
     queue_lock_key = "dispatch_due_evm_broadcast_tasks-locked"
 
@@ -847,9 +846,9 @@ class EvmTaskQueueTests(TestCase):
         # 不能阻塞当前链同地址的归集任务。
         from deposits.models import DepositAddress
         from deposits.models import GasRecharge
+        from evm.tasks import dispatch_due_evm_broadcast_tasks
         from projects.models import Project
         from users.models import Customer
-        from evm.tasks import dispatch_due_evm_broadcast_tasks
 
         other_native = Crypto.objects.create(
             name="Ethereum Queue Other",

@@ -9,6 +9,7 @@ from uuid import uuid4
 from django.core.cache import cache
 from django.test import TestCase
 from django.test import override_settings
+from wallets.error_codes import ErrorCode
 from wallets.models import ChainType
 from wallets.models import SignerAddress
 from wallets.models import SignerRequestAudit
@@ -17,8 +18,6 @@ from wallets.views import SIGNER_REQUEST_ID_HEADER
 from wallets.views import SIGNER_SIGNATURE_HEADER
 from wallets.views import build_signer_signature_payload
 from web3 import Web3
-
-from wallets.error_codes import ErrorCode
 
 
 @override_settings(

@@ -3,11 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import chain as iter_chain
 
-from chains.models import Address, Chain, ChainType
-from currencies.models import ChainToken
 from django.core.cache import cache
-from projects.models import RecipientAddress, RecipientAddressUsage
 from web3 import Web3
+
+from chains.models import Address
+from chains.models import Chain
+from chains.models import ChainType
+from currencies.models import ChainToken
+from projects.models import RecipientAddress
+from projects.models import RecipientAddressUsage
 
 
 @dataclass(frozen=True)

@@ -25,8 +25,8 @@ from chains.models import Address
 from chains.models import AddressUsage
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import OnchainTransfer
 from chains.models import OnchainActionType
+from chains.models import OnchainTransfer
 from chains.models import Wallet
 from core.models import PlatformSettings
 from currencies.models import Crypto

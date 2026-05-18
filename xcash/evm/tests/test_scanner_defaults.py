@@ -1,5 +1,5 @@
-from django.test import TestCase
 from django.conf import settings
+from django.test import TestCase
 
 from config.celery import EVM_ERC20_SCAN_SCHEDULE_SECONDS
 from config.celery import EVM_NATIVE_SCAN_SCHEDULE_SECONDS

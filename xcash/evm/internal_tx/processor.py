@@ -4,14 +4,18 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from chains.models import BroadcastTask, BroadcastTaskFailureReason, Chain
-from chains.service import ObservedTransferPayload, TransferService
 from django.db import transaction as db_transaction
 from django.utils import timezone
+from web3 import Web3
+
+from chains.models import BroadcastTask
+from chains.models import BroadcastTaskFailureReason
+from chains.models import Chain
+from chains.service import ObservedTransferPayload
+from chains.service import TransferService
 from evm.internal_tx.exceptions import UnknownInternalBroadcastError
 from evm.internal_tx.handlers import get_handler
 from evm.internal_tx.matchers import get_matcher
-from web3 import Web3
 
 logger = structlog.get_logger()
 

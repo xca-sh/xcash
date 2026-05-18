@@ -3,11 +3,11 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from shortuuid import ShortUUID
 from shortuuid.django_fields import ShortUUIDField
+from tron.codec import TronAddressCodec
 from web3 import Web3
 
 from common.consts import LENGTH_OF_EVM_HASH
 from common.consts import UPPER_ALPHABET
-from tron.codec import TronAddressCodec
 
 
 class HashField(models.CharField):

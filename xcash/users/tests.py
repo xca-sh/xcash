@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from django.contrib.sessions.middleware import SessionMiddleware
+from django.core.cache import cache as _cache
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import Client
@@ -13,7 +14,6 @@ from django.utils import timezone
 from django_otp.oath import TOTP
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
-from django.core.cache import cache as _cache
 from chains.test_signer import build_test_remote_signer_backend
 from projects.models import RecipientAddress
 from users.models import AdminAccessLog

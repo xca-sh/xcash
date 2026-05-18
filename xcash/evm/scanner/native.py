@@ -3,24 +3,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, TypedDict
+from typing import Any
+from typing import TypedDict
 
 import structlog
-from chains.models import Chain, ChainType
-from chains.service import ObservedTransferPayload, TransferService
 from django.db import transaction
 from django.db.models import F
 from django.db.models.functions import Greatest
 from django.utils import timezone
-from evm.models import EvmScanCursor, EvmScanCursorType
-from evm.scanner.constants import (
-    DEFAULT_NATIVE_SCAN_BATCH_SIZE,
-    DEFAULT_NATIVE_SCAN_REPLAY_BLOCKS,
-)
-from evm.scanner.cursor import bootstrap_cursor_to_latest_for_debug
-from evm.scanner.rpc import EvmScannerRpcClient, EvmScannerRpcError
-from evm.scanner.watchers import EvmWatchSet, load_evm_system_addresses, load_watch_set
 from web3 import Web3
+
+from chains.models import Chain
+from chains.models import ChainType
+from chains.service import ObservedTransferPayload
+from chains.service import TransferService
+from evm.models import EvmScanCursor
+from evm.models import EvmScanCursorType
+from evm.scanner.constants import DEFAULT_NATIVE_SCAN_BATCH_SIZE
+from evm.scanner.constants import DEFAULT_NATIVE_SCAN_REPLAY_BLOCKS
+from evm.scanner.cursor import bootstrap_cursor_to_latest_for_debug
+from evm.scanner.rpc import EvmScannerRpcClient
+from evm.scanner.rpc import EvmScannerRpcError
+from evm.scanner.watchers import EvmWatchSet
+from evm.scanner.watchers import load_evm_system_addresses
+from evm.scanner.watchers import load_watch_set
 
 logger = structlog.get_logger()
 

@@ -1,12 +1,12 @@
+from internal_api.authentication import InternalTokenAuthentication
+from internal_api.serializers.epay import EpayMerchantDetailSerializer
+from internal_api.serializers.epay import EpayMerchantUpdateSerializer
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
-from internal_api.authentication import InternalTokenAuthentication
-from internal_api.serializers.epay import EpayMerchantDetailSerializer
-from internal_api.serializers.epay import EpayMerchantUpdateSerializer
 from invoices.models import EpayMerchant
 from projects.models import Project
 

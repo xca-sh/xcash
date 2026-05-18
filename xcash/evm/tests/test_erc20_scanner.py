@@ -1116,9 +1116,8 @@ class EvmErc20ScannerTests(TestCase):
         with patch(
             "evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number",
             side_effect=EvmScannerRpcError(long_error),
-        ):
-            with self.assertRaises(EvmScannerRpcError):
-                EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=32)
+        ), self.assertRaises(EvmScannerRpcError):
+            EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=32)
 
         cursor = EvmScanCursor.objects.get(
             chain=self.chain,

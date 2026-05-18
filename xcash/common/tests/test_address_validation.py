@@ -1,9 +1,9 @@
 from types import SimpleNamespace
 
 from django.test import SimpleTestCase
+from tron.codec import TronAddressCodec
 
 from common.fields import AddressField
-from tron.codec import TronAddressCodec
 
 
 class TronAddressValidationTests(SimpleTestCase):

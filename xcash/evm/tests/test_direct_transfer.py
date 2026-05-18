@@ -15,7 +15,6 @@ from evm.tests._fixtures import make_erc20_token
 from evm.tests._fixtures import make_evm_chain
 from evm.tests._fixtures import make_evm_system_address
 
-
 _TRANSFER_SELECTOR = "0xa9059cbb"
 _TRANSFER_FROM_SELECTOR = "0x23b872dd"
 

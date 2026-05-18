@@ -4,19 +4,18 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from chains.models import (
-    Address,
-    AddressUsage,
-    BroadcastTask,
-    BroadcastTaskResult,
-    BroadcastTaskStage,
-    Chain,
-    ChainType,
-    OnchainActionType,
-    Wallet,
-)
-from currencies.models import Crypto
 from web3 import Web3
+
+from chains.models import Address
+from chains.models import AddressUsage
+from chains.models import BroadcastTask
+from chains.models import BroadcastTaskResult
+from chains.models import BroadcastTaskStage
+from chains.models import Chain
+from chains.models import ChainType
+from chains.models import OnchainActionType
+from chains.models import Wallet
+from currencies.models import Crypto
 
 
 def make_crypto(*, symbol: str = "TST", name: str | None = None) -> Crypto:

@@ -1,11 +1,11 @@
 import structlog
 from celery import shared_task
+from tron.client import TronClientError
+from tron.scanner import TronUsdtPaymentScanner
 
 from chains.models import Chain
 from chains.models import ChainType
 from common.decorators import singleton_task
-from tron.client import TronClientError
-from tron.scanner import TronUsdtPaymentScanner
 
 logger = structlog.get_logger()
 

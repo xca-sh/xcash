@@ -17,8 +17,8 @@ from chains.models import BroadcastTaskResult
 from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import OnchainTransfer
 from chains.models import OnchainActionType
+from chains.models import OnchainTransfer
 from chains.models import TxHash
 from chains.models import Wallet
 from common.consts import ERC20_TRANSFER_GAS
@@ -26,7 +26,6 @@ from currencies.models import ChainToken
 from currencies.models import Crypto
 from evm.choices import TxKind
 from evm.models import EvmBroadcastTask
-
 
 
 class EvmInternalTaskConfirmationTests(TestCase):

@@ -18,9 +18,9 @@ from chains.models import BroadcastTaskResult
 from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
+from chains.models import OnchainActionType
 from chains.models import OnchainTransfer
 from chains.models import TransferStatus
-from chains.models import OnchainActionType
 from chains.models import TxHash
 from chains.models import Wallet
 from currencies.models import Crypto

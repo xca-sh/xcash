@@ -22,9 +22,9 @@ from chains.models import BroadcastTaskResult
 from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
+from chains.models import OnchainActionType
 from chains.models import OnchainTransfer
 from chains.models import TransferStatus
-from chains.models import OnchainActionType
 from chains.models import Wallet
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
@@ -563,19 +563,18 @@ class CreateWithdrawalSerializerCapabilityTests(TestCase):
             patch(
                 "withdrawals.serializers.WithdrawalService.has_sufficient_balance",
                 side_effect=AssertionError("余额检查不应执行"),
-            ) as has_balance_mock,
+            ) as has_balance_mock,self.assertRaises(APIError) as ctx
         ):
-            with self.assertRaises(APIError) as ctx:
-                serializer.validate(
-                    {
-                        "out_no": "evm-native-order",
-                        "to": "0x0000000000000000000000000000000000000803",
-                        "uid": None,
-                        "crypto": native.symbol,
-                        "chain": chain.code,
-                        "amount": Decimal("1"),
-                    }
-                )
+            serializer.validate(
+                {
+                    "out_no": "evm-native-order",
+                    "to": "0x0000000000000000000000000000000000000803",
+                    "uid": None,
+                    "crypto": native.symbol,
+                    "chain": chain.code,
+                    "amount": Decimal("1"),
+                }
+            )
 
         self.assertEqual(
             ctx.exception.error_code.code,

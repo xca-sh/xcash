@@ -7,7 +7,6 @@ from chains.models import AddressUsage
 from chains.models import ChainType
 from projects.models import Project
 
-
 # 业务校验上下界，集中声明便于审计与调整。
 HMAC_KEY_MIN_LENGTH = 16
 # 模型层 ShortUUIDField(length=32) 硬性限制 max_length=32，

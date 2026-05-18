@@ -21,8 +21,8 @@ from currencies.models import Crypto
 from projects.admin import PaymentAddressInline
 from projects.admin import ProjectAdmin
 from projects.models import Project
-from projects.models import RecipientAddressUsage
 from projects.models import RecipientAddress
+from projects.models import RecipientAddressUsage
 from users.models import User
 from users.otp import ADMIN_OTP_VERIFIED_AT_SESSION_KEY
 

@@ -2,7 +2,6 @@ from rest_framework import serializers
 
 from invoices.models import EpayMerchant
 
-
 # secret_key 长度上下界。下限与模型 _generate_secret_key 输出长度对齐。
 EPAY_SECRET_KEY_MIN_LENGTH = 16
 EPAY_SECRET_KEY_MAX_LENGTH = 128

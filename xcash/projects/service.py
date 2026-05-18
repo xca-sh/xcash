@@ -7,8 +7,8 @@ if TYPE_CHECKING:
 
 from chains.service import ChainService
 from projects.models import Project
-from projects.models import RecipientAddressUsage
 from projects.models import RecipientAddress
+from projects.models import RecipientAddressUsage
 
 
 class ProjectService:

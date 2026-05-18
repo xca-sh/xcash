@@ -28,9 +28,9 @@ from chains.models import BroadcastTaskStage
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import ConfirmMode
+from chains.models import OnchainActionType
 from chains.models import OnchainTransfer
 from chains.models import TransferStatus
-from chains.models import OnchainActionType
 from chains.models import TxHash
 from chains.models import Wallet
 from chains.service import ObservedTransferPayload
@@ -1073,9 +1073,8 @@ class TransferConfirmDispatchTests(TestCase):
             confirm_transfer,
             "retry",
             side_effect=RuntimeError("retry scheduled"),
-        ) as retry_mock:
-            with self.assertRaisesMessage(RuntimeError, "retry scheduled"):
-                confirm_transfer.run(transfer.pk)
+        ) as retry_mock, self.assertRaisesMessage(RuntimeError, "retry scheduled"):
+            confirm_transfer.run(transfer.pk)
 
         retry_mock.assert_called_once()
         self.assertTrue(OnchainTransfer.objects.filter(pk=transfer.pk).exists())

@@ -13,7 +13,6 @@ from chains.models import Chain
 from chains.models import ChainType
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
-from currencies.models import Crypto
 from deposits.models import Deposit
 from deposits.models import DepositAddress
 from projects.models import Project
