@@ -5,6 +5,7 @@
 
 窗口边界由调用方（SaaS）传入；xcash 只负责数据库聚合，不自行决定"本月"语义。
 """
+
 from datetime import UTC
 from datetime import datetime as _dt
 from datetime import timedelta
@@ -69,23 +70,33 @@ class StatsViewSet(GenericViewSet):
             return v or Decimal("0")
 
         def invoice_count_in(start, end) -> int:
-            return invoices.filter(
-                started_at__gte=start, started_at__lt=end,
-            ).aggregate(n=Count("pk"))["n"] or 0
+            return (
+                invoices.filter(
+                    started_at__gte=start,
+                    started_at__lt=end,
+                ).aggregate(n=Count("pk"))["n"]
+                or 0
+            )
 
         def completed_count_in(start, end) -> int:
-            return invoices.filter(
-                status=InvoiceStatus.COMPLETED,
-                updated_at__gte=start, updated_at__lt=end,
-            ).aggregate(n=Count("pk"))["n"] or 0
+            return (
+                invoices.filter(
+                    status=InvoiceStatus.COMPLETED,
+                    updated_at__gte=start,
+                    updated_at__lt=end,
+                ).aggregate(n=Count("pk"))["n"]
+                or 0
+            )
 
-        return Response({
-            "gmv_usd": f"{gmv_in(cur_start, cur_end):.6f}",
-            "prev_gmv_usd": f"{gmv_in(prev_start, prev_end):.6f}",
-            "invoice_count": invoice_count_in(cur_start, cur_end),
-            "prev_invoice_count": invoice_count_in(prev_start, prev_end),
-            "completed_invoice_count": completed_count_in(cur_start, cur_end),
-        })
+        return Response(
+            {
+                "gmv_usd": f"{gmv_in(cur_start, cur_end):.6f}",
+                "prev_gmv_usd": f"{gmv_in(prev_start, prev_end):.6f}",
+                "invoice_count": invoice_count_in(cur_start, cur_end),
+                "prev_invoice_count": invoice_count_in(prev_start, prev_end),
+                "completed_invoice_count": completed_count_in(cur_start, cur_end),
+            }
+        )
 
     @action(detail=False, methods=["get"])
     def daily(self, request, project_appid=None):
@@ -97,8 +108,8 @@ class StatsViewSet(GenericViewSet):
         # 校验 days 参数，只允许 7 / 30 / 90
         try:
             days = int(request.query_params.get("days", ""))
-        except ValueError:
-            raise APIError(ErrorCode.PARAMETER_ERROR, "days 必须是整数")
+        except ValueError as exc:
+            raise APIError(ErrorCode.PARAMETER_ERROR, "days 必须是整数") from exc
         if days not in (7, 30, 90):
             raise APIError(ErrorCode.PARAMETER_ERROR, "days 必须是 7 / 30 / 90")
 
@@ -109,12 +120,13 @@ class StatsViewSet(GenericViewSet):
         end_date = now.date()
         start_date = end_date - timedelta(days=days - 1)
         start_dt = _dt.combine(start_date, _dt.min.time()).replace(tzinfo=UTC)
-        end_dt = _dt.combine(end_date + timedelta(days=1), _dt.min.time()).replace(tzinfo=UTC)
+        end_dt = _dt.combine(end_date + timedelta(days=1), _dt.min.time()).replace(
+            tzinfo=UTC
+        )
 
         # 按 UTC 日期分组，汇总 completed 账单的 worth
         rows = (
-            Invoice.objects
-            .filter(
+            Invoice.objects.filter(
                 project=project,
                 status=InvoiceStatus.COMPLETED,
                 updated_at__gte=start_dt,
@@ -131,9 +143,11 @@ class StatsViewSet(GenericViewSet):
         series = []
         for i in range(days):
             d = start_date + timedelta(days=i)
-            series.append({
-                "date": d.isoformat(),
-                "value": f"{by_day.get(d, Decimal('0')):.6f}",
-            })
+            series.append(
+                {
+                    "date": d.isoformat(),
+                    "value": f"{by_day.get(d, Decimal('0')):.6f}",
+                }
+            )
 
         return Response({"metric": "gmv", "days": days, "series": series})

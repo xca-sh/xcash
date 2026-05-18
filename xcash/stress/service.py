@@ -49,7 +49,6 @@ STRESS_SAAS_PERMISSION_CACHE_TTL = 24 * 60 * 60
 
 
 class StressService:
-
     @staticmethod
     def prepare(stress: StressRun) -> None:
         """创建专用 Project 和批量测试 Case。由 Celery 任务异步调用。"""
@@ -140,12 +139,8 @@ class StressService:
         # 充币归集验证兜底：最大调度偏移 + 20 分钟
         # webhook 触发是主路径，这里是安全网，verify_deposit_collection 本身幂等。
         if stress.deposit_count > 0:
-            collection_eta = stress.started_at + timedelta(
-                seconds=max_offset + 20 * 60
-            )
-            verify_deposit_collection.apply_async(
-                args=[stress.pk], eta=collection_eta
-            )
+            collection_eta = stress.started_at + timedelta(seconds=max_offset + 20 * 60)
+            verify_deposit_collection.apply_async(args=[stress.pk], eta=collection_eta)
 
         # 兜底超时：最大调度偏移 + 30 分钟
         timeout_seconds = max_offset + 30 * 60
@@ -328,9 +323,7 @@ class StressService:
                 detail=detail,
                 request_body=body,
             )
-            raise RuntimeError(
-                f"提币 API {resp.status_code}: {detail}"
-            )
+            raise RuntimeError(f"提币 API {resp.status_code}: {detail}")
         return resp.json()
 
 
@@ -614,12 +607,10 @@ def _extract_error_detail(resp: httpx.Response) -> str:
     try:
         return json.dumps(resp.json(), ensure_ascii=False)[:2000]
     except Exception:
-        pass
+        logger.debug("Response is not valid JSON, fallback to HTML extraction")
     # Django debug HTML: 提取 <title> 和 <pre class="exception_value">
     title = re.search(r"<title>(.*?)</title>", text, re.DOTALL)
-    exc_value = re.search(
-        r'class="exception_value">(.*?)</pre>', text, re.DOTALL
-    )
+    exc_value = re.search(r'class="exception_value">(.*?)</pre>', text, re.DOTALL)
     # 兜底提取所有 <pre> 块中的 traceback 片段
     tracebacks = re.findall(r"<pre[^>]*>(.*?)</pre>", text, re.DOTALL)
     parts = []

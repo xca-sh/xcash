@@ -528,16 +528,15 @@ class EvmTaskQueueTests(TestCase):
         from evm.constants import EVM_PIPELINE_DEPTH
         from evm.tasks import broadcast_evm_task
 
-        pending_tasks = []
-        for i in range(EVM_PIPELINE_DEPTH):
-            pending_tasks.append(
-                self._create_evm_task(
-                    tx_hash=f"0x{i:064x}",
-                    stage=BroadcastTaskStage.PENDING_CHAIN,
-                    result=BroadcastTaskResult.UNKNOWN,
-                    nonce=i,
-                )
+        pending_tasks = [
+            self._create_evm_task(
+                tx_hash=f"0x{i:064x}",
+                stage=BroadcastTaskStage.PENDING_CHAIN,
+                result=BroadcastTaskResult.UNKNOWN,
+                nonce=i,
             )
+            for i in range(EVM_PIPELINE_DEPTH)
+        ]
         next_task = self._create_evm_task(
             tx_hash="0x" + "c1" * 32,
             stage=BroadcastTaskStage.QUEUED,
@@ -936,9 +935,7 @@ class EvmTaskQueueTests(TestCase):
         self.assertIn(collection_task.pk, picked_pks)
 
     @patch("evm.tasks.broadcast_evm_task.delay")
-    def test_dispatch_resumes_task_when_gas_recharge_finalized_failed(
-        self, delay_mock
-    ):
+    def test_dispatch_resumes_task_when_gas_recharge_finalized_failed(self, delay_mock):
         # gas-recharge 终局失败（broadcast_task.stage=FINALIZED+FAILED）意味着 recharged_at
         # 永远不会被写入；若仍按"recharged_at IS NULL"一刀切，本地址会被永久阻塞。
         # 因此 filter 只在 broadcast_task 处于活跃阶段时才跳过。

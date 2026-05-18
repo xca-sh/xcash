@@ -54,9 +54,7 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
     def validate_webhook(self, value: str) -> str:
         # URLField 已校验 URL 格式；此处额外要求必须 http/https（避免 ftp/javascript 等）。
         if value and not value.startswith(("http://", "https://")):
-            raise serializers.ValidationError(
-                "webhook 必须以 http:// 或 https:// 开头"
-            )
+            raise serializers.ValidationError("webhook 必须以 http:// 或 https:// 开头")
         return value
 
     def validate_hmac_key(self, value: str) -> str:
@@ -69,7 +67,7 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
     def validate_ip_white_list(self, value: str) -> str:
         """校验格式：`*`、空串、或逗号分隔的 IP/CIDR 列表。"""
         stripped = value.strip()
-        if stripped == "" or stripped == "*":
+        if stripped in {"", "*"}:
             return stripped
         entries = [e.strip() for e in stripped.split(",") if e.strip()]
         if len(entries) > IP_WHITE_LIST_MAX_ENTRIES:
@@ -96,31 +94,38 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
         return value
 
     def _validate_positive_limit(
-        self, value, field_name: str, max_value: Decimal,
+        self,
+        value,
+        field_name: str,
+        max_value: Decimal,
     ):
         if value is None:
             return value
         if value <= 0:
             raise serializers.ValidationError(f"{field_name} 必须大于 0")
         if value > max_value:
-            raise serializers.ValidationError(
-                f"{field_name} 不能超过 {max_value}"
-            )
+            raise serializers.ValidationError(f"{field_name} 不能超过 {max_value}")
         return value
 
     def validate_withdrawal_review_exempt_limit(self, value):
         return self._validate_positive_limit(
-            value, "withdrawal_review_exempt_limit", WITHDRAWAL_LIMIT_MAX,
+            value,
+            "withdrawal_review_exempt_limit",
+            WITHDRAWAL_LIMIT_MAX,
         )
 
     def validate_withdrawal_single_limit(self, value):
         return self._validate_positive_limit(
-            value, "withdrawal_single_limit", WITHDRAWAL_LIMIT_MAX,
+            value,
+            "withdrawal_single_limit",
+            WITHDRAWAL_LIMIT_MAX,
         )
 
     def validate_withdrawal_daily_limit(self, value):
         return self._validate_positive_limit(
-            value, "withdrawal_daily_limit", WITHDRAWAL_LIMIT_MAX,
+            value,
+            "withdrawal_daily_limit",
+            WITHDRAWAL_LIMIT_MAX,
         )
 
     def validate_gather_worth(self, value: Decimal) -> Decimal:
@@ -158,9 +163,11 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
             getattr(instance, "withdrawal_daily_limit", None),
         )
         if single is not None and daily is not None and single > daily:
-            raise serializers.ValidationError({
-                "withdrawal_single_limit": "单笔限额不能大于日限额",
-            })
+            raise serializers.ValidationError(
+                {
+                    "withdrawal_single_limit": "单笔限额不能大于日限额",
+                }
+            )
         return attrs
 
 
@@ -197,11 +204,13 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
     def get_vault_address(self, obj):
         try:
             addr = obj.wallet.get_address(
-                chain_type=ChainType.EVM, usage=AddressUsage.Vault,
+                chain_type=ChainType.EVM,
+                usage=AddressUsage.Vault,
             )
-            return addr.address
         except Exception:
             return None
+        else:
+            return addr.address
 
     def get_is_ready(self, obj):
         ready, _ = obj.is_ready

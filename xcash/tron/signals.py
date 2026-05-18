@@ -47,6 +47,6 @@ def refresh_tron_filter_addresses_when_recipient_address_changes(
 ):
     # 旧值或新值任一为 Tron 都要失效；否则 TRON -> EVM 修改会留下陈旧观察地址。
     old_chain_type = getattr(instance, "_old_chain_type", None)
-    if instance.chain_type != ChainType.TRON and old_chain_type != ChainType.TRON:
+    if ChainType.TRON not in {instance.chain_type, old_chain_type}:
         return
     _refresh_tron_filter_addresses_on_commit()

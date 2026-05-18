@@ -29,6 +29,8 @@ from .service import InvoiceService
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from webhooks.models import WebhookEvent
+
 
 class EpaySubmitError(Exception):
     pass
@@ -67,11 +69,9 @@ class EpaySubmitService:
         )
 
         with transaction.atomic():
-            existing_order = (
-                cls._get_existing_order_for_update(
-                    merchant=merchant,
-                    out_trade_no=params["out_trade_no"],
-                )
+            existing_order = cls._get_existing_order_for_update(
+                merchant=merchant,
+                out_trade_no=params["out_trade_no"],
             )
             if existing_order is not None:
                 cls._validate_idempotent_order(existing_order, params)

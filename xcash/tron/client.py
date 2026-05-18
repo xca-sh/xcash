@@ -43,9 +43,7 @@ class TronHttpClient:
         """
         if isinstance(exc, httpx.HTTPStatusError):
             status = exc.response.status_code
-            if 400 <= status < 500 and status not in (408, 429):
-                return False
-            return True
+            return not (400 <= status < 500 and status not in (408, 429))
         return isinstance(exc, httpx.HTTPError)
 
     def _request_with_retry(
@@ -85,14 +83,10 @@ class TronHttpClient:
                         json=json_body,
                     )
                 else:
-                    raise ValueError(f"unsupported HTTP method: {method}")
-                response.raise_for_status()
-                return response
+                    raise ValueError(f"unsupported HTTP method: {method}")  # noqa: TRY301
             except Exception as exc:  # noqa: BLE001
                 if not self._is_retriable_http_error(exc):
-                    raise TronClientError(
-                        f"{request_label} from {chain_code}"
-                    ) from exc
+                    raise TronClientError(f"{request_label} from {chain_code}") from exc
                 last_exc = exc
                 if attempt == max_attempts - 1:
                     break
@@ -106,10 +100,31 @@ class TronHttpClient:
                     error=str(exc),
                 )
                 time.sleep(backoff_seconds)
+            else:
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    if not self._is_retriable_http_error(exc):
+                        raise TronClientError(
+                            f"{request_label} from {chain_code}"
+                        ) from exc
+                    last_exc = exc
+                    if attempt == max_attempts - 1:
+                        break
+                    backoff_seconds = _TRON_HTTP_RETRY_BACKOFF_SECONDS[attempt]
+                    logger.warning(
+                        "Tron HTTP 调用失败，准备重试",
+                        chain=chain_code,
+                        request=request_label,
+                        attempt=attempt + 1,
+                        backoff_seconds=backoff_seconds,
+                        error=str(exc),
+                    )
+                    time.sleep(backoff_seconds)
+                else:
+                    return response
 
-        raise TronClientError(
-            f"{request_label} from {chain_code}"
-        ) from last_exc
+        raise TronClientError(f"{request_label} from {chain_code}") from last_exc
 
     def get_latest_solid_block_number(self) -> int:
         response = self._request_with_retry(

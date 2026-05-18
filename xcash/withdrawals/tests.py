@@ -495,18 +495,18 @@ class CreateWithdrawalSerializerCapabilityTests(TestCase):
                 "withdrawals.serializers.WithdrawalService.has_sufficient_balance",
                 side_effect=AssertionError("余额检查不应执行"),
             ) as has_balance_mock,
+            self.assertRaises(APIError) as ctx,
         ):
-            with self.assertRaises(APIError) as ctx:
-                serializer.validate(
-                    {
-                        "out_no": "tron-order",
-                        "to": "TMwFHYXLJaRUPeW6421aqXL4ZEzPRFGkGT",
-                        "uid": None,
-                        "crypto": usdt.symbol,
-                        "chain": chain.code,
-                        "amount": Decimal("1"),
-                    }
-                )
+            serializer.validate(
+                {
+                    "out_no": "tron-order",
+                    "to": "TMwFHYXLJaRUPeW6421aqXL4ZEzPRFGkGT",
+                    "uid": None,
+                    "crypto": usdt.symbol,
+                    "chain": chain.code,
+                    "amount": Decimal("1"),
+                }
+            )
 
         self.assertEqual(
             ctx.exception.error_code.code,
@@ -563,7 +563,8 @@ class CreateWithdrawalSerializerCapabilityTests(TestCase):
             patch(
                 "withdrawals.serializers.WithdrawalService.has_sufficient_balance",
                 side_effect=AssertionError("余额检查不应执行"),
-            ) as has_balance_mock,self.assertRaises(APIError) as ctx
+            ) as has_balance_mock,
+            self.assertRaises(APIError) as ctx,
         ):
             serializer.validate(
                 {
@@ -2548,7 +2549,9 @@ class WithdrawalCreatePermissionCheckTests(TestCase):
         from common.error_codes import ErrorCode
         from common.exceptions import APIError
 
-        mock_check.side_effect = APIError(ErrorCode.FEATURE_NOT_ENABLED, detail="withdrawal")
+        mock_check.side_effect = APIError(
+            ErrorCode.FEATURE_NOT_ENABLED, detail="withdrawal"
+        )
 
         response = WithdrawalViewSet.as_view({"post": "create"})(self._make_request())
 

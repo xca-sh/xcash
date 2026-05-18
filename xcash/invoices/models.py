@@ -521,7 +521,9 @@ class EpayMerchant(models.Model):
     secret_key = models.CharField(
         _("EPay 密钥"),
         max_length=128,
-        help_text=_("EPay 协议签名密钥。建议使用强随机字符串，不要与项目 HMAC 密钥重用。"),
+        help_text=_(
+            "EPay 协议签名密钥。建议使用强随机字符串，不要与项目 HMAC 密钥重用。"
+        ),
     )
     active = models.BooleanField(_("启用"), default=True)
     created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
@@ -647,6 +649,10 @@ class EpayOrder(models.Model):
     def __str__(self) -> str:
         return self.trade_no
 
+    def save(self, *args, **kwargs):
+        self.clean()
+        return super().save(*args, **kwargs)
+
     def clean(self):
         super().clean()
         errors = {}
@@ -660,7 +666,3 @@ class EpayOrder(models.Model):
 
         if errors:
             raise ValidationError(errors)
-
-    def save(self, *args, **kwargs):
-        self.clean()
-        return super().save(*args, **kwargs)

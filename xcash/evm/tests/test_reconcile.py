@@ -41,7 +41,7 @@ class EvmReconcilePendingChainTests(TestCase):
     """
 
     def setUp(self):
-        self.native = Crypto_create("Ether Recon", "ETHR", "ethereum-recon")
+        self.native = crypto_create("Ether Recon", "ETHR", "ethereum-recon")
         self.chain = Chain.objects.create(
             code="eth-recon",
             name="Ether Recon",
@@ -185,9 +185,7 @@ class EvmReconcilePendingChainTests(TestCase):
 
         tx_hash = "0x" + "b2" * 32
         self._make_task(tx_hash=tx_hash, aged_seconds=300)
-        self._install_w3_receipt(
-            {tx_hash: {"status": 1, "blockNumber": 12_345}}
-        )
+        self._install_w3_receipt({tx_hash: {"status": 1, "blockNumber": 12_345}})
 
         # 防御：把 cursor 写入一个固定值，断言扫描器没有偷偷改动它。
         cursor = EvmScanCursor.objects.create(
@@ -257,9 +255,7 @@ class EvmReconcilePendingChainTests(TestCase):
         reconcile_stale_pending_chain_evm.run(self.chain.pk)
 
         scan_blocks_mock.assert_called_once()
-        self.assertEqual(
-            scan_blocks_mock.call_args.kwargs["block_numbers"], {99}
-        )
+        self.assertEqual(scan_blocks_mock.call_args.kwargs["block_numbers"], {99})
         # 所有历史 hash 都被查了一次，版本前的 hash 不应被提前短路。
         self.assertEqual(get_receipt_mock.call_count, 3)
         queried = {call.args[0] for call in get_receipt_mock.call_args_list}
@@ -314,9 +310,7 @@ class EvmScanBlocksForReconcileTests(TestCase):
         self.platform_settings = PlatformSettings.objects.create(
             open_native_scanner=True,
         )
-        self.native = Crypto_create(
-            "Ether Recon Scan", "ETHRS", "ethereum-recon-scan"
-        )
+        self.native = crypto_create("Ether Recon Scan", "ETHRS", "ethereum-recon-scan")
         self.chain = Chain.objects.create(
             code="eth-recon-scan",
             name="Ether Recon Scan",
@@ -352,7 +346,9 @@ class EvmScanBlocksForReconcileTests(TestCase):
         super().tearDown()
 
     @staticmethod
-    def _native_tx(*, from_address: str, to_address: str, value: int, tx_hash_hex: str) -> dict:
+    def _native_tx(
+        *, from_address: str, to_address: str, value: int, tx_hash_hex: str
+    ) -> dict:
         return {
             "hash": bytes.fromhex(tx_hash_hex * 32),
             "from": from_address,
@@ -550,7 +546,7 @@ class EvmScanBlocksForReconcileTests(TestCase):
         self.assertEqual(result.created_erc20, 1)
 
 
-def Crypto_create(name: str, symbol: str, coingecko_id: str):
+def crypto_create(name: str, symbol: str, coingecko_id: str):
     """惰性引用 Crypto，避免模块导入阶段强依赖 currencies。
 
     当前项目里 currencies.Crypto 位于 currencies.models；测试用例小工具这里集中处理，

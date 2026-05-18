@@ -135,8 +135,9 @@ def _percentile_metrics(
                 f"MAX({diff_secs}) FILTER (WHERE {valid}) AS max_{idx}",
             ]
         )
+    # 表名与字段均由调用方内部常量传入，不存在用户可控输入；%s 占位符用于参数化查询。
     sql = (
-        f"SELECT {', '.join(select_parts)} "
+        f"SELECT {', '.join(select_parts)} "  # noqa: S608
         f"FROM {table} "
         f"WHERE stress_run_id = %s AND status = %s"
     )
@@ -205,7 +206,13 @@ class StressRunAdmin(ModelAdmin):
 
     def get_fields(self, request, obj=None):
         if obj is None:
-            return ("name", "count", "withdrawal_count", "deposit_count", "deposit_customer_count")
+            return (
+                "name",
+                "count",
+                "withdrawal_count",
+                "deposit_count",
+                "deposit_customer_count",
+            )
         return (
             "name",
             "count",
@@ -302,22 +309,22 @@ class StressRunAdmin(ModelAdmin):
                 "<th style='text-align:right;padding:2px 12px 2px 0'>max (ms)</th>"
                 "</tr></thead><tbody>"
             )
-            for r in rows:
-                parts.append(
-                    "<tr>"
-                    f"<td style='padding:2px 12px 2px 0'>{r['label']}</td>"
-                    f"<td style='text-align:right;padding:2px 12px 2px 0'>{r['count']}</td>"
-                    f"<td style='text-align:right;padding:2px 12px 2px 0'>{r['p50_ms']}</td>"
-                    f"<td style='text-align:right;padding:2px 12px 2px 0'>{r['p95_ms']}</td>"
-                    f"<td style='text-align:right;padding:2px 12px 2px 0'>{r['p99_ms']}</td>"
-                    f"<td style='text-align:right;padding:2px 12px 2px 0'>{r['max_ms']}</td>"
-                    "</tr>"
-                )
+            parts.extend(
+                "<tr>"
+                f"<td style='padding:2px 12px 2px 0'>{r['label']}</td>"
+                f"<td style='text-align:right;padding:2px 12px 2px 0'>{r['count']}</td>"
+                f"<td style='text-align:right;padding:2px 12px 2px 0'>{r['p50_ms']}</td>"
+                f"<td style='text-align:right;padding:2px 12px 2px 0'>{r['p95_ms']}</td>"
+                f"<td style='text-align:right;padding:2px 12px 2px 0'>{r['p99_ms']}</td>"
+                f"<td style='text-align:right;padding:2px 12px 2px 0'>{r['max_ms']}</td>"
+                "</tr>"
+                for r in rows
+            )
             parts.append("</tbody></table>")
 
         # 整个 HTML 由我们自行拼接，所有数据来自 PostgreSQL 聚合的数值/常量标签，
         # 没有用户可控字符串，可安全标记为 safe。
-        return mark_safe("".join(parts))
+        return mark_safe("".join(parts))  # noqa: S308
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)

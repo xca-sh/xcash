@@ -62,7 +62,9 @@ class TronHttpClientTests(SimpleTestCase):
         )
 
     @patch("tron.client.httpx.get")
-    def test_get_latest_solid_block_number_rejects_missing_or_zero_number(self, get_mock):
+    def test_get_latest_solid_block_number_rejects_missing_or_zero_number(
+        self, get_mock
+    ):
         for payload in (
             {},
             {"block_header": {"raw_data": {"number": 0}}},
@@ -78,7 +80,9 @@ class TronHttpClientTests(SimpleTestCase):
                     tron_api_key="tron-key",
                 )
 
-                with self.assertRaisesMessage(TronClientError, "invalid latest solid block"):
+                with self.assertRaisesMessage(
+                    TronClientError, "invalid latest solid block"
+                ):
                     TronHttpClient(chain=chain).get_latest_solid_block_number()
 
     @patch("tron.client.httpx.post")
@@ -178,9 +182,7 @@ class TronHttpClientTests(SimpleTestCase):
         # 第一次抛瞬时网络错误、第二次成功：整体被重试吸收，不应上抛 TronClientError。
         good_response = Mock()
         good_response.raise_for_status.return_value = None
-        good_response.json.return_value = {
-            "block_header": {"raw_data": {"number": 42}}
-        }
+        good_response.json.return_value = {"block_header": {"raw_data": {"number": 42}}}
         get_mock.side_effect = [httpx.ReadTimeout("transient"), good_response]
 
         chain = SimpleNamespace(
@@ -192,6 +194,32 @@ class TronHttpClientTests(SimpleTestCase):
         latest_block = TronHttpClient(chain=chain).get_latest_solid_block_number()
 
         self.assertEqual(latest_block, 42)
+        self.assertEqual(get_mock.call_count, 2)
+
+    @patch("tron.client.httpx.get")
+    def test_retries_retriable_http_status_until_success(self, get_mock):
+        # 5xx / 429 属于节点瞬时错误，应进入同一套退避重试逻辑。
+        bad_response = Mock()
+        bad_response.status_code = 500
+        bad_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Server Error",
+            request=Mock(),
+            response=bad_response,
+        )
+        good_response = Mock()
+        good_response.raise_for_status.return_value = None
+        good_response.json.return_value = {"block_header": {"raw_data": {"number": 43}}}
+        get_mock.side_effect = [bad_response, good_response]
+
+        chain = SimpleNamespace(
+            rpc="https://api.trongrid.io",
+            code="tron-mainnet",
+            tron_api_key="tron-key",
+        )
+
+        latest_block = TronHttpClient(chain=chain).get_latest_solid_block_number()
+
+        self.assertEqual(latest_block, 43)
         self.assertEqual(get_mock.call_count, 2)
 
     @patch("tron.client.httpx.get")
@@ -555,14 +583,19 @@ class TronUsdtPaymentScannerTests(TestCase):
             "event_index": event_index,
             "transaction_id": tx_hash,
             "result": {
-                "from": "0x" + TronAddressCodec.base58_to_hex41(self.sender_address)[2:],
+                "from": "0x"
+                + TronAddressCodec.base58_to_hex41(self.sender_address)[2:],
                 "to": "0x"
-                + TronAddressCodec.base58_to_hex41(to_address or self.watch_address)[2:],
+                + TronAddressCodec.base58_to_hex41(to_address or self.watch_address)[
+                    2:
+                ],
                 "value": str(raw_value),
             },
         }
 
-    def _get_or_create_contract_cursor(self, *, last_scanned_block: int) -> TronWatchCursor:
+    def _get_or_create_contract_cursor(
+        self, *, last_scanned_block: int
+    ) -> TronWatchCursor:
         return TronWatchCursor.objects.create(
             chain=self.chain,
             contract_address=self.usdt_mapping.address,
@@ -749,7 +782,9 @@ class TronUsdtPaymentScannerTests(TestCase):
         self._get_or_create_contract_cursor(last_scanned_block=123455)
         client = client_cls.return_value
         client.get_latest_solid_block_number.return_value = 123456
-        client.list_confirmed_contract_events.side_effect = TronClientError("probe failed")
+        client.list_confirmed_contract_events.side_effect = TronClientError(
+            "probe failed"
+        )
 
         with self.assertRaisesMessage(TronClientError, "probe failed"):
             TronUsdtPaymentScanner.scan_chain(chain=self.chain)
@@ -778,7 +813,9 @@ class TronUsdtPaymentScannerTests(TestCase):
         client.get_latest_solid_block_number.return_value = 123456
         client.list_confirmed_contract_events.return_value = []
 
-        with self.assertRaisesMessage(TronClientError, "invalid contract events payload"):
+        with self.assertRaisesMessage(
+            TronClientError, "invalid contract events payload"
+        ):
             TronUsdtPaymentScanner.scan_chain(chain=self.chain)
 
         self.assertFalse(OnchainTransfer.objects.filter(chain=self.chain).exists())
@@ -806,7 +843,9 @@ class TronUsdtPaymentScannerTests(TestCase):
             "meta": {},
         }
 
-        with self.assertRaisesMessage(TronClientError, "invalid contract events payload"):
+        with self.assertRaisesMessage(
+            TronClientError, "invalid contract events payload"
+        ):
             TronUsdtPaymentScanner.scan_chain(chain=self.chain)
 
         self.assertFalse(OnchainTransfer.objects.filter(chain=self.chain).exists())

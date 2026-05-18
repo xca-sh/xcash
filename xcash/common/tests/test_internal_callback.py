@@ -5,7 +5,11 @@ from django.test import override_settings
 
 
 class InternalCallbackTest(TestCase):
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="test-token", SAAS_CALLBACK_URL="http://saas.local")
+    @override_settings(
+        IS_SAAS=True,
+        INTERNAL_API_TOKEN="test-token",
+        SAAS_CALLBACK_URL="http://saas.local",
+    )
     @patch("common.internal_callback.httpx.Client")
     def test_deliver_sends_post_with_bearer_token(self, mock_client_cls):
         from common.internal_callback import _deliver_internal_callback
@@ -45,7 +49,11 @@ class InternalCallbackTest(TestCase):
 
         mock_client_cls.assert_not_called()
 
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="test-token", SAAS_CALLBACK_URL="http://saas.local")
+    @override_settings(
+        IS_SAAS=True,
+        INTERNAL_API_TOKEN="test-token",
+        SAAS_CALLBACK_URL="http://saas.local",
+    )
     @patch("common.internal_callback.httpx.Client")
     def test_deliver_retries_on_http_error(self, mock_client_cls):
         import httpx
@@ -53,14 +61,18 @@ class InternalCallbackTest(TestCase):
         from common.internal_callback import _deliver_internal_callback
 
         mock_client = mock_client_cls.return_value.__enter__.return_value
-        mock_response = httpx.Response(status_code=500, request=httpx.Request("POST", "http://test"))
+        mock_response = httpx.Response(
+            status_code=500, request=httpx.Request("POST", "http://test")
+        )
         mock_client.post.return_value = mock_response
 
         mock_client.post.return_value.raise_for_status = lambda: (_ for _ in ()).throw(
-            httpx.HTTPStatusError("Server Error", request=mock_response.request, response=mock_response)
+            httpx.HTTPStatusError(
+                "Server Error", request=mock_response.request, response=mock_response
+            )
         )
 
-        with self.assertRaises(Exception):
+        with self.assertRaises(httpx.HTTPStatusError):
             _deliver_internal_callback(
                 event="invoice.confirmed",
                 appid="XC-test",

@@ -228,7 +228,6 @@ ignore = [
     "S101", # Use of assert detected https://docs.astral.sh/ruff/rules/assert/
     "RUF012", # Mutable class attributes should be annotated with `typing.ClassVar`
     "SIM102", # sometimes it's better to nest
-    "UP038", # Checks for uses of isinstance/issubclass that take a tuple
     "PLR0913", # 限制参数为5个
     "E402", # import 必须在顶部
     "BLE001", # 异常捕获
@@ -260,15 +259,23 @@ ignore = [
     "SLF001",
     # 中文注释常被误判为注释掉的代码，ERA001 在中文项目里误报率过高
     "ERA001",
+    # 函数内 import（335 处），项目常用此技巧避免循环导入
+    "PLC0415",
+    # typing-only import（20 处），低价值性能优化
+    "TC001",
+    "TC003",
+    # 未使用解包变量（11 处）
+    "RUF059",
+    # 函数复杂度过高（5 处），属于架构债
+    "C901",
+    # return/分支/语句过多（8 处），属于架构债
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
 ]
 # Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
 unfixable = []
-# The fixes in extend-unsafe-fixes will require
-# provide the `--unsafe-fixes` flag when fixing.
-extend-unsafe-fixes = [
-    "UP038"
-]
 # Allow unused variables when underscore-prefixed.
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
