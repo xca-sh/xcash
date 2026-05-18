@@ -290,7 +290,6 @@ class AddressChainState(models.Model):
     """按 (address, chain) 维护串行化状态。
 
     - EVM: `next_nonce` 表示下一笔待分配的 nonce
-    - Bitcoin: 当前仅把这行当作数据库级互斥点使用
     """
 
     address = models.ForeignKey(
@@ -569,7 +568,7 @@ class BroadcastTaskResult(models.TextChoices):
 
 
 class BroadcastTaskFailureReason(models.TextChoices):
-    # 通用失败原因：适用于 EVM / Bitcoin 共享的提交与调度失败路径。
+    # 通用失败原因：适用于所有链共享的提交与调度失败路径。
     RPC_REJECTED = "rpc_rejected", _("节点拒绝")
     INSUFFICIENT_BALANCE = "insufficient_balance", _("余额不足")
     FEE_TOO_LOW = "fee_too_low", _("手续费过低")
@@ -577,10 +576,6 @@ class BroadcastTaskFailureReason(models.TextChoices):
     # EVM 特有失败原因：当前只保留真正可能落到已创建 BroadcastTask 终局的链上失败原因。
     EXECUTION_REVERTED = "execution_reverted", _("链上执行回退")
     EXPECTED_TRANSFER_MISSING = "expected_transfer_missing", _("链上执行成功但预期资产移动缺失")
-
-    # Bitcoin 特有失败原因：UTXO 冲突与双花只会出现在 UTXO 模型下。
-    UTXO_CONFLICT = "utxo_conflict", _("UTXO 冲突")
-    DOUBLE_SPEND = "double_spend", _("双花冲突")
 
 
 class TxHash(models.Model):
