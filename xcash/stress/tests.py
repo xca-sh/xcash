@@ -15,9 +15,6 @@ from django.test import TestCase
 from django.test import override_settings
 from django.utils import timezone
 from hexbytes import HexBytes
-from stress.bitcoin import BitcoinStressClient
-from stress.bitcoin import _build_wallet_clients
-from stress.bitcoin import send_btc
 from stress.evm import send_erc20
 from stress.evm import send_native
 from stress.models import DepositStressCase
@@ -80,7 +77,6 @@ class StressServiceTests(SimpleTestCase):
             patch(
                 "stress.service.Invoice.available_methods",
                 return_value={
-                    "BTC": ["bitcoin-local"],
                     "ETH": ["ethereum-local"],
                     "USDT": ["ethereum-local"],
                 },
@@ -100,7 +96,6 @@ class StressServiceTests(SimpleTestCase):
         self.assertEqual(
             payload["methods"],
             {
-                "BTC": ["bitcoin-local"],
                 "ETH": ["ethereum-local"],
                 "USDT": ["ethereum-local"],
             },
@@ -118,7 +113,6 @@ class StressServiceTests(SimpleTestCase):
                 "stress.service.Invoice.available_methods",
                 return_value={
                     "ETH": ["ethereum-local"],
-                    "USDT": ["ethereum-local"],
                 },
             ),
             patch("stress.service.httpx.post") as post_mock,
@@ -245,13 +239,13 @@ class StressServiceTests(SimpleTestCase):
             patch("stress.service.Project.objects.create", return_value=Project(pk=99)),
             patch(
                 "stress.service._setup_recipient_addresses",
-                side_effect=RuntimeError("btc recipient missing"),
+                side_effect=RuntimeError("recipient setup failed"),
             ),
             patch("stress.service.cache", create=True) as cache_mock,
             patch(
                 "stress.service.InvoiceStressCase.objects.bulk_create"
             ) as bulk_create_mock,
-            self.assertRaisesMessage(RuntimeError, "btc recipient missing"),
+            self.assertRaisesMessage(RuntimeError, "recipient setup failed"),
         ):
             StressService.prepare(stress)
 
@@ -332,135 +326,6 @@ class StressServiceTests(SimpleTestCase):
         payment_dispatch_mock.assert_called_once_with(args=[case.pk], countdown=2)
         # 状态停留在 CREATED，等待 payment task 推进
         self.assertEqual(case.status, InvoiceStressCaseStatus.CREATED)
-
-    @override_settings(STRESS_BTC_RPC_URL="http://xcash:xcash@localhost:18443")
-    def test_bitcoin_stress_client_uses_ensured_wallet_client(self):
-        wallet_client = Mock()
-        wallet_client.get_new_address.return_value = "bcrt1payer"
-
-        with (
-            patch("stress.bitcoin.BitcoinRpcClient", return_value=Mock()) as rpc_cls,
-            patch(
-                "stress.bitcoin._ensure_wallet_client",
-                return_value=wallet_client,
-            ) as ensure_wallet_mock,
-        ):
-            result = BitcoinStressClient().get_new_address()
-
-        self.assertEqual(result, "bcrt1payer")
-        rpc_cls.assert_called_once_with("http://xcash:xcash@localhost:18443")
-        self.assertEqual(ensure_wallet_mock.call_count, 2)
-        self.assertEqual(
-            ensure_wallet_mock.call_args_list[0].args[2],
-            "xcash-miner",
-        )
-        self.assertEqual(
-            ensure_wallet_mock.call_args_list[1].args[2],
-            "xcash-miner",
-        )
-        wallet_client.get_new_address.assert_called_once_with(
-            label="stress-recipient-xcash-miner",
-            address_type="bech32",
-        )
-
-    @override_settings(STRESS_BTC_RPC_URL="http://xcash:xcash@localhost:18443")
-    def test_build_wallet_clients_ensures_root_and_target_wallets(self):
-        root_client = Mock()
-        root_wallet_client = Mock()
-        target_wallet_client = Mock()
-
-        with (
-            patch(
-                "stress.bitcoin.BitcoinRpcClient", return_value=root_client
-            ) as rpc_cls,
-            patch(
-                "stress.bitcoin._ensure_wallet_client",
-                side_effect=[root_wallet_client, target_wallet_client],
-            ) as ensure_wallet_mock,
-        ):
-            result = _build_wallet_clients(wallet_name="stress-case-1")
-
-        self.assertEqual(
-            result,
-            (root_client, root_wallet_client, target_wallet_client),
-        )
-        rpc_cls.assert_called_once_with("http://xcash:xcash@localhost:18443")
-        self.assertEqual(ensure_wallet_mock.call_count, 2)
-
-    def test_send_btc_accepts_string_amount(self):
-        root_client = Mock()
-        root_wallet_client = Mock()
-        payer_wallet_client = Mock()
-        payer_wallet_client.get_new_address.return_value = "bcrt1payeraddress"
-        payer_wallet_client.send_to_address.return_value = "btc-tx-hash"
-
-        with (
-            patch(
-                "stress.bitcoin._ensure_wallet_client",
-                side_effect=[root_wallet_client, payer_wallet_client],
-            ),
-            patch("stress.bitcoin._root_rpc_url", return_value="http://root-rpc"),
-            patch("stress.bitcoin._root_wallet_name", return_value="xcash"),
-            patch("stress.bitcoin.BitcoinRpcClient", return_value=root_client),
-        ):
-            result = send_btc(
-                to="bcrt1qz252a6sxsamzl8sllmtcxtmsntkjek4z2vaktq",
-                amount="0.01",
-                wallet_name="stress-case-1",
-            )
-
-        self.assertEqual(result["tx_hash"], "btc-tx-hash")
-        payer_wallet_client.send_to_address.assert_called_once_with(
-            "bcrt1qz252a6sxsamzl8sllmtcxtmsntkjek4z2vaktq",
-            Decimal("0.01"),
-        )
-
-    def test_send_btc_uses_dedicated_wallet(self):
-        root_client = Mock()
-        root_wallet_client = Mock()
-        payer_wallet_client = Mock()
-        payer_wallet_client.get_new_address.return_value = "bcrt1payeraddress"
-        payer_wallet_client.send_to_address.return_value = "payment-tx"
-
-        with (
-            patch(
-                "stress.bitcoin._ensure_wallet_client",
-                side_effect=[root_wallet_client, payer_wallet_client],
-                create=True,
-            ) as ensure_wallet_mock,
-            patch(
-                "stress.bitcoin._root_rpc_url",
-                return_value="http://root-rpc",
-                create=True,
-            ),
-            patch(
-                "stress.bitcoin._root_wallet_name",
-                return_value="xcash",
-                create=True,
-            ),
-            patch(
-                "stress.bitcoin.BitcoinRpcClient",
-                return_value=root_client,
-                create=True,
-            ),
-        ):
-            result = send_btc(
-                to="bcrt1qz252a6sxsamzl8sllmtcxtmsntkjek4z2vaktq",
-                amount=Decimal("0.01"),
-                wallet_name="stress-case-1",
-            )
-
-        self.assertEqual(result["tx_hash"], "payment-tx")
-        self.assertEqual(result["payer_address"], "bcrt1payeraddress")
-        self.assertEqual(ensure_wallet_mock.call_count, 2)
-        root_wallet_client.send_to_address.assert_called_once_with(
-            "bcrt1payeraddress",
-            Decimal("0.011"),
-        )
-        payer_wallet_client.send_to_address.assert_called_once_with(
-            "bcrt1qz252a6sxsamzl8sllmtcxtmsntkjek4z2vaktq",
-            Decimal("0.01"),
-        )
 
     def test_send_native_uses_pending_nonce(self):
         payer = Mock()
@@ -595,33 +460,6 @@ class StressServiceTests(SimpleTestCase):
                 w3,
                 "0x3000000000000000000000000000000000000003",
             )
-
-    def test_simulate_payment_dispatches_to_bitcoin_sender(self):
-        chain_obj = SimpleNamespace(type=ChainType.BITCOIN, native_coin=None)
-        with (
-            patch("stress.payment.Chain.objects.get", return_value=chain_obj),
-            patch("stress.payment.Crypto.objects.get"),
-            patch(
-                "stress.payment.send_btc",
-                return_value={
-                    "tx_hash": "btc-hash",
-                    "payer_address": "bcrt1payer",
-                },
-            ) as send_btc_mock,
-        ):
-            result = simulate_payment(
-                to_address="bcrt1target",
-                chain_code="bitcoin-local",
-                crypto_symbol="BTC",
-                amount=Decimal("0.01"),
-                payment_ref="case-1",
-            )
-
-        self.assertEqual(result["tx_hash"], "btc-hash")
-        send_btc_mock.assert_called_once_with(
-            to="bcrt1target",
-            amount=Decimal("0.01"),
-        )
 
     def test_simulate_payment_dispatches_to_evm_native_sender(self):
         native_coin = Mock()
@@ -833,31 +671,6 @@ class StressPaymentTaskTests(SimpleTestCase):
         webhook_dispatch_mock.assert_not_called()
         on_finished_mock.assert_called_once_with(case)
 
-    def test_execute_stress_case_payment_btc_dust_marked_skipped(self):
-        """BTC sendtoaddress dust 错误 → SKIPPED 而非 FAILED，不污染失败率统计。"""
-        case = self._make_invoice_case(crypto="BTC", chain="bitcoin-local")
-
-        with (
-            self._patch_invoice_get(case),
-            patch(
-                "stress.tasks._do_payment",
-                side_effect=RuntimeError(
-                    "Bitcoin RPC error (sendtoaddress): Transaction amount too small"
-                ),
-            ),
-            patch(
-                "stress.tasks.check_webhook_timeout.apply_async"
-            ) as webhook_dispatch_mock,
-            patch("stress.tasks.StressService.on_case_finished") as on_finished_mock,
-        ):
-            execute_stress_case_payment.run(case.pk)
-
-        self.assertEqual(case.status, InvoiceStressCaseStatus.SKIPPED)
-        self.assertIn("Transaction amount too small", case.error)
-        self.assertIsNotNone(case.finished_at)
-        webhook_dispatch_mock.assert_not_called()
-        on_finished_mock.assert_called_once_with(case)
-
     # ── Deposit 流程 ────────────────────────────────────────────
 
     def _make_deposit_case(self, **overrides):
@@ -987,31 +800,6 @@ class StressPaymentTaskTests(SimpleTestCase):
         webhook_dispatch_mock.assert_not_called()
         on_finished_mock.assert_called_once_with(case)
 
-    def test_execute_deposit_case_payment_btc_dust_marked_skipped(self):
-        """Deposit 链路同样把 BTC dust 错误转 SKIPPED（防御性兜底，未来放开 BTC 充币时直接生效）。"""
-        case = self._make_deposit_case(crypto="BTC", chain="bitcoin-local")
-
-        with (
-            self._patch_deposit_get(case),
-            patch(
-                "stress.tasks.simulate_payment",
-                side_effect=RuntimeError(
-                    "Bitcoin RPC error (sendtoaddress): Transaction amount too small"
-                ),
-            ),
-            patch(
-                "stress.tasks.check_deposit_webhook_timeout.apply_async"
-            ) as webhook_dispatch_mock,
-            patch("stress.tasks.StressService.on_case_finished") as on_finished_mock,
-        ):
-            execute_deposit_case_payment.run(case.pk)
-
-        self.assertEqual(case.status, DepositStressCaseStatus.SKIPPED)
-        self.assertIn("Transaction amount too small", case.error)
-        self.assertIsNotNone(case.finished_at)
-        webhook_dispatch_mock.assert_not_called()
-        on_finished_mock.assert_called_once_with(case)
-
 
 class StressRecipientSetupTests(TestCase):
     def setUp(self):
@@ -1021,13 +809,6 @@ class StressRecipientSetupTests(TestCase):
             defaults={
                 "name": "Ethereum",
                 "coingecko_id": "ethereum",
-            },
-        )
-        self.btc, _ = Crypto.objects.update_or_create(
-            symbol="BTC",
-            defaults={
-                "name": "Bitcoin",
-                "coingecko_id": "bitcoin",
             },
         )
         self.usdt, _ = Crypto.objects.update_or_create(
@@ -1050,23 +831,9 @@ class StressRecipientSetupTests(TestCase):
                 "active": True,
             },
         )
-        self.bitcoin_local, _ = Chain.objects.update_or_create(
-            code="bitcoin-local",
-            defaults={
-                "name": "Bitcoin Local",
-                "type": ChainType.BITCOIN,
-                "native_coin": self.btc,
-                "active": True,
-            },
-        )
         ChainToken.objects.update_or_create(
             chain=self.ethereum_local,
             crypto=self.eth,
-            defaults={"address": "", "decimals": None},
-        )
-        ChainToken.objects.update_or_create(
-            chain=self.bitcoin_local,
-            crypto=self.btc,
             defaults={"address": "", "decimals": None},
         )
         ChainToken.objects.update_or_create(
@@ -1086,14 +853,8 @@ class StressRecipientSetupTests(TestCase):
             active=True,
         )
 
-    @patch.dict("os.environ", {"BITCOIN_NETWORK": "regtest"})
     def test_setup_recipient_addresses_creates_local_recipients_without_templates(self):
-        btc_invoice_address = "bcrt1q2507fuxge3y0sxd77vqz7yhangkm3wmvmpqxqn"
-
-        with patch("stress.bitcoin.BitcoinStressClient") as client_cls:
-            client_cls.return_value.get_new_address.return_value = btc_invoice_address
-
-            _setup_recipient_addresses(self.project)
+        _setup_recipient_addresses(self.project)
 
         recipients = list(
             RecipientAddress.objects.filter(project=self.project)
@@ -1101,15 +862,9 @@ class StressRecipientSetupTests(TestCase):
             .values("chain_type", "address", "usage")
         )
 
-        # BTC 充币已砍掉，只保留 BTC Invoice 收款地址
         self.assertEqual(
             recipients,
             [
-                {
-                    "chain_type": ChainType.BITCOIN.value,
-                    "address": btc_invoice_address,
-                    "usage": RecipientAddressUsage.INVOICE,
-                },
                 {
                     "chain_type": ChainType.EVM.value,
                     "address": _ANVIL_RECIPIENT_ADDRESSES[1],
@@ -1125,24 +880,10 @@ class StressRecipientSetupTests(TestCase):
         self.assertEqual(
             Invoice.available_methods(self.project),
             {
-                "BTC": ["bitcoin-local"],
                 "ETH": ["ethereum-local"],
                 "USDT": ["ethereum-local"],
             },
         )
-
-    def test_setup_recipient_addresses_requires_bitcoin_recipient(self):
-        with (
-            patch(
-                "stress.bitcoin.BitcoinStressClient",
-                side_effect=RuntimeError("btc rpc unavailable"),
-            ),
-            self.assertRaisesMessage(
-                RuntimeError,
-                "创建 BTC 收款地址失败",
-            ),
-        ):
-            _setup_recipient_addresses(self.project)
 
 
 class FinalizeStressTimeoutTests(TestCase):
@@ -1259,13 +1000,13 @@ class StressTaskTests(TestCase):
 
         with patch(
             "stress.tasks.StressService.prepare",
-            side_effect=RuntimeError("btc rpc unavailable"),
+            side_effect=RuntimeError("prepare exploded"),
         ):
             prepare_stress(stress.pk)
 
         stress.refresh_from_db()
         self.assertEqual(stress.status, StressRunStatus.FAILED)
-        self.assertEqual(stress.error, "btc rpc unavailable")
+        self.assertEqual(stress.error, "prepare exploded")
         self.assertIsNotNone(stress.finished_at)
 
 

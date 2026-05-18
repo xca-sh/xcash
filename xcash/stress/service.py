@@ -34,16 +34,13 @@ logger = structlog.get_logger()
 
 # 压测链路只打本地测试链，避免误选到其他环境链导致支付不可达。
 STRESS_FIXED_METHODS = {
-    "BTC": ["bitcoin-local"],
     "ETH": ["ethereum-local"],
     "USDT": ["ethereum-local"],
 }
 STRESS_FIXED_METHOD_CHOICES = (
-    ("BTC", "bitcoin-local"),
     ("ETH", "ethereum-local"),
     ("USDT", "ethereum-local"),
 )
-# 提币只支持 EVM 链，BTC 充提已砍掉。
 STRESS_WITHDRAWAL_METHOD_CHOICES = (
     ("ETH", "ethereum-local"),
     ("USDT", "ethereum-local"),
@@ -93,14 +90,6 @@ class StressService:
 
             stress.status = StressRunStatus.READY
             stress.save(update_fields=["status"])
-
-        # 事务提交后立刻把新建的 BTC invoice RecipientAddress 同步到节点
-        # watch-only 视图，避免 sync_bitcoin_watch_addresses 默认 300s 周期
-        # 让 BTC 长尾拖到 12 分钟（实测 100 笔压测里 BTC P95 会从 760s 降到
-        # ~30s 量级）。EVM 收款地址不需要这一步，xcash 直接按 RecipientAddress
-        # 表扫，没有节点 watch-only 中间层。
-        if stress.count > 0:
-            _sync_stress_btc_watch_only()
 
         # Vault 注资在事务提交后执行，确保数据库记录已落库
         if stress.withdrawal_count > 0 or stress.deposit_count > 0:
@@ -233,10 +222,6 @@ class StressService:
         project = stress_run.project
         methods = _require_stress_methods_ready(project)
 
-        # 下限 1 USD：BTC ~6 万 USD/枚下，0.1-0.2 USD 折算 ≈ 170-340 sat，
-        # 加上 invoice differ_amount 微调后会落进 bech32 dust 区间(~294 sat)，
-        # 触发 sendtoaddress "Transaction amount too small"。提到 1 USD ≈
-        # 1700 sat，对任何地址类型 dust threshold 都有充足余量。
         amount = str(round(random.uniform(1, 10), 2))  # noqa: S311
         out_no = f"STRESS-{stress_run.pk}-{case.sequence}"
 
@@ -361,7 +346,6 @@ def _setup_recipient_addresses(project: Project) -> None:
 
     压测链路固定跑本地测试链，不再依赖"系统里已有其他项目模板地址"。
     - EVM: 直接使用 Anvil 预置账户地址
-    - BTC: 直接向 regtest 节点申请新地址
     - RecipientAddress 全局仍保持"单记录单用途"约束，因此 stress 专用
       Project 通过同链两条地址记录分别承接 invoice / deposit。
     """
@@ -397,32 +381,9 @@ def _setup_recipient_addresses(project: Project) -> None:
         usage=RecipientAddressUsage.DEPOSIT_COLLECTION,
     )
 
-    try:
-        from .bitcoin import BitcoinStressClient
-        from .bitcoin import _mine_blocks
-
-        btc_client = BitcoinStressClient()
-        btc_invoice_address = btc_client.get_new_address()
-        upsert_recipient(
-            name=f"Stress-{project.pk}-btc-invoice",
-            chain_type=ChainType.BITCOIN,
-            address=btc_invoice_address,
-            usage=RecipientAddressUsage.INVOICE,
-        )
-        # BTC 充币已砍掉，只保留 Invoice 收款地址。
-
-        # 预挖矿：确保 root wallet 有充足余额供后续 BTC 支付 case 使用，
-        # 避免并发 case 同时耗尽余额导致 Insufficient funds。
-        _mine_blocks(btc_client.root_wallet_client, count=110)
-        logger.info("stress.btc.pre_mined", blocks=110)
-    except Exception as exc:
-        logger.warning("stress.setup_btc_recipient_failed", exc_info=True)
-        raise RuntimeError("创建 BTC 收款地址失败，Stress Project 未准备完成") from exc
-
 
 # 压测用的法币价格兜底值，仅在 prices 为空时回填，避免依赖外部行情源。
 _STRESS_FALLBACK_PRICES = {
-    "BTC": {"USD": 60000},
     "ETH": {"USD": 3000},
 }
 
@@ -491,7 +452,7 @@ def _setup_wallet_for_withdrawal(project: Project) -> None:
     project.wallet = wallet
     project.save(update_fields=["wallet"])
 
-    # 预派生 EVM Vault 地址（BTC 提币已砍掉，无需派生 BTC Vault）
+    # 预派生 EVM Vault 地址
     wallet.get_address(chain_type=ChainType.EVM, usage=AddressUsage.Vault)
 
 
@@ -639,7 +600,7 @@ def _require_stress_methods_ready(project: Project) -> dict[str, list[str]]:
     methods = Invoice.available_methods(project)
     if methods != STRESS_FIXED_METHODS:
         raise RuntimeError(
-            "Stress Project 收款地址未准备完整，必须同时支持 BTC/ETH/USDT 本地链支付"
+            "Stress Project 收款地址未准备完整，必须支持 ETH/USDT 本地链支付"
         )
     return methods
 
@@ -678,33 +639,6 @@ def _fund_vault_for_withdrawal(project: Project) -> None:
     在 prepare 事务提交后调用，确保 Wallet 和 Address 记录已落库。
     """
     _fund_evm_vault(project)
-
-
-def _sync_stress_btc_watch_only() -> None:
-    """主动触发一次 BTC watch-only 同步，把 Stress Project 新建的 BTC 收款
-    地址立即 import 到 xcash 节点钱包视图。
-
-    背景：sync_bitcoin_watch_addresses 默认每 300s 跑一次；新创建的
-    RecipientAddress 要等到下一个 sync 周期 + 一次扫块才能被 xcash 的
-    BitcoinChainScannerService 看到。100 笔级别压测里这会让 BTC 部分的
-    paid_to_webhook 长尾从 ~30s 拖到 ~12 分钟（实测）。
-
-    同步阻塞调用，但只 import 1-2 个新地址，耗时 100ms 量级，可接受。
-    失败仅记录 warning，不阻塞 prepare —— 5 分钟周期的全量 sync 仍会兜底。
-    """
-    from bitcoin.watch_sync import BitcoinWatchSyncService
-    from chains.models import Chain
-    from chains.models import ChainType
-
-    btc_chain = Chain.objects.filter(active=True, type=ChainType.BITCOIN).first()
-    if btc_chain is None:
-        return
-
-    try:
-        imported = BitcoinWatchSyncService.sync_chain(btc_chain)
-        logger.info("stress.btc.watch_sync_done", imported=imported)
-    except Exception:  # noqa: BLE001
-        logger.warning("stress.btc.watch_sync_failed", exc_info=True)
 
 
 def _fund_evm_vault(project: Project) -> None:

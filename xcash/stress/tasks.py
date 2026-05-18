@@ -54,18 +54,6 @@ _RETRY_KWARGS = {
 }
 
 
-def _is_btc_dust_error(exc: Exception) -> bool:
-    """识别 Bitcoin Core sendtoaddress 的 dust 拒绝错误。
-
-    实测压测里 invoice 折算后的 BTC 金额若落进 dust 区(bech32 ~294 sat)，
-    节点会抛 "Transaction amount too small"。这是"金额选不开"问题，不是
-    压测链路失败。转 SKIPPED 让它不污染成功率指标。
-
-    错误字符串来自 Bitcoin Core 的 RPC 错误信息，跨版本稳定。
-    """
-    return "Transaction amount too small" in str(exc)
-
-
 @shared_task(ignore_result=True, soft_time_limit=120, time_limit=180, **_RETRY_KWARGS)
 def execute_stress_case(case_id: int) -> None:
     """执行单个 InvoiceStressCase 的完整流程。"""
@@ -183,16 +171,8 @@ def execute_stress_case_payment(case_id: int) -> None:
             eta=timezone.now() + timedelta(minutes=15),
         )
     except Exception as exc:
-        if _is_btc_dust_error(exc):
-            logger.warning(
-                "stress.case_payment.dust_skipped",
-                case_id=case.pk,
-                pay_amount=str(case.pay_amount),
-            )
-            case.status = InvoiceStressCaseStatus.SKIPPED
-        else:
-            logger.exception("stress.case_payment.failed", case_id=case.pk)
-            case.status = InvoiceStressCaseStatus.FAILED
+        logger.exception("stress.case_payment.failed", case_id=case.pk)
+        case.status = InvoiceStressCaseStatus.FAILED
         case.error = str(exc)[:2000]
         case.finished_at = timezone.now()
         case.save(update_fields=["status", "error", "finished_at"])
@@ -489,18 +469,8 @@ def execute_deposit_case_payment(case_id: int) -> None:
             eta=timezone.now() + timedelta(minutes=15),
         )
     except Exception as exc:
-        # Deposit 当前压测只走 EVM(STRESS_DEPOSIT_METHOD_CHOICES 无 BTC)，
-        # 这里的 dust 分支属于防御性兜底，未来若放开 BTC 充币压测可直接生效。
-        if _is_btc_dust_error(exc):
-            logger.warning(
-                "stress.deposit_case_payment.dust_skipped",
-                case_id=case.pk,
-                amount=str(case.amount),
-            )
-            case.status = DepositStressCaseStatus.SKIPPED
-        else:
-            logger.exception("stress.deposit_case_payment.failed", case_id=case.pk)
-            case.status = DepositStressCaseStatus.FAILED
+        logger.exception("stress.deposit_case_payment.failed", case_id=case.pk)
+        case.status = DepositStressCaseStatus.FAILED
         case.error = str(exc)[:2000]
         case.finished_at = timezone.now()
         case.save(update_fields=["status", "error", "finished_at"])

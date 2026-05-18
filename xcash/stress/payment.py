@@ -6,7 +6,6 @@ from chains.models import Chain
 from chains.models import ChainType
 from currencies.models import Crypto
 
-from .bitcoin import send_btc
 from .evm import send_erc20
 from .evm import send_native
 
@@ -28,9 +27,6 @@ def simulate_payment(
     """
     chain_obj = Chain.objects.get(code=chain_code)
     crypto_obj = Crypto.objects.get(symbol=crypto_symbol)
-
-    if chain_obj.type == ChainType.BITCOIN:
-        return send_btc(to=to_address, amount=amount)
 
     if chain_obj.type != ChainType.EVM:
         raise ValueError(f"不支持的链类型: {chain_obj.type}")

@@ -42,7 +42,7 @@ def sync_chain_clock() -> None:
     crypto / pay_address / pay_amount 全部精确对得上也不会被匹配。
     由 StressService.start 在每轮压测启动时调用一次：拉齐后 Anvil 按默认 1s
     间隔出块，链时钟与系统时钟在单轮压测时长内保持同步。失败时降级为 warning，
-    不阻断压测启动（BTC-only 压测或未连 Anvil 环境下同样允许失败）。
+    不阻断压测启动（未连 Anvil 环境下同样允许失败）。
     """
     try:
         w3 = _get_w3()
