@@ -496,13 +496,13 @@ def _build_withdrawal_cases(stress: StressRun) -> list[WithdrawalStressCase]:
     # 与匹配端 expected 不一致），抽样按各 (crypto, chain) 的真实 decimals 出整数 raw units。
     # Withdrawal.amount / CreateWithdrawalSerializer.amount 业务字段限制最多 8 位，
     # 超过的 chain（如 ETH 18 位）也只能下钻到 8 位精度。
-    _AMOUNT_MAX_DP = 8
+    amount_max_dp = 8
     decimals_by_method: dict[tuple[str, str], int] = {}
     for crypto_symbol, chain_code in STRESS_WITHDRAWAL_METHOD_CHOICES:
         chain = Chain.objects.get(code=chain_code)
         crypto = Crypto.objects.get(symbol=crypto_symbol)
         decimals_by_method[(crypto_symbol, chain_code)] = min(
-            crypto.get_decimals(chain), _AMOUNT_MAX_DP
+            crypto.get_decimals(chain), amount_max_dp
         )
 
     cases = []

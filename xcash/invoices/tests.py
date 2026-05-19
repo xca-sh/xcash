@@ -12,10 +12,10 @@ from django.db import close_old_connections
 from django.db import connection
 from django.db import connections
 from django.db import transaction as db_transaction
-from django.test.utils import CaptureQueriesContext
 from django.test import TestCase
 from django.test import TransactionTestCase
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory
 from web3 import Web3

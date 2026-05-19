@@ -55,7 +55,7 @@ dev = [
     "sphinx==9.1.0",
     "sphinx-autobuild==2025.8.25",
     # Code quality
-    "ruff==0.15.8",
+    "ruff==0.15.12",
     "coverage==7.13.5",
     "djlint==1.36.4",
     "pylint-django==2.7.0",

@@ -34,7 +34,7 @@ repos:
 
   # Run the Ruff linter.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.1
+    rev: v0.15.12
     hooks:
       # Linter only（格式化由 black 负责，ruff-format 已移除避免冲突）
       - id: ruff
