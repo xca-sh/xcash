@@ -1,5 +1,6 @@
 from django.db import migrations
 from django.db import models
+from django_migration_linter.operations import IgnoreMigration
 
 
 def backfill_tx_kind(apps, schema_editor):
@@ -23,6 +24,9 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # 定点忽略 migration linter 的 NOT_NULL 拦截：
+        # 本迁移先允许 NULL 加列，再通过 RunPython 回填，最后才收紧为 NOT NULL。
+        IgnoreMigration(),
         migrations.AddField(
             model_name="evmbroadcasttask",
             name="tx_kind",

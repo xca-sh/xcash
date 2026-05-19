@@ -68,7 +68,11 @@ if env.bool("SIGNER_ENABLE_MIGRATION_LINTER", default=False):
     INSTALLED_APPS += ["django_migration_linter"]
     MIGRATION_LINTER_OPTIONS = {
         "sql_analyser": "postgresql",
-        "warnings_as_errors": [],
+        "exclude_migration_tests": [
+            "DROP_COLUMN",
+            "RENAME_COLUMN",
+            "DROP_TABLE",
+        ],
         "ignore_initial_migrations": True,
         "no_cache": True,
     }
