@@ -36,6 +36,9 @@ dependencies = [
     "django-otp>=1.7.0",
     "qrcode>=8.2",
     "gunicorn==26.0.0",
+    # 迁移文件在模块顶层 import IgnoreMigration，production migrate 必须能加载该符号；
+    # 仅 dev settings 把它加入 INSTALLED_APPS，production 装而不启用，运行时无副作用。
+    "django-migration-linter==6.0.0",
 ]
 [dependency-groups]
 dev = [
@@ -66,7 +69,6 @@ dev = [
     "django-debug-toolbar==6.2.0",
     "django-coverage-plugin==3.2.0",
     "pytest-django==4.12.0",
-    "django-migration-linter==6.0.0",
 ]
 production = [
     "psycopg[c]==3.3.4",

@@ -40,6 +40,7 @@
 
 - **收窄数据合法域的任何 DB 操作**（新增 NOT NULL 字段、把已有字段改为 NOT NULL、新增 UNIQUE / unique_together / CHECK / FK 约束、收紧字段长度或枚举范围等），必须在**同一迁移或前置迁移**中用 `RunPython` 按**确定性、幂等**的规则把存量数据归一化到满足新约束的形态，再执行收窄操作。归一化规则要写在 RunPython 函数 docstring 里，说明对冲突数据的处理方式（回填值 / 去重判据 / 删孤儿等），便于运维事后排查。
 - 因为 `django-migration-linter` 看不到 `RunPython` 的回填/清洗语义，会把这类迁移的收窄步骤判为 `NOT_NULL` / `UNIQUE` 等违规：必须在该迁移文件里插入 `IgnoreMigration()`（`from django_migration_linter.operations import IgnoreMigration`）做**定点豁免**，并在 operations 上方写注释说明"已通过 RunPython 归一化，故安全"。禁止用全局排除规则或调低 linter 等级绕过。
+- 因为上一条要求迁移文件在模块顶层 `from django_migration_linter.operations import IgnoreMigration`，`django-migration-linter` 必须放在 `pyproject.toml` 的 `[project].dependencies` 主依赖里（而非 `dev` group），否则 production 镜像不装该包，`migrate` 加载迁移模块即 `ModuleNotFoundError`。该包仅在 dev settings 才加入 `INSTALLED_APPS`，production 装而不启用，运行时无副作用。
 - **如果某个约束没有可以默认接受的归一化规则**（典型如 UNIQUE 冲突无法机械判定保留谁、FK 孤儿删了会丢业务数据），**禁止在该迁移直接加约束**。改用一版只做"标记/旁路冲突行 + 日志告警"的过渡迁移让运维人工处理，下一版再加约束；或把约束降级为应用层校验，从源头掐住新增冲突，等存量自然消化。
 - `RunPython` 的反向函数若无法真实还原数据，要写明确说明原因的 no-op，而不是留空或抛异常。
 - 新建表（首次迁移）内的 NOT NULL / UNIQUE 等约束、以及带常量 default 的新增列，不在此约束之列。
