@@ -165,15 +165,19 @@ class InvoiceService:
             return False
 
         # 第二步：先锁 Invoice（与 select_method 保持相同的加锁顺序，防死锁）。
+        # of=("self",) 限定行锁只作用于 invoices_invoice，避免 select_related 触发
+        # PostgreSQL 把 projects_project / currencies_crypto 等 join 父表也锁成
+        # FOR UPDATE，与并发 INSERT/UPDATE 子表时 PG 自动加的 FK FOR KEY SHARE 互斥而死锁。
         invoice = (
-            Invoice.objects.select_for_update()
+            Invoice.objects.select_for_update(of=("self",))
             .select_related("project")
             .get(pk=candidate["invoice_id"])
         )
 
         # 第三步：Invoice 锁住后再锁 PaySlot，并重新验证槽位状态（防止锁外失效）。
+        # 同样用 of=("self",) 把锁限定在 PaySlot 本行，select_related 仅做读优化。
         pay_slot = (
-            InvoicePaySlot.objects.select_for_update()
+            InvoicePaySlot.objects.select_for_update(of=("self",))
             .select_related("invoice", "invoice__project", "crypto", "chain")
             .filter(
                 pk=candidate["pk"],
@@ -259,8 +263,9 @@ class InvoiceService:
     ):
         # 必须在本方法内对 Invoice 加行锁，不能仅依赖调用方（OnchainTransfer.confirm）持有
         # OnchainTransfer 锁——其他调用路径可能绕开 OnchainTransfer 锁直接调用此方法。
+        # of=("self",) 把锁限定在 invoices_invoice，避免连带锁 projects_project 引发死锁。
         invoice = (
-            Invoice.objects.select_for_update()
+            Invoice.objects.select_for_update(of=("self",))
             .select_related("project")
             .get(pk=invoice.pk)
         )
@@ -303,8 +308,9 @@ class InvoiceService:
     ):
         # 必须在本方法内对 Invoice 加行锁，防止 confirm_invoice 与 drop_invoice
         # 并发执行导致状态错乱（如 drop 回退 WAITING 的同时 confirm 已推送 COMPLETED webhook）。
+        # of=("self",) 把锁限定在 invoices_invoice，避免连带锁 projects_project 引发死锁。
         invoice = (
-            Invoice.objects.select_for_update()
+            Invoice.objects.select_for_update(of=("self",))
             .select_related("project")
             .get(pk=invoice.pk)
         )

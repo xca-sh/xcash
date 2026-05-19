@@ -1,4 +1,5 @@
 from celery import shared_task
+from django.db import OperationalError
 
 from chains.adapters import AdapterFactory
 from chains.adapters import TxCheckResult
@@ -11,7 +12,17 @@ from common.decorators import singleton_task
 from common.time import ago
 
 
-@shared_task(ignore_result=True)
+# 高并发下 try_match_invoice / confirm_invoice 等行锁链路会触发 PostgreSQL 死锁，
+# PG 死锁的设计前提就是被牺牲方应重试；这里通过 autoretry_for 让 Celery 在死锁时
+# 指数退避自动重试，避免单次失败导致 transfer 永久卡在未处理状态。
+@shared_task(
+    ignore_result=True,
+    autoretry_for=(OperationalError,),
+    retry_backoff=True,
+    retry_backoff_max=10,
+    retry_jitter=True,
+    max_retries=3,
+)
 @singleton_task(timeout=5, use_params=True)
 def process_transfer(pk):
     transfer = OnchainTransfer.objects.get(pk=pk)

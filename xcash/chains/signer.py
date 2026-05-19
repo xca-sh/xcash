@@ -34,6 +34,28 @@ class SignerServiceError(RuntimeError):
     """统一描述 signer 服务调用失败，避免上层直接暴露 httpx/JSON 细节。"""
 
 
+def _format_signer_http_error(*, path: str, exc: Exception) -> str:
+    """保留 signer 返回的错误原因，但不记录请求体或交易载荷。"""
+    message = f"远端 signer 请求失败: {path}"
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return message
+
+    response = exc.response
+    parts = [f"HTTP {response.status_code}"]
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        code = payload.get("code")
+        detail = payload.get("detail")
+        if code:
+            parts.append(f"code={code}")
+        if detail:
+            parts.append(f"detail={detail}")
+    return f"{message} ({', '.join(parts)})"
+
+
 def build_signer_signature_payload(
     *,
     method: str,
@@ -144,7 +166,9 @@ class RemoteSignerBackend(SignerBackend):
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError, ValueError) as exc:
-            raise SignerServiceError(f"远端 signer 请求失败: {path}") from exc
+            raise SignerServiceError(
+                _format_signer_http_error(path=path, exc=exc)
+            ) from exc
 
     def _get_json(self, *, path: str) -> dict:
         if not self.base_url:
@@ -167,7 +191,9 @@ class RemoteSignerBackend(SignerBackend):
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError, ValueError) as exc:
-            raise SignerServiceError(f"远端 signer 请求失败: {path}") from exc
+            raise SignerServiceError(
+                _format_signer_http_error(path=path, exc=exc)
+            ) from exc
 
     def create_wallet(self, *, wallet_id: int) -> int:
         payload = self._post_json(

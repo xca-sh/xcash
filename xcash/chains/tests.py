@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import Mock
 from unittest.mock import patch
 
+import httpx
 import pytest
 from django.core import checks
 from django.core.exceptions import ValidationError
@@ -41,6 +42,7 @@ from chains.signer import SignerServiceError
 from chains.signer import build_signer_signature_payload
 from chains.signer import get_signer_backend
 from chains.tasks import block_number_updated
+from chains.tasks import process_transfer
 from chains.transfer_matching import addresses_equal
 from chains.transfer_matching import raw_amount
 from chains.transfer_matching import transfer_matches
@@ -1290,6 +1292,43 @@ class SignerBackendTests(TestCase):
         SIGNER_SHARED_SECRET="secret",
     )
     @patch("chains.signer.httpx.post")
+    def test_remote_signer_backend_includes_signer_error_detail(
+        self, httpx_post_mock
+    ):
+        response = Mock()
+        response.status_code = 400
+        response.json.return_value = {
+            "code": "1000",
+            "message": "参数错误",
+            "detail": "wallet_id 无效",
+        }
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Bad Request",
+            request=httpx.Request("POST", "http://signer.internal/v1/sign/evm"),
+            response=response,
+        )
+        httpx_post_mock.return_value = response
+        addr = Mock(
+            wallet_id=95, chain_type=ChainType.EVM, bip44_account=1, address_index=0
+        )
+
+        with self.assertRaisesMessage(
+            SignerServiceError,
+            "远端 signer 请求失败: /v1/sign/evm (HTTP 400, code=1000, detail=wallet_id 无效)",
+        ):
+            get_signer_backend().sign_evm_transaction(
+                address=addr,
+                chain=Mock(),
+                tx_dict={"nonce": 0, "data": "0x"},
+            )
+
+    @override_settings(
+        SIGNER_BACKEND="remote",
+        SIGNER_BASE_URL="http://signer.internal",
+        SIGNER_TIMEOUT=3.5,
+        SIGNER_SHARED_SECRET="secret",
+    )
+    @patch("chains.signer.httpx.post")
     def test_remote_signer_backend_derive_address_posts_bip44_params(
         self, httpx_post_mock
     ):
@@ -2049,3 +2088,31 @@ def test_address_send_crypto_schedules_erc20_transfer_intent():
     )
     assert intent.action_type == OnchainActionType.DepositCollection
     assert intent.gas == chain.erc20_transfer_gas
+
+
+class ProcessTransferAutoretryTests(SimpleTestCase):
+    """process_transfer 死锁自动重试回归测试。
+
+    PostgreSQL 死锁的设计前提是被牺牲方应重试；StressRun 高并发场景里，
+    `try_match_invoice` / `confirm_invoice` 等行锁链路会偶发 deadlock。
+    若 process_transfer 不配置 OperationalError 重试，单次死锁就会让
+    OnchainTransfer 永久卡在未处理状态，对应的账单也无法被匹配。
+    """
+
+    def test_process_transfer_autoretries_on_database_deadlock(self):
+        from django.db import OperationalError
+
+        self.assertIn(
+            OperationalError,
+            process_transfer.autoretry_for,
+            "process_transfer 必须把 OperationalError 配进 autoretry_for "
+            "以覆盖 PG deadlock detected",
+        )
+        self.assertGreaterEqual(
+            process_transfer.max_retries, 1,
+            "max_retries 必须 >= 1 才能真正触发重试",
+        )
+        self.assertTrue(
+            getattr(process_transfer, "retry_backoff", False),
+            "retry_backoff 必须启用，避免死锁后密集重试加剧锁冲突",
+        )

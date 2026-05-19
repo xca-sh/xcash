@@ -9,8 +9,10 @@ from django.core.cache import cache
 from django.db import DatabaseError
 from django.db import IntegrityError
 from django.db import close_old_connections
+from django.db import connection
 from django.db import connections
 from django.db import transaction as db_transaction
+from django.test.utils import CaptureQueriesContext
 from django.test import TestCase
 from django.test import TransactionTestCase
 from django.test import override_settings
@@ -1528,3 +1530,94 @@ class InvoiceCreatePermissionCheckTests(TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.data["code"], ErrorCode.ACCOUNT_FROZEN.code)
+
+
+class InvoiceSelectForUpdateLockScopeTests(InvoicePaySlotTests):
+    """select_for_update(of=("self",)) 回归测试。
+
+    StressRun 高并发压测时，三处 `select_for_update().select_related("project")`
+    会让 PostgreSQL 把 join 中的 projects_project / currencies_crypto 父行也锁成
+    FOR UPDATE，与并发 INSERT/UPDATE 子表自动加的 FK FOR KEY SHARE 互斥，引发
+    `OperationalError: deadlock detected`。修复后必须显式 `of=("self",)`，仅锁
+    主表本行。这里通过捕获实际 SQL，断言锁子句不再触及任何父表。
+    """
+
+    def _for_update_tails(self, captured):
+        # 每条 FOR UPDATE 语句的锁子句尾部，用来检查 `OF ...` 范围。
+        tails = []
+        for query in captured.captured_queries:
+            sql = query["sql"]
+            if "FOR UPDATE" not in sql:
+                continue
+            tails.append(sql[sql.rindex("FOR UPDATE"):])
+        return tails
+
+    def _assert_lock_scope_is_self_only(self, tails):
+        self.assertTrue(
+            tails,
+            "应至少触发一次 SELECT ... FOR UPDATE 行锁",
+        )
+        for tail in tails:
+            # 不带 OF 子句 = 锁所有 JOIN 表的行，正是死锁根因。
+            self.assertIn(
+                " OF ", tail,
+                f"select_for_update 必须带 of=(...) 限定主表: {tail}",
+            )
+            for parent_table in (
+                '"projects_project"',
+                '"currencies_crypto"',
+                '"chains_chain"',
+            ):
+                self.assertNotIn(
+                    parent_table, tail,
+                    f"父表 {parent_table} 不应出现在 FOR UPDATE 子句中: {tail}",
+                )
+
+    def test_try_match_invoice_locks_only_self_rows(self):
+        invoice = self.create_invoice(out_no="lock-scope-match")
+        invoice.select_method(self.crypto, self.chain_a)
+        slot = invoice.pay_slots.get(version=1)
+        transfer = self.create_transfer(
+            chain=self.chain_a,
+            pay_amount=slot.pay_amount,
+            pay_address=slot.pay_address,
+        )
+
+        with CaptureQueriesContext(connection) as captured:
+            InvoiceService.try_match_invoice(transfer)
+
+        self._assert_lock_scope_is_self_only(self._for_update_tails(captured))
+
+    def test_confirm_invoice_locks_only_self_rows(self):
+        invoice = self.create_invoice(out_no="lock-scope-confirm")
+        invoice.select_method(self.crypto, self.chain_a)
+        slot = invoice.pay_slots.get(version=1)
+        transfer = self.create_transfer(
+            chain=self.chain_a,
+            pay_amount=slot.pay_amount,
+            pay_address=slot.pay_address,
+        )
+        InvoiceService.try_match_invoice(transfer)
+        invoice.refresh_from_db()
+
+        with CaptureQueriesContext(connection) as captured:
+            InvoiceService.confirm_invoice(invoice)
+
+        self._assert_lock_scope_is_self_only(self._for_update_tails(captured))
+
+    def test_drop_invoice_locks_only_self_rows(self):
+        invoice = self.create_invoice(out_no="lock-scope-drop")
+        invoice.select_method(self.crypto, self.chain_a)
+        slot = invoice.pay_slots.get(version=1)
+        transfer = self.create_transfer(
+            chain=self.chain_a,
+            pay_amount=slot.pay_amount,
+            pay_address=slot.pay_address,
+        )
+        InvoiceService.try_match_invoice(transfer)
+        invoice.refresh_from_db()
+
+        with CaptureQueriesContext(connection) as captured:
+            InvoiceService.drop_invoice(invoice)
+
+        self._assert_lock_scope_is_self_only(self._for_update_tails(captured))
