@@ -105,6 +105,9 @@ class EvmScanCursorAdmin(SyncScanCursorToLatestActionMixin, ReadOnlyModelAdmin):
     )
     fields = readonly_fields
 
+    def has_delete_permission(self, request, obj=None):
+        return False
+
     @admin.display(ordering="chain__name", description="网络")
     def display_chain(self, obj: EvmScanCursor):  # pragma: no cover
         return obj.chain
