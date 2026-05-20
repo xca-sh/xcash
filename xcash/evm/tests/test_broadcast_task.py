@@ -375,7 +375,9 @@ class EvmBroadcastTaskTests(TestCase):
         self.assertEqual(kwargs["deposit_address"].address_id, addr.pk)
         self.assertEqual(kwargs["expected_collection_gas_cost"], 1 * 60_000)
 
-    def test_broadcast_preflight_threshold_delegates_to_idempotent_recharge_service(self):
+    def test_broadcast_preflight_threshold_delegates_to_idempotent_recharge_service(
+        self,
+    ):
         # 反复广播不应重复创建补给记录：broadcast 只负责"检测到余额不足 → 委派给
         # GasRechargeService"，真正的幂等由 GasRechargeService.request_recharge 负责
         # （见 GasRechargeServiceTests）。这里断言 broadcast 端每次都如实调用同一入口、
@@ -1030,7 +1032,7 @@ class EvmBroadcastTaskTests(TestCase):
                 estimate_gas=Mock(return_value=21_000),
                 send_raw_transaction=Mock(
                     side_effect=RuntimeError("replacement transaction underpriced")
-                )
+                ),
             )
         )
         recipient = Web3.to_checksum_address(
@@ -1099,7 +1101,7 @@ class EvmBroadcastTaskTests(TestCase):
                 gas_price=1,
                 get_balance=Mock(return_value=10**18),
                 estimate_gas=Mock(return_value=21_000),
-                send_raw_transaction=Mock(side_effect=RuntimeError("nonce too low"))
+                send_raw_transaction=Mock(side_effect=RuntimeError("nonce too low")),
             )
         )
         recipient = Web3.to_checksum_address(
@@ -1250,7 +1252,7 @@ class EvmBroadcastTaskTests(TestCase):
                 gas_price=1,
                 get_balance=Mock(return_value=10**18),
                 estimate_gas=Mock(return_value=21_000),
-                send_raw_transaction=Mock(side_effect=RuntimeError("already known"))
+                send_raw_transaction=Mock(side_effect=RuntimeError("already known")),
             )
         )
         recipient = Web3.to_checksum_address(

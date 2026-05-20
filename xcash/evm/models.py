@@ -28,6 +28,7 @@ from evm.intents import get_preflight_buffer_multiplier
 if TYPE_CHECKING:
     from evm.intents import EvmTxIntent
 
+
 class EvmScanCursorType(models.TextChoices):
     """定义 EVM 自扫描器的游标类型。"""
 
@@ -202,9 +203,7 @@ class EvmBroadcastTask(UndeletableModel):
         current_native_balance = self.chain.w3.eth.get_balance(self.address.address)  # noqa: SLF001
         signed_gas_price = int(self.gas_price)
         multiplier = get_preflight_buffer_multiplier(TxKind(self.tx_kind))
-        expected_collection_gas_cost = (
-            signed_gas_price * self.chain.erc20_transfer_gas
-        )
+        expected_collection_gas_cost = signed_gas_price * self.chain.erc20_transfer_gas
         buffer_required = int(self.value) + multiplier * self.gas * signed_gas_price
         if current_native_balance < buffer_required:
             # 仅归集场景补 gas；Withdrawal 的 address 是 Vault 本身，补 gas 无意义，
@@ -366,7 +365,8 @@ class EvmBroadcastTask(UndeletableModel):
 
         try:
             deposit_address = DepositAddress.objects.select_related(
-                "customer__project__wallet", "address",
+                "customer__project__wallet",
+                "address",
             ).get(address=self.address)
         except DepositAddress.DoesNotExist:
             return
