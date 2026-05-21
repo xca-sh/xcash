@@ -9,18 +9,28 @@ from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 from django_otp.plugins.otp_totp.models import TOTPDevice
+from web3 import Web3
 
 from alerts.models import ProjectAlertEventType
 from alerts.models import ProjectAlertState
 from alerts.models import ProjectAlertStatus
 from alerts.models import ProjectTelegramAlertConfig
 from alerts.service import TelegramAlertService
+from chains.models import Address
+from chains.models import AddressUsage
 from chains.models import Chain
 from chains.models import ChainType
+from chains.models import Wallet
 from chains.test_signer import build_test_remote_signer_backend
 from core.models import PLATFORM_SETTINGS_CACHE_KEY
 from core.models import PlatformSettings
 from currencies.models import Crypto
+from evm.models import ContractDeployCollection
+from evm.models import ContractDeployCollectionStatus
+from invoices.models import Invoice
+from invoices.models import InvoiceBillingMode
+from invoices.models import InvoicePaySlot
+from invoices.models import InvoicePaySlotStatus
 from users.models import Customer
 from users.models import User
 from users.otp import ADMIN_OTP_VERIFIED_AT_SESSION_KEY
@@ -258,3 +268,176 @@ class TelegramAlertServiceTests(TestCase):
             reverse("admin:projects_project_change", args=[self.project.pk]),
         )
         delay_mock.assert_called_once_with(config_id=self.config.pk)
+
+
+@override_settings(
+    ALERTS_TELEGRAM_BOT_TOKEN="telegram-token",
+    ALERTS_TELEGRAM_API_BASE="https://api.telegram.org",
+    ALERTS_TELEGRAM_TIMEOUT=3.0,
+    ALERTS_REPEAT_INTERVAL_MINUTES=30,
+)
+class ContractCollectionStalledAlertTest(TestCase):
+    def tearDown(self):
+        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        super().tearDown()
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="contract-alert-owner",
+            password="secret",
+        )
+        from projects.models import Project
+
+        self.project = Project.objects.create(name="Contract Alert Project")
+        self.config = ProjectTelegramAlertConfig.objects.create(
+            project=self.project,
+            telegram_chat_id="-100123457",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.crypto = Crypto.objects.create(
+            name="Contract Alert Token",
+            symbol="ALERTC",
+            coingecko_id="contract-alert-token",
+        )
+        self.chain = Chain.objects.create(
+            name="Contract Alert Chain",
+            code="eth-contract-alert",
+            type=ChainType.EVM,
+            native_coin=self.crypto,
+            chain_id=4402,
+            rpc="http://localhost:8545",
+            active=True,
+        )
+
+    def _make_contract_invoice(self) -> Invoice:
+        invoice = Invoice.objects.create(
+            project=self.project,
+            out_no="contract-alert-order",
+            title="Contract alert invoice",
+            currency=self.crypto.symbol,
+            amount=Decimal("100"),
+            methods={self.crypto.symbol: [self.chain.code]},
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            status="completed",
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+        return invoice
+
+    def _make_contract_pay_slot(self, invoice: Invoice) -> InvoicePaySlot:
+        return InvoicePaySlot.objects.create(
+            invoice=invoice,
+            project=invoice.project,
+            version=1,
+            crypto=self.crypto,
+            chain=self.chain,
+            pay_address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000ce"
+            ),
+            pay_amount=Decimal("100"),
+            recipient_address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000d1"
+            ),
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            status=InvoicePaySlotStatus.MATCHED,
+            matched_at=timezone.now(),
+        )
+
+    def _create_collection_for_slot(
+        self,
+        *,
+        slot: InvoicePaySlot,
+        status: str,
+        suffix: int,
+    ) -> ContractDeployCollection:
+        deployer = Address.objects.create(
+            wallet=self.project.wallet,
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.Vault,
+            address_index=suffix,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.Vault),
+            address=f"0x{suffix:040x}",
+        )
+        return ContractDeployCollection.objects.create(
+            chain=self.chain,
+            crypto=self.crypto,
+            deployer_address=deployer,
+            factory_address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000fa"
+            ),
+            collector_address=Web3.to_checksum_address(f"0x{(1000 + suffix):040x}"),
+            recipient_address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000d1"
+            ),
+            salt=bytes([suffix]) * 32,
+            collector_init_code_hash=bytes([suffix + 1]) * 32,
+            expected_collect_value_raw=1_000_000,
+            pay_slot=slot,
+            status=status,
+        )
+
+    def test_stalled_contract_collections_returns_invoices_with_three_failures(self):
+        from core.monitoring import OperationalRiskService
+
+        invoice = self._make_contract_invoice()
+        slot = self._make_contract_pay_slot(invoice)
+        statuses = [
+            ContractDeployCollectionStatus.FAILED,
+            ContractDeployCollectionStatus.DROPPED,
+            ContractDeployCollectionStatus.FAILED,
+        ]
+        for suffix, status in enumerate(statuses, start=1):
+            self._create_collection_for_slot(
+                slot=slot,
+                status=status,
+                suffix=suffix,
+            )
+
+        candidates = list(OperationalRiskService.stalled_contract_collections())
+
+        self.assertIn(invoice, candidates)
+
+    def test_stalled_contract_collections_excludes_active_collection(self):
+        from core.monitoring import OperationalRiskService
+
+        invoice = self._make_contract_invoice()
+        slot = self._make_contract_pay_slot(invoice)
+        for suffix in range(1, 4):
+            self._create_collection_for_slot(
+                slot=slot,
+                status=ContractDeployCollectionStatus.FAILED,
+                suffix=suffix,
+            )
+        self._create_collection_for_slot(
+            slot=slot,
+            status=ContractDeployCollectionStatus.BROADCASTED,
+            suffix=4,
+        )
+
+        candidates = list(OperationalRiskService.stalled_contract_collections())
+
+        self.assertNotIn(invoice, candidates)
+
+    @patch("alerts.tasks.send_project_telegram_alert.delay")
+    def test_sync_operational_alerts_creates_contract_collection_state(
+        self,
+        delay_mock,
+    ):
+        invoice = self._make_contract_invoice()
+        slot = self._make_contract_pay_slot(invoice)
+        for suffix in range(1, 4):
+            self._create_collection_for_slot(
+                slot=slot,
+                status=ContractDeployCollectionStatus.FAILED,
+                suffix=suffix,
+            )
+
+        TelegramAlertService().sync_operational_alerts()
+
+        state = ProjectAlertState.objects.get(
+            project=self.project,
+            event_type=ProjectAlertEventType.CONTRACT_COLLECTION_STALLED,
+            object_pk=invoice.pk,
+        )
+        self.assertEqual(state.status, ProjectAlertStatus.OPEN)
+        delay_mock.assert_called_once()

@@ -32,6 +32,7 @@ class ProjectTelegramAlertConfigInline(StackedInline):
         "telegram_thread_id",
         "notify_on_withdrawal_stalled",
         "notify_on_deposit_collection_stalled",
+        "notify_on_contract_collection_stalled",
         "notify_on_webhook_stalled",
         "notify_on_recovery",
         "display_send_test_action",
@@ -106,6 +107,7 @@ class ProjectTelegramAlertConfigAdmin(ModelAdmin):
                 "fields": (
                     "notify_on_withdrawal_stalled",
                     "notify_on_deposit_collection_stalled",
+                    "notify_on_contract_collection_stalled",
                     "notify_on_webhook_stalled",
                     "notify_on_recovery",
                 ),
@@ -160,6 +162,8 @@ class ProjectTelegramAlertConfigAdmin(ModelAdmin):
             parts.append(str(_("提币")))
         if instance.notify_on_deposit_collection_stalled:
             parts.append(str(_("归集")))
+        if instance.notify_on_contract_collection_stalled:
+            parts.append(str(_("合约归集")))
         if instance.notify_on_webhook_stalled:
             parts.append(str(_("Webhook")))
         if instance.notify_on_recovery:

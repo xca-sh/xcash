@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from django.db.models import Count
 from django.db.models import Q
 
 if TYPE_CHECKING:
@@ -80,6 +81,44 @@ class OperationalRiskService:
             status=WebhookEvent.Status.PENDING,
             created_at__lte=now - cls.webhook_event_timeout(),
         ).select_related("project")
+
+    @classmethod
+    def stalled_contract_collections(cls):
+        """识别已完成付款但 collector 部署连续失败的合约账单。"""
+        from evm.models import ContractDeployCollectionStatus
+        from invoices.models import Invoice
+        from invoices.models import InvoiceBillingMode
+        from invoices.models import InvoiceStatus
+
+        return (
+            Invoice.objects.filter(
+                billing_mode=InvoiceBillingMode.CONTRACT,
+                status=InvoiceStatus.COMPLETED,
+            )
+            .annotate(
+                failed_count=Count(
+                    "pay_slots__contract_deploy_collections",
+                    filter=Q(
+                        pay_slots__contract_deploy_collections__status__in=[
+                            ContractDeployCollectionStatus.FAILED,
+                            ContractDeployCollectionStatus.DROPPED,
+                        ]
+                    ),
+                ),
+                active_count=Count(
+                    "pay_slots__contract_deploy_collections",
+                    filter=Q(
+                        pay_slots__contract_deploy_collections__status__in=[
+                            ContractDeployCollectionStatus.CREATED,
+                            ContractDeployCollectionStatus.BROADCASTED,
+                            ContractDeployCollectionStatus.CONFIRMED,
+                        ]
+                    ),
+                ),
+            )
+            .filter(failed_count__gte=3, active_count=0)
+            .select_related("project")
+        )
 
     @classmethod
     def build_summary(cls, *, limit: int = 4) -> dict:

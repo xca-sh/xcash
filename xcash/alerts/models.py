@@ -7,6 +7,7 @@ from django.utils.translation import gettext_lazy as _
 class ProjectAlertEventType(models.TextChoices):
     WITHDRAWAL_STALLED = "withdrawal_stalled", _("提币卡单")
     DEPOSIT_COLLECTION_STALLED = "deposit_collection_stalled", _("归集卡单")
+    CONTRACT_COLLECTION_STALLED = "contract_collection_stalled", _("合约归集卡单")
     WEBHOOK_STALLED = "webhook_stalled", _("Webhook 堆积")
 
 
@@ -46,6 +47,10 @@ class ProjectTelegramAlertConfig(models.Model):
     notify_on_withdrawal_stalled = models.BooleanField(_("提币卡单告警"), default=True)
     notify_on_deposit_collection_stalled = models.BooleanField(
         _("归集卡单告警"),
+        default=True,
+    )
+    notify_on_contract_collection_stalled = models.BooleanField(
+        _("合约归集卡单告警"),
         default=True,
     )
     notify_on_webhook_stalled = models.BooleanField(_("Webhook 堆积告警"), default=True)
@@ -98,6 +103,7 @@ class ProjectTelegramAlertConfig(models.Model):
         event_flags = {
             ProjectAlertEventType.WITHDRAWAL_STALLED: self.notify_on_withdrawal_stalled,
             ProjectAlertEventType.DEPOSIT_COLLECTION_STALLED: self.notify_on_deposit_collection_stalled,
+            ProjectAlertEventType.CONTRACT_COLLECTION_STALLED: self.notify_on_contract_collection_stalled,
             ProjectAlertEventType.WEBHOOK_STALLED: self.notify_on_webhook_stalled,
         }
         return bool(event_flags.get(event_type, False))

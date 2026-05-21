@@ -130,6 +130,29 @@ class TelegramAlertService:
                 state=state, mode="open", now=now, config_cache=config_cache
             )
 
+        for invoice in OperationalRiskService.stalled_contract_collections():
+            state = self._upsert_state(
+                project=invoice.project,
+                event_type=ProjectAlertEventType.CONTRACT_COLLECTION_STALLED,
+                object_type="invoice",
+                object_pk=invoice.pk,
+                severity=ProjectAlertSeverity.HIGH,
+                title=str(_("合约归集长时间未完成")),
+                detail=str(
+                    _("%(sys_no)s / %(amount)s")
+                    % {"sys_no": invoice.sys_no, "amount": str(invoice.amount)}
+                ),
+                admin_url=reverse(
+                    "admin:invoices_invoice_change",
+                    args=[invoice.pk],
+                ),
+                seen_at=now,
+            )
+            active_fingerprints.add(state.fingerprint)
+            self._notify_if_due(
+                state=state, mode="open", now=now, config_cache=config_cache
+            )
+
         for event in OperationalRiskService.stalled_webhook_events():
             state = self._upsert_state(
                 project=event.project,
