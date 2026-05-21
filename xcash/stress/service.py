@@ -58,6 +58,7 @@ class StressService:
 
         with transaction.atomic():
             _ensure_stress_crypto_prices()
+            _ensure_native_scanner_enabled()
             _cleanup_orphan_stress_project(stress)
             project = _create_stress_project(stress)
             _setup_recipient_addresses(project)
@@ -396,6 +397,29 @@ def _ensure_stress_crypto_prices() -> None:
             crypto.prices.update(fallback)
             crypto.save(update_fields=["prices"])
             logger.info("stress.backfill_price", symbol=symbol, prices=crypto.prices)
+
+
+def _ensure_native_scanner_enabled() -> None:
+    """合约账单创建要求 native scanner 开启；在 prepare 阶段幂等保证。
+
+    保留"已为 True 时不重复 save"，避免无意义的 updated_at 漂移。
+    显式 cache.delete 让下一次 get_platform_settings() 重新拉数据库。
+    """
+    from core.models import PLATFORM_SETTINGS_CACHE_KEY
+    from core.models import PlatformSettings
+
+    settings = PlatformSettings.objects.order_by("pk").first()
+    if settings is None:
+        PlatformSettings.objects.create(open_native_scanner=True)
+        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        return
+
+    if settings.open_native_scanner:
+        return
+
+    settings.open_native_scanner = True
+    settings.save(update_fields=["open_native_scanner"])
+    cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
 
 
 def _cleanup_orphan_stress_project(stress: StressRun) -> None:

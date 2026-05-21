@@ -1605,3 +1605,41 @@ class BuildStressCasesBillingModeTests(SimpleTestCase):
         self.assertEqual(len(cases), 200)
         self.assertGreaterEqual(contract, 60)
         self.assertLessEqual(contract, 100)
+
+
+class EnsureNativeScannerEnabledTests(TestCase):
+    """_ensure_native_scanner_enabled 幂等且写回缓存键。"""
+
+    def test_creates_settings_when_missing(self):
+        from core.models import PLATFORM_SETTINGS_CACHE_KEY
+        from core.models import PlatformSettings
+        from stress.service import _ensure_native_scanner_enabled
+
+        PlatformSettings.objects.all().delete()
+        django_cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+
+        _ensure_native_scanner_enabled()
+
+        settings = PlatformSettings.objects.get()
+        self.assertTrue(settings.open_native_scanner)
+
+    def test_no_write_when_already_enabled(self):
+        from core.models import PlatformSettings
+        from stress.service import _ensure_native_scanner_enabled
+
+        PlatformSettings.objects.create(open_native_scanner=True)
+
+        with patch.object(PlatformSettings, "save", autospec=True) as save_mock:
+            _ensure_native_scanner_enabled()
+
+        save_mock.assert_not_called()
+
+    def test_flips_false_to_true(self):
+        from core.models import PlatformSettings
+        from stress.service import _ensure_native_scanner_enabled
+
+        PlatformSettings.objects.create(open_native_scanner=False)
+
+        _ensure_native_scanner_enabled()
+
+        self.assertTrue(PlatformSettings.objects.get().open_native_scanner)
