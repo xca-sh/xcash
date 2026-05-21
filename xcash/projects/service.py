@@ -52,6 +52,23 @@ class ProjectService:
         )
 
     @staticmethod
+    def primary_invoice_recipient(
+        *,
+        project: Project,
+        chain_type: str,
+    ) -> RecipientAddress | None:
+        """取指定链类型下最早创建的账单收款地址。
+
+        合约账单首次派生 collector 时用它锁定 recipient;后续应复用
+        InvoicePaySlot 历史记录,避免商户调整收款地址导致 collector 地址漂移。
+        """
+        return (
+            ProjectService.invoice_recipients(project, chain_type=chain_type)
+            .order_by("created_at", "id")
+            .first()
+        )
+
+    @staticmethod
     def has_invoice_recipient(project: Project) -> bool:
         return ProjectService.invoice_recipients(project).exists()
 

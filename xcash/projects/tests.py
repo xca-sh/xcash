@@ -213,3 +213,61 @@ class RecipientAddressCapabilityTests(TestCase):
 
         self.assertEqual(qs.count(), 1)
         self.assertEqual(qs.first().usage, RecipientAddressUsage.INVOICE)
+
+
+class PrimaryInvoiceRecipientTest(TestCase):
+    def setUp(self):
+        self.project = Project.objects.create(name="Primary Recipient Project")
+
+    def test_returns_none_when_no_invoice_recipient(self):
+        from projects.service import ProjectService
+
+        result = ProjectService.primary_invoice_recipient(
+            project=self.project,
+            chain_type=ChainType.EVM,
+        )
+
+        self.assertIsNone(result)
+
+    def test_returns_first_invoice_recipient_by_created_at(self):
+        from projects.service import ProjectService
+
+        first = RecipientAddress.objects.create(
+            name="First Invoice",
+            project=self.project,
+            chain_type=ChainType.EVM,
+            address="0x52908400098527886E0F7030069857D2E4169EE7",
+            usage=RecipientAddressUsage.INVOICE,
+        )
+        RecipientAddress.objects.create(
+            name="Second Invoice",
+            project=self.project,
+            chain_type=ChainType.EVM,
+            address="0x8617E340B3D01FA5F11F306F4090FD50E238070D",
+            usage=RecipientAddressUsage.INVOICE,
+        )
+
+        result = ProjectService.primary_invoice_recipient(
+            project=self.project,
+            chain_type=ChainType.EVM,
+        )
+
+        self.assertEqual(result.pk, first.pk)
+
+    def test_excludes_deposit_collection_usage(self):
+        from projects.service import ProjectService
+
+        RecipientAddress.objects.create(
+            name="Collection",
+            project=self.project,
+            chain_type=ChainType.EVM,
+            address="0xde709f2102306220921060314715629080e2fb77",
+            usage=RecipientAddressUsage.DEPOSIT_COLLECTION,
+        )
+
+        result = ProjectService.primary_invoice_recipient(
+            project=self.project,
+            chain_type=ChainType.EVM,
+        )
+
+        self.assertIsNone(result)
