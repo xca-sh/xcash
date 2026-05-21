@@ -2207,3 +2207,101 @@ class ConfirmInvoiceContractHookTest(TestCase, InvoiceTestMixin):
             InvoiceService.confirm_invoice(invoice)
 
         mock_delay.assert_not_called()
+
+
+class RetryContractCollectionBeatTest(TestCase, InvoiceTestMixin):
+    def setUp(self):
+        self.setup_base_fixtures(
+            username="contract-retry-merchant",
+            project_name="ContractRetryProject",
+            crypto_symbol="USDTRET",
+            chain_code="eth-contract-retry",
+            chain_id=8808,
+        )
+        self.invoice = self.create_test_invoice(
+            out_no="contract-retry-order",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            amount=Decimal("100"),
+            status=InvoiceStatus.COMPLETED,
+        )
+        Invoice.objects.filter(pk=self.invoice.pk).update(
+            updated_at=timezone.now() - timedelta(minutes=10),
+        )
+        self.invoice.refresh_from_db()
+        self.slot = InvoicePaySlot.objects.create(
+            invoice=self.invoice,
+            project=self.invoice.project,
+            version=1,
+            crypto=self.crypto,
+            chain=self.chain,
+            pay_address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000ce"
+            ),
+            pay_amount=Decimal("100"),
+            recipient_address=self.recipient_address,
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            status=InvoicePaySlotStatus.MATCHED,
+            matched_at=timezone.now(),
+        )
+        self.deployer = Address.objects.create(
+            wallet=self.project.wallet,
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.Vault,
+            address_index=0,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.Vault),
+            address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000f2"
+            ),
+        )
+
+    def _create_collection_for_slot(self, *, status: str):
+        from evm.models import ContractDeployCollection
+
+        return ContractDeployCollection.objects.create(
+            chain=self.chain,
+            crypto=self.crypto,
+            deployer_address=self.deployer,
+            factory_address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000fa"
+            ),
+            collector_address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000fb"
+            ),
+            recipient_address=self.recipient_address,
+            salt=b"\x01" * 32,
+            collector_init_code_hash=b"\x02" * 32,
+            expected_collect_value_raw=1_000_000,
+            pay_slot=self.slot,
+            status=status,
+        )
+
+    @patch("invoices.tasks.deploy_contract_collection.delay")
+    def test_enqueues_invoice_without_active_collection(self, mock_delay):
+        from invoices.tasks import retry_contract_collection_for_completed_invoices
+
+        retry_contract_collection_for_completed_invoices()
+
+        mock_delay.assert_called_once_with(self.invoice.pk)
+
+    @patch("invoices.tasks.deploy_contract_collection.delay")
+    def test_skips_invoice_with_active_collection(self, mock_delay):
+        from evm.models import ContractDeployCollectionStatus
+        from invoices.tasks import retry_contract_collection_for_completed_invoices
+
+        self._create_collection_for_slot(
+            status=ContractDeployCollectionStatus.BROADCASTED,
+        )
+
+        retry_contract_collection_for_completed_invoices()
+
+        mock_delay.assert_not_called()
+
+    @patch("invoices.tasks.deploy_contract_collection.delay")
+    def test_skips_recently_updated_invoice(self, mock_delay):
+        from invoices.tasks import retry_contract_collection_for_completed_invoices
+
+        Invoice.objects.filter(pk=self.invoice.pk).update(updated_at=timezone.now())
+
+        retry_contract_collection_for_completed_invoices()
+
+        mock_delay.assert_not_called()

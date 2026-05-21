@@ -1,8 +1,13 @@
+from datetime import timedelta
+
 from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
 
+from evm.models import ContractDeployCollectionStatus
+
 from .models import Invoice
+from .models import InvoiceBillingMode
 from .models import InvoicePaySlot
 from .models import InvoicePaySlotDiscardReason
 from .models import InvoicePaySlotStatus
@@ -103,3 +108,28 @@ def deploy_contract_collection(invoice_id: int):
     except Invoice.DoesNotExist:
         return
     invoice.trigger_contract_collection()
+
+
+@shared_task
+def retry_contract_collection_for_completed_invoices():
+    """兜底扫描已完成但无活跃归集记录的合约账单并重新入队。"""
+    cutoff = timezone.now() - timedelta(minutes=2)
+    active_states = (
+        ContractDeployCollectionStatus.CREATED,
+        ContractDeployCollectionStatus.BROADCASTED,
+        ContractDeployCollectionStatus.CONFIRMED,
+    )
+    candidates = (
+        Invoice.objects.filter(
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            status=InvoiceStatus.COMPLETED,
+            updated_at__lte=cutoff,
+        )
+        .exclude(
+            pay_slots__contract_deploy_collections__status__in=active_states,
+        )
+        .distinct()
+        .values_list("pk", flat=True)[:50]
+    )
+    for invoice_id in candidates:
+        deploy_contract_collection.delay(invoice_id)

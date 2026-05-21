@@ -158,6 +158,10 @@ invoices_tasks = {
         "task": "invoices.tasks.fallback_invoice_expired",
         "schedule": INVOICE_EXPIRED_SCHEDULE_SECONDS,
     },
+    "retry_contract_collection_for_completed_invoices": {
+        "task": "invoices.tasks.retry_contract_collection_for_completed_invoices",
+        "schedule": 300,
+    },
 }
 
 # ---------------------------
