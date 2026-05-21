@@ -3,6 +3,7 @@ from unfold.decorators import display
 
 from common.admin import ReadOnlyModelAdmin
 from common.admin_scan_cursor import SyncScanCursorToLatestActionMixin
+from evm.models import ContractDeployCollection
 from evm.models import EvmBroadcastTask
 from evm.models import EvmScanCursor
 
@@ -63,6 +64,40 @@ class EvmBroadcastTaskAdmin(ReadOnlyModelAdmin):
     @admin.display(ordering="nonce", description="Nonce")
     def display_nonce(self, obj: EvmBroadcastTask):  # pragma: no cover
         return obj.nonce
+
+
+@admin.register(ContractDeployCollection)
+class ContractDeployCollectionAdmin(ReadOnlyModelAdmin):
+    ordering = ("-created_at",)
+    list_display = (
+        "collector_address",
+        "_pay_slot_invoice",
+        "chain",
+        "crypto",
+        "recipient_address",
+        "status",
+        "created_at",
+        "updated_at",
+    )
+    list_filter = ("status", "chain", "crypto")
+    search_fields = (
+        "collector_address",
+        "recipient_address",
+        "pay_slot__invoice__sys_no",
+        "broadcast_task__tx_hash",
+    )
+    list_select_related = (
+        "chain",
+        "crypto",
+        "pay_slot__invoice",
+        "broadcast_task",
+    )
+
+    @admin.display(description="账单单号", ordering="pay_slot__invoice__sys_no")
+    def _pay_slot_invoice(self, obj: ContractDeployCollection):
+        if obj.pay_slot_id:
+            return obj.pay_slot.invoice.sys_no
+        return "-"
 
 
 @admin.register(EvmScanCursor)

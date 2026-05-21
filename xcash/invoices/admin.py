@@ -27,6 +27,8 @@ class InvoicePaySlotInline(admin.TabularInline):
         "chain",
         "pay_address",
         "pay_amount",
+        "billing_mode",
+        "recipient_address",
         "status",
         "discard_reason",
         "matched_at",
@@ -87,6 +89,7 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
         "pay_amount_display",
         "expires_at",
         "display_protocol",
+        "billing_mode",
         "display_status",
         "display_risk_level",
         "risk_score",
@@ -101,6 +104,7 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
         "crypto",
         "status",
         "protocol",
+        "billing_mode",
         "risk_level",
     )
     fieldsets = (
@@ -122,6 +126,7 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
                     "expires_at",
                     "status",
                     "protocol",
+                    "billing_mode",
                 )
             },
         ),
