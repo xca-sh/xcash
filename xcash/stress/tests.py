@@ -1847,3 +1847,178 @@ class HandleInvoiceWebhookBillingModeTests(TestCase):
         self.assertIsNone(case.finished_at)
         on_finish_mock.assert_not_called()
         trigger_mock.assert_not_called()
+
+
+class FinalizeInvoiceCollectionVerificationTests(TestCase):
+    """_finalize_invoice_collection_verification 按 ContractDeployCollection
+    状态打 SUCCEEDED 或 FAILED。"""
+
+    def setUp(self):
+        # 使用 --create-db 时初始数据库无 ethereum-local；显式补齐 Crypto/Chain
+        # 至少够 ContractDeployCollection FK + Invoice.chain/crypto FK 通过。
+        self.eth, _ = Crypto.objects.update_or_create(
+            symbol="ETH",
+            defaults={"name": "Ethereum", "coingecko_id": "ethereum"},
+        )
+        self.ethereum_local, _ = Chain.objects.update_or_create(
+            code="ethereum-local",
+            defaults={
+                "name": "Ethereum Local",
+                "type": ChainType.EVM,
+                "native_coin": self.eth,
+                "chain_id": 31337,
+                "rpc": "http://127.0.0.1:8545",
+                "active": True,
+            },
+        )
+        ChainToken.objects.update_or_create(
+            chain=self.ethereum_local,
+            crypto=self.eth,
+            defaults={"address": "", "decimals": None},
+        )
+
+    def _build_case_with_invoice(
+        self,
+        *,
+        chain,
+        crypto,
+        billing_mode,
+        collection_status=None,
+    ):
+        from invoices.models import Invoice
+        from invoices.models import InvoicePaySlot
+        from invoices.models import InvoicePaySlotStatus
+        from invoices.models import InvoiceStatus
+        from projects.models import Project
+        from chains.models import Wallet
+        from chains.models import ChainType
+        from chains.models import AddressUsage
+        from evm.models import ContractDeployCollection
+
+        wallet = Wallet.objects.create()
+        project = Project.objects.create(
+            name=f"stress-final-{billing_mode}",
+            webhook="http://localhost/wh",
+            ip_white_list="*",
+            active=True,
+            hmac_key="k",
+            wallet=wallet,
+        )
+        stress = StressRun.objects.create(
+            name=f"finalize-test-{billing_mode}",
+            count=1,
+            project=project,
+            status=StressRunStatus.RUNNING,
+        )
+        invoice = Invoice.objects.create(
+            project=project,
+            out_no=f"OUT-{billing_mode}",
+            title="t",
+            currency="USD",
+            amount=Decimal("1"),
+            expires_at=timezone.now() + timezone.timedelta(hours=1),
+            billing_mode=billing_mode,
+            status=InvoiceStatus.COMPLETED,
+            chain=chain,
+            crypto=crypto,
+        )
+        recipient_address = "0x" + "22" * 20
+        recipient_address = Web3.to_checksum_address(recipient_address)
+        slot = InvoicePaySlot.objects.create(
+            invoice=invoice,
+            project=project,
+            version=1,
+            crypto=crypto,
+            chain=chain,
+            pay_amount=Decimal("1"),
+            pay_address=Web3.to_checksum_address("0x" + "11" * 20),
+            billing_mode=billing_mode,
+            recipient_address=recipient_address,
+            status=InvoicePaySlotStatus.MATCHED,
+            matched_at=timezone.now(),
+        )
+        if collection_status is not None:
+            # 直接 Address.objects.create，绕开 wallet.get_address 对 signer 的依赖。
+            deployer = Address.objects.create(
+                wallet=wallet,
+                chain_type=ChainType.EVM,
+                usage=AddressUsage.Vault,
+                address_index=0,
+                bip44_account=Wallet.get_bip44_account(AddressUsage.Vault),
+                address=Web3.to_checksum_address("0x" + "55" * 20),
+            )
+            ContractDeployCollection.objects.create(
+                chain=chain,
+                crypto=crypto,
+                deployer_address=deployer,
+                factory_address=Web3.to_checksum_address("0x" + "33" * 20),
+                collector_address=Web3.to_checksum_address("0x" + "44" * 20),
+                recipient_address=recipient_address,
+                salt=b"\x00" * 32,
+                collector_init_code_hash=b"\x00" * 32,
+                expected_collect_value_raw=Decimal("1"),
+                pay_slot=slot,
+                status=collection_status,
+            )
+
+        case = InvoiceStressCase.objects.create(
+            stress_run=stress,
+            sequence=1,
+            scheduled_offset=0,
+            invoice_sys_no=invoice.sys_no,
+            invoice_out_no=invoice.out_no,
+            status=InvoiceStressCaseStatus.WEBHOOK_OK,
+            billing_mode=billing_mode,
+        )
+        return stress, case
+
+    def test_confirmed_collection_marks_succeeded(self):
+        from chains.models import Chain
+        from currencies.models import Crypto
+        from evm.models import ContractDeployCollectionStatus
+        from invoices.models import InvoiceBillingMode
+        from stress.tasks import _finalize_invoice_collection_verification
+
+        chain = Chain.objects.get(code="ethereum-local")
+        crypto = Crypto.objects.get(symbol="ETH")
+        stress, case = self._build_case_with_invoice(
+            chain=chain,
+            crypto=crypto,
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            collection_status=ContractDeployCollectionStatus.CONFIRMED,
+        )
+
+        with patch("stress.tasks.StressService.on_case_finished") as on_finish:
+            _finalize_invoice_collection_verification(stress, [case], reason="completed")
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InvoiceStressCaseStatus.SUCCEEDED)
+        self.assertTrue(case.collection_verified)
+        self.assertIsNotNone(case.collection_done_at)
+        self.assertIsNotNone(case.finished_at)
+        on_finish.assert_called_once()
+
+    def test_missing_collection_marks_failed(self):
+        from chains.models import Chain
+        from currencies.models import Crypto
+        from invoices.models import InvoiceBillingMode
+        from stress.tasks import _finalize_invoice_collection_verification
+
+        chain = Chain.objects.get(code="ethereum-local")
+        crypto = Crypto.objects.get(symbol="ETH")
+        stress, case = self._build_case_with_invoice(
+            chain=chain,
+            crypto=crypto,
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            collection_status=None,
+        )
+
+        with patch("stress.tasks.StressService.on_case_finished") as on_finish:
+            _finalize_invoice_collection_verification(stress, [case], reason="stalled")
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InvoiceStressCaseStatus.FAILED)
+        self.assertFalse(case.collection_verified)
+        self.assertIsNotNone(case.finished_at)
+        self.assertIn("归集", case.error)
+        on_finish.assert_called_once()

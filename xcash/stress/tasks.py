@@ -526,12 +526,6 @@ def _maybe_trigger_invoice_collection_verification(stress_run_id: int) -> None:
     )
 
 
-@shared_task(ignore_result=True)
-def verify_invoice_collection(stress_run_id: int) -> None:
-    """Stub：完整实现见 Task 7。"""
-    return
-
-
 # 归集验证 self-rescheduling 配置
 # - _VERIFY_COLLECTION_INTERVAL: 每轮自调度的间隔（秒）
 # - _VERIFY_COLLECTION_OVERALL_TIMEOUT: 整体兜底超时（秒），保留原 30 分钟语义
@@ -797,5 +791,241 @@ def _finalize_collection_verification(
             case.error = reason_text
 
         case.finished_at = timezone.now()
+        case.save(update_fields=update_fields)
+        StressService.on_case_finished(case)
+
+
+# ── 合约账单归集验证（run-level，镜像 verify_deposit_collection）──
+
+_VERIFY_INVOICE_COLLECTION_INTERVAL = _VERIFY_COLLECTION_INTERVAL
+_VERIFY_INVOICE_COLLECTION_OVERALL_TIMEOUT = _VERIFY_COLLECTION_OVERALL_TIMEOUT
+_VERIFY_INVOICE_COLLECTION_STALL_TIMEOUT = _VERIFY_COLLECTION_STALL_TIMEOUT
+_VERIFY_INVOICE_COLLECTION_CACHE_TIMEOUT = _VERIFY_COLLECTION_CACHE_TIMEOUT
+
+
+def _verify_invoice_collection_cache_key(stress_run_id: int) -> str:
+    return f"stress:verify_invoice_collection:{stress_run_id}"
+
+
+@shared_task(bind=True, ignore_result=True, soft_time_limit=120, time_limit=180)
+@singleton_task(timeout=180, use_params=True)
+def verify_invoice_collection(self, stress_run_id: int) -> None:
+    """合约账单归集验证 self-rescheduling task。
+
+    与 verify_deposit_collection 同结构：singleton 锁按 stress_run_id 隔离，
+    每轮采集进度三元组，进度严格递减则继续轮询，否则按 stall / overall
+    timeout 判定后 finalize。
+    """
+    from invoices.models import Invoice
+    from invoices.models import InvoiceBillingMode
+    from invoices.models import InvoicePaySlotStatus
+    from evm.models import ContractDeployCollectionStatus
+
+    # ── 1. 前置条件：还有合约 case 没到 WEBHOOK_OK 则等下一轮 webhook 触发
+    pre_webhook_states = {
+        InvoiceStressCaseStatus.PENDING,
+        InvoiceStressCaseStatus.CREATING,
+        InvoiceStressCaseStatus.CREATED,
+        InvoiceStressCaseStatus.PAYING,
+        InvoiceStressCaseStatus.PAID,
+    }
+    if InvoiceStressCase.objects.filter(
+        stress_run_id=stress_run_id,
+        billing_mode=InvoiceBillingMode.CONTRACT,
+        status__in=pre_webhook_states,
+    ).exists():
+        return
+
+    try:
+        stress = StressRun.objects.select_related("project").get(pk=stress_run_id)
+    except StressRun.DoesNotExist:
+        return
+
+    webhook_ok_cases = list(
+        InvoiceStressCase.objects.filter(
+            stress_run=stress,
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            status=InvoiceStressCaseStatus.WEBHOOK_OK,
+        )
+    )
+    if not webhook_ok_cases:
+        return
+
+    cache_key = _verify_invoice_collection_cache_key(stress_run_id)
+    state = cache.get(cache_key)
+    now_ts = time.time()
+    if state is None:
+        prev_progress_key: tuple[int, int, int] | None = None
+        stall_since_ts = now_ts
+        start_ts = now_ts
+    else:
+        raw_prev = state.get("prev_progress")
+        prev_progress_key = None if raw_prev is None else tuple(raw_prev)
+        stall_since_ts = state.get("stall_since_ts", now_ts)
+        start_ts = state.get("start_ts", now_ts)
+
+    if now_ts - start_ts > _VERIFY_INVOICE_COLLECTION_OVERALL_TIMEOUT:
+        logger.warning(
+            "stress.invoice_collection.overall_timeout",
+            stress_run_id=stress_run_id,
+            elapsed=int(now_ts - start_ts),
+        )
+        _finalize_invoice_collection_verification(
+            stress, webhook_ok_cases, reason="overall_timeout"
+        )
+        cache.delete(cache_key)
+        return
+
+    # ── 单轮进度采集
+    sys_nos = [c.invoice_sys_no for c in webhook_ok_cases]
+    invoices = {
+        inv.sys_no: inv
+        for inv in Invoice.objects.filter(sys_no__in=sys_nos).prefetch_related(
+            "pay_slots__contract_deploy_collections"
+        )
+    }
+
+    missing_invoice_count = 0
+    no_collection_count = 0
+    pending_confirm_count = 0
+    for case in webhook_ok_cases:
+        invoice = invoices.get(case.invoice_sys_no)
+        if invoice is None:
+            missing_invoice_count += 1
+            continue
+        slot = (
+            invoice.pay_slots.filter(
+                status=InvoicePaySlotStatus.MATCHED,
+                billing_mode=InvoiceBillingMode.CONTRACT,
+            )
+            .order_by("-matched_at", "-version", "-pk")
+            .first()
+        )
+        if slot is None:
+            missing_invoice_count += 1
+            continue
+        collection = (
+            slot.contract_deploy_collections.order_by("-created_at", "-pk").first()
+        )
+        if collection is None:
+            no_collection_count += 1
+            continue
+        if collection.status != ContractDeployCollectionStatus.CONFIRMED:
+            pending_confirm_count += 1
+
+    progress_key = (
+        missing_invoice_count,
+        no_collection_count,
+        pending_confirm_count,
+    )
+
+    if progress_key == (0, 0, 0):
+        _finalize_invoice_collection_verification(
+            stress, webhook_ok_cases, reason="completed"
+        )
+        cache.delete(cache_key)
+        return
+
+    if prev_progress_key is None or progress_key < prev_progress_key:
+        stall_since_ts = now_ts
+    elif now_ts - stall_since_ts > _VERIFY_INVOICE_COLLECTION_STALL_TIMEOUT:
+        logger.warning(
+            "stress.invoice_collection.stalled",
+            stress_run_id=stress_run_id,
+            missing_invoice_count=missing_invoice_count,
+            no_collection_count=no_collection_count,
+            pending_confirm_count=pending_confirm_count,
+            stall_seconds=int(now_ts - stall_since_ts),
+        )
+        _finalize_invoice_collection_verification(
+            stress, webhook_ok_cases, reason="stalled"
+        )
+        cache.delete(cache_key)
+        return
+
+    cache.set(
+        cache_key,
+        {
+            "prev_progress": list(progress_key),
+            "stall_since_ts": stall_since_ts,
+            "start_ts": start_ts,
+        },
+        timeout=_VERIFY_INVOICE_COLLECTION_CACHE_TIMEOUT,
+    )
+    verify_invoice_collection.apply_async(
+        args=[stress_run_id], countdown=_VERIFY_INVOICE_COLLECTION_INTERVAL
+    )
+
+
+def _finalize_invoice_collection_verification(
+    stress: StressRun,
+    webhook_ok_cases: list[InvoiceStressCase],
+    reason: str,
+) -> None:
+    """逐 case 校验 ContractDeployCollection 状态并打终态。"""
+    from invoices.models import Invoice
+    from invoices.models import InvoiceBillingMode
+    from invoices.models import InvoicePaySlotStatus
+    from evm.models import ContractDeployCollectionStatus
+
+    logger.info(
+        "stress.invoice_collection.finalize",
+        stress_run_id=stress.pk,
+        reason=reason,
+        cases=len(webhook_ok_cases),
+    )
+
+    for case in webhook_ok_cases:
+        invoice = (
+            Invoice.objects.filter(sys_no=case.invoice_sys_no)
+            .prefetch_related("pay_slots__contract_deploy_collections")
+            .first()
+        )
+        collection = None
+        if invoice is not None:
+            slot = (
+                invoice.pay_slots.filter(
+                    status=InvoicePaySlotStatus.MATCHED,
+                    billing_mode=InvoiceBillingMode.CONTRACT,
+                )
+                .order_by("-matched_at", "-version", "-pk")
+                .first()
+            )
+            if slot is not None:
+                collection = (
+                    slot.contract_deploy_collections.order_by(
+                        "-created_at", "-pk"
+                    ).first()
+                )
+
+        update_fields = [
+            "collection_verified",
+            "collection_hash",
+            "status",
+            "error",
+            "finished_at",
+        ]
+        now = timezone.now()
+        if collection is not None and collection.status == (
+            ContractDeployCollectionStatus.CONFIRMED
+        ):
+            case.collection_verified = True
+            case.collection_hash = (
+                collection.transfer.hash if collection.transfer_id else ""
+            )
+            case.status = InvoiceStressCaseStatus.SUCCEEDED
+            case.collection_done_at = now
+            update_fields.append("collection_done_at")
+        else:
+            case.status = InvoiceStressCaseStatus.FAILED
+            if invoice is None:
+                case.error = "未找到对应 Invoice"
+            elif collection is None:
+                case.error = "未找到归集记录 ContractDeployCollection"
+            else:
+                case.error = (
+                    f"归集未完成（status={collection.status}, reason={reason}）"
+                )
+        case.finished_at = now
         case.save(update_fields=update_fields)
         StressService.on_case_finished(case)
