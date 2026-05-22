@@ -145,10 +145,9 @@ def _update_stress_case(case, nonce, result: _VerifyResult):
     with transaction.atomic():
         case = InvoiceStressCase.objects.select_for_update().get(pk=case.pk)
 
-        if case.status not in (
-            InvoiceStressCaseStatus.PAID,
-            InvoiceStressCaseStatus.WEBHOOK_OK,
-        ):
+        if case.status != InvoiceStressCaseStatus.PAID:
+            # 只接受 PAID → 终态的单向迁移。已进入 WEBHOOK_OK / SUCCEEDED / FAILED
+            # 的 case 在重试推送时直接丢弃，避免 nonce-replay 把中间态翻转为 FAILED。
             return None
 
         case.webhook_received = True
@@ -251,10 +250,9 @@ def _handle_invoice_webhook(*, nonce, timestamp_str, signature, body_str, payloa
         logger.warning("stress.webhook.no_matching_case", sys_no=sys_no)
         return
 
-    if case.status not in (
-        InvoiceStressCaseStatus.PAID,
-        InvoiceStressCaseStatus.WEBHOOK_OK,
-    ):
+    if case.status != InvoiceStressCaseStatus.PAID:
+        # 只 PAID 可进入 webhook 验证；已 WEBHOOK_OK / SUCCEEDED / FAILED 的
+        # case 在重试推送时直接 skip，避免重复进入 _verify_webhook。
         logger.info("stress.webhook.skipped", sys_no=sys_no, status=case.status)
         return
 

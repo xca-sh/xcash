@@ -1817,3 +1817,33 @@ class HandleInvoiceWebhookBillingModeTests(TestCase):
         self.assertTrue(case.webhook_signature_ok)
         on_finish_mock.assert_not_called()
         trigger_mock.assert_called_once_with(case.stress_run_id)
+
+    def test_contract_invoice_webhook_replay_does_not_flip_to_failed(self):
+        from invoices.models import InvoiceBillingMode
+
+        case = self._build_case(billing_mode=InvoiceBillingMode.CONTRACT)
+
+        # 首次 webhook：PAID → WEBHOOK_OK
+        with (
+            patch("stress.views.StressService.on_case_finished"),
+            patch("stress.views._maybe_trigger_invoice_collection_verification"),
+        ):
+            self._post_webhook(case=case)
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InvoiceStressCaseStatus.WEBHOOK_OK)
+
+        # 再次推送同一 webhook（同 nonce）：应被丢弃，状态保持 WEBHOOK_OK
+        with (
+            patch("stress.views.StressService.on_case_finished") as on_finish_mock,
+            patch(
+                "stress.views._maybe_trigger_invoice_collection_verification"
+            ) as trigger_mock,
+        ):
+            self._post_webhook(case=case)
+
+        case.refresh_from_db()
+        self.assertEqual(case.status, InvoiceStressCaseStatus.WEBHOOK_OK)
+        self.assertIsNone(case.finished_at)
+        on_finish_mock.assert_not_called()
+        trigger_mock.assert_not_called()
