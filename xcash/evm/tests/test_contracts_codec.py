@@ -7,6 +7,8 @@ import pytest
 from eth_utils import is_checksum_address
 
 import evm.contracts_codec as codec
+from evm.constants import XCASH_DEPOSIT_FACTORY_ADDRESS
+from evm.constants import XCASH_DEPOSIT_TEMPLATE_ADDRESS
 
 FIXTURES_PATH = Path(__file__).parent / "fixtures" / "xcash_deposit_slot_fixtures.json"
 
@@ -38,6 +40,23 @@ def test_predict_xcash_deposit_slot_address_matches_foundry_fixture(fixtures):
         salt=_hex_to_bytes(fixtures["salt"]),
     )
     assert got.lower() == case["predicted"].lower()
+
+
+def test_predict_xcash_deposit_slot_address_uses_default_deployment_constants(fixtures):
+    case = fixtures["xcash_deposit_slot"]
+    expected = codec.predict_xcash_deposit_slot_address(
+        factory=XCASH_DEPOSIT_FACTORY_ADDRESS,
+        deposit_template=XCASH_DEPOSIT_TEMPLATE_ADDRESS,
+        vault=case["vault"],
+        salt=_hex_to_bytes(fixtures["salt"]),
+    )
+
+    got = codec.predict_xcash_deposit_slot_address(
+        vault=case["vault"],
+        salt=_hex_to_bytes(fixtures["salt"]),
+    )
+
+    assert got == expected
 
 
 def test_predict_xcash_deposit_slot_address_changes_with_vault(fixtures):

@@ -6,7 +6,6 @@ from itertools import chain as iter_chain
 from django.core.cache import cache
 from web3 import Web3
 
-from chains.models import Address
 from chains.models import Chain
 from chains.models import ChainType
 from currencies.models import ChainToken
@@ -26,7 +25,6 @@ class EvmWatchSet:
 
 
 EVM_WATCHED_ADDRESSES_CACHE_KEY = "evm:scanner:watched_addresses"
-EVM_SYSTEM_ADDRESSES_CACHE_KEY = "evm:scanner:system_addresses"
 EVM_CHAIN_TOKENS_CACHE_KEY_TEMPLATE = "evm:scanner:chain_tokens:{chain_id}"
 EVM_WATCH_SET_CACHE_TIMEOUT = None
 EVM_WATCH_SET_ITERATOR_CHUNK_SIZE = 1_000
@@ -38,7 +36,7 @@ def _normalize_address(address: str) -> str:
 
 
 def load_watch_set(*, chain: Chain, refresh: bool = False) -> EvmWatchSet:
-    """加载某条链上需要监听的系统地址与受支持 ERC20 合约集合。"""
+    """加载某条链上需要监听的 DepositSlot 地址与受支持 ERC20 合约集合。"""
 
     if refresh:
         watched_addresses = refresh_evm_watched_addresses()
@@ -63,32 +61,11 @@ def load_watch_set(*, chain: Chain, refresh: bool = False) -> EvmWatchSet:
     )
 
 
-def load_evm_system_addresses(*, refresh: bool = False) -> frozenset[str]:
-    """加载系统 EVM Address 集合，用于判断 tx.from 是否内部地址。"""
-    if refresh:
-        return refresh_evm_system_addresses()
-
-    system_addresses = cache.get(EVM_SYSTEM_ADDRESSES_CACHE_KEY)
-    if system_addresses is None:
-        system_addresses = refresh_evm_system_addresses()
-    return system_addresses
-
-
-def refresh_evm_system_addresses() -> frozenset[str]:
-    system_addresses = _load_evm_system_addresses_from_db()
-    cache.set(
-        EVM_SYSTEM_ADDRESSES_CACHE_KEY,
-        system_addresses,
-        timeout=EVM_WATCH_SET_CACHE_TIMEOUT,
-    )
-    return system_addresses
-
-
 def refresh_evm_watched_addresses() -> frozenset[str]:
     """重建 EVM 全局观察地址缓存。
 
-    Address/RecipientAddress 当前只区分 chain_type，不绑定具体 EVM chain；
-    因此地址观察集是 EVM 全局缓存，避免每条链扫描时重复全表加载。
+    DepositSlot 和 contract InvoicePaySlot 是当前 EVM 入账观察面。
+    系统 Address 只作为部署、归集、提现等内部交易的发起账户，不进入 scanner。
     """
 
     watched_addresses = _load_evm_watched_addresses_from_db()
@@ -128,13 +105,6 @@ def clear_evm_watched_addresses_cache() -> None:
     """清空 EVM 全局观察地址缓存。"""
 
     cache.delete(EVM_WATCHED_ADDRESSES_CACHE_KEY)
-    cache.delete(EVM_SYSTEM_ADDRESSES_CACHE_KEY)
-
-
-def clear_evm_system_addresses_cache() -> None:
-    """清空 EVM 系统地址缓存。"""
-
-    cache.delete(EVM_SYSTEM_ADDRESSES_CACHE_KEY)
 
 
 def clear_evm_chain_tokens_cache(*, chain: Chain) -> None:
@@ -148,10 +118,13 @@ def _chain_tokens_cache_key(*, chain: Chain) -> str:
 
 
 def _load_evm_watched_addresses_from_db() -> frozenset[str]:
-    system_addresses = _load_evm_system_addresses_from_db()
-    deposit_slot_addresses = DepositSlot.objects.filter(
-        chain__type=ChainType.EVM,
-    ).values_list("address", flat=True)
+    deposit_slot_addresses = (
+        DepositSlot.objects.filter(
+            chain__type=ChainType.EVM,
+        )
+        .values_list("address", flat=True)
+        .iterator(chunk_size=EVM_WATCH_SET_ITERATOR_CHUNK_SIZE)
+    )
     contract_pay_slot_addresses = (
         InvoicePaySlot.objects.filter(
             chain__type=ChainType.EVM,
@@ -165,21 +138,8 @@ def _load_evm_watched_addresses_from_db() -> frozenset[str]:
 
     return frozenset(
         _normalize_address(address)
-        for address in iter_chain(
-            system_addresses,
-            deposit_slot_addresses,
-            contract_pay_slot_addresses,
-        )
+        for address in iter_chain(deposit_slot_addresses, contract_pay_slot_addresses)
     )
-
-
-def _load_evm_system_addresses_from_db() -> frozenset[str]:
-    addresses = (
-        Address.objects.filter(chain_type=ChainType.EVM)
-        .values_list("address", flat=True)
-        .iterator(chunk_size=EVM_WATCH_SET_ITERATOR_CHUNK_SIZE)
-    )
-    return frozenset(_normalize_address(address) for address in addresses)
 
 
 def _load_evm_chain_tokens_from_db(*, chain: Chain) -> dict[str, ChainToken]:

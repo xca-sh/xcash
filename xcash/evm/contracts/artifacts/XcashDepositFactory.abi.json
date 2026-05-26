@@ -134,11 +134,6 @@
   },
   {
     "type": "error",
-    "name": "ZeroDepositTemplate",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "ZeroVault",
     "inputs": []
   }

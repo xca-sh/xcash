@@ -13,6 +13,7 @@ from deposits.exceptions import DepositStatusError
 from deposits.models import Deposit
 from deposits.models import DepositStatus
 from evm.models import DepositSlot
+from evm.models import DepositSlotUsage
 from webhooks.service import WebhookService
 
 logger = structlog.get_logger()
@@ -28,7 +29,7 @@ class DepositService:
         if confirmed is None:
             confirmed = deposit.status == DepositStatus.COMPLETED
 
-        customer = getattr(deposit, "customer", None)
+        customer = deposit.customer
         return {
             "type": "deposit",
             "data": {
@@ -75,7 +76,7 @@ class DepositService:
                 project=deposit.customer.project, payload=payload
             )
         except Exception:
-            logger.exception("发送充币 webhook 通知失败", deposit_id=deposit.pk)
+            logger.exception("创建充币 webhook 通知失败", deposit_id=deposit.pk)
 
     @classmethod
     def _pre_notify(cls, deposit: Deposit) -> None:
@@ -101,6 +102,7 @@ class DepositService:
             customer = DepositSlot.objects.get(
                 chain=transfer.chain,
                 address=transfer.to_address,
+                usage=DepositSlotUsage.DEPOSIT,
             ).customer
         except DepositSlot.DoesNotExist:
             return False

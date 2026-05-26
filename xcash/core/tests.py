@@ -19,7 +19,6 @@ from web3 import Web3
 
 from chains.models import AddressUsage
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from chains.models import Chain
 from chains.models import ChainType
@@ -32,8 +31,9 @@ from chains.tasks import confirm_transfer
 from chains.test_signer import build_test_remote_signer_backend
 from core.default_data import ensure_base_currencies
 from core.default_data import ensure_local_chains
-from core.models import PLATFORM_SETTINGS_CACHE_KEY
-from core.models import PlatformSettings
+from core.models import SYSTEM_SETTINGS_CACHE_KEY
+from core.models import SystemSettings
+from core.models import SystemWallet
 from core.runtime_settings import get_admin_sensitive_action_otp_max_age_seconds
 from core.runtime_settings import get_alerts_repeat_interval_minutes
 from core.runtime_settings import get_webhook_delivery_breaker_threshold
@@ -75,14 +75,14 @@ def tearDownModule():
     ADMIN_SENSITIVE_ACTION_OTP_MAX_AGE_SECONDS=900,
     ALERTS_REPEAT_INTERVAL_MINUTES=30,
 )
-class PlatformSettingsRuntimeTests(TestCase):
+class SystemSettingsRuntimeTests(TestCase):
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
     def test_runtime_settings_use_database_override_before_settings_fallback(self):
-        # 平台运行参数中心存在记录时，业务读取应优先采用数据库值，而不是继续回退到 settings 常量。
-        PlatformSettings.objects.create(
+        # 系统运行参数中心存在记录时，业务读取应优先采用数据库值，而不是继续回退到 settings 常量。
+        SystemSettings.objects.create(
             admin_sensitive_action_otp_max_age_seconds=480,
             alerts_repeat_interval_minutes=7,
             webhook_delivery_breaker_threshold=12,
@@ -95,6 +95,22 @@ class PlatformSettingsRuntimeTests(TestCase):
         self.assertEqual(get_webhook_delivery_breaker_threshold(), 12)
         self.assertEqual(get_webhook_delivery_max_retries(), 9)
         self.assertEqual(get_webhook_delivery_max_backoff_seconds(), 45)
+
+
+class SystemWalletTests(TestCase):
+    def test_get_current_creates_single_system_wallet(self):
+        system_wallet = SystemWallet.get_current()
+
+        self.assertIsNotNone(system_wallet.wallet_id)
+        self.assertEqual(SystemWallet.objects.count(), 1)
+        self.assertEqual(Wallet.objects.count(), 1)
+
+        same_system_wallet = SystemWallet.get_current()
+
+        self.assertEqual(same_system_wallet.pk, system_wallet.pk)
+        self.assertEqual(same_system_wallet.wallet_id, system_wallet.wallet_id)
+        self.assertEqual(SystemWallet.objects.count(), 1)
+        self.assertEqual(Wallet.objects.count(), 1)
 
 
 class LocalChainBootstrapCommandTests(TestCase):
@@ -403,7 +419,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
         )
         addr = wallet.get_address(
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
         )
         recipient = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000009"
@@ -414,7 +430,7 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "9" * 64,
             stage=TxTaskStage.PENDING_CONFIRM,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         transfer = Transfer.objects.create(
             chain=chain,
@@ -460,4 +476,4 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
         self.assertEqual(withdrawal.status, WithdrawalStatus.PENDING)
         self.assertIsNone(withdrawal.transfer_id)
         self.assertEqual(tx_task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(tx_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(tx_task.success)

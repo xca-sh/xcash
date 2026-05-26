@@ -73,9 +73,6 @@ class ErrorCode(Enum):
     CONTRACT_BILLING_EVM_ONLY = ErrorInfo(
         "5014", _("合约账单仅支持 EVM 链"), 400
     )
-    CONTRACT_BILLING_FACTORY_NOT_CONFIGURED = ErrorInfo(
-        "5015", _("合约账单要求该链已配置 DepositSlot Factory 地址"), 400
-    )
     DIFFER_BILLING_TRON_ONLY = ErrorInfo(
         "5016", _("差额账单仅支持 Tron 链"), 400
     )

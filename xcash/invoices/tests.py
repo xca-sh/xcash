@@ -30,6 +30,8 @@ from common.exceptions import APIError
 from currencies.models import ChainToken
 from currencies.models import Crypto
 from currencies.models import Fiat
+from evm.models import DepositSlot
+from evm.models import DepositSlotUsage
 from invoices.exceptions import InvoiceAllocationError
 from invoices.exceptions import InvoiceStatusError
 from invoices.models import Invoice
@@ -43,8 +45,8 @@ from invoices.service import InvoiceService
 from invoices.tasks import check_expired
 from invoices.tasks import fallback_invoice_expired
 from invoices.viewsets import InvoiceViewSet
+from projects.models import DifferRecipientAddress
 from projects.models import Project
-from projects.models import RecipientAddress
 from users.models import User
 
 
@@ -90,7 +92,7 @@ class InvoiceTestMixin:
             self.recipient_address = Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000A1"
             )
-            RecipientAddress.objects.create(
+            DifferRecipientAddress.objects.create(
                 name="收款地址-test",
                 project=self.project,
                 chain_type=ChainType.EVM,
@@ -145,7 +147,7 @@ class InvoiceInitializationTests(TestCase):
                 name="RemoteSignerInvoice",
                 wallet=remote_wallet,
             )
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="RemoteSigner 收款地址",
             project=project,
             chain_type=ChainType.EVM,
@@ -248,7 +250,7 @@ class InvoicePaySlotTests(TestCase):
             active=True,
         )
         Fiat.objects.get_or_create(code="USD")
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="收款地址-1",
             project=self.project,
             chain_type=ChainType.EVM,
@@ -516,7 +518,7 @@ class InvoicePaySlotConcurrencyTests(TransactionTestCase):
             active=True,
         )
         Fiat.objects.get_or_create(code="USD")
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="收款地址-1",
             project=self.project,
             chain_type=ChainType.EVM,
@@ -673,7 +675,7 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
             address="TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8",
             decimals=6,
         )
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="tron-pay",
             project=project,
             chain_type=ChainType.TRON,
@@ -749,7 +751,7 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
             address="0x0000000000000000000000000000000000009913",
             decimals=6,
         )
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="evm-pay",
             project=project,
             chain_type=ChainType.EVM,
@@ -823,7 +825,7 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
             address="0x0000000000000000000000000000000000009922",
             decimals=6,
         )
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="evm-pay",
             project=project,
             chain_type=ChainType.EVM,
@@ -988,7 +990,7 @@ class InvoiceExpiredMatchTests(TestCase):
         self.recipient_address = Web3.to_checksum_address(
             "0x00000000000000000000000000000000000000E1"
         )
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="收款地址-expired",
             project=self.project,
             chain_type=ChainType.EVM,
@@ -1087,7 +1089,7 @@ class FallbackInvoiceExpiredTests(TestCase):
             active=True,
         )
         Fiat.objects.get_or_create(code="USD")
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="收款地址-fallback",
             project=self.project,
             chain_type=ChainType.EVM,
@@ -1168,7 +1170,7 @@ class CheckExpiredAtomicityTests(TransactionTestCase):
             active=True,
         )
         Fiat.objects.get_or_create(code="USD")
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="收款地址-atomic",
             project=self.project,
             chain_type=ChainType.EVM,
@@ -1564,6 +1566,381 @@ class InvoiceBillingModeFieldTest(TestCase, InvoiceTestMixin):
         self.assertTrue(field.null)
         self.assertTrue(field.blank)
 
+    def test_contract_slot_uses_project_vault(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F01"
+        )
+        self.project.vault = vault_address
+        self.project.save(update_fields=["vault"])
+        invoice = self.create_test_invoice(
+            out_no="contract-vault-source",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+
+        pay_address, recipient_address, pay_amount = invoice._allocate_contract_slot(
+            self.crypto,
+            self.chain,
+            Decimal("10"),
+        )
+        slot = DepositSlot.objects.get(
+            project=self.project,
+            usage=DepositSlotUsage.INVOICE,
+            invoice_index=0,
+            chain=self.chain,
+        )
+
+        self.assertEqual(pay_address, slot.address)
+        self.assertEqual(recipient_address, vault_address)
+        self.assertEqual(pay_amount, Decimal("10"))
+
+    def test_contract_slot_creates_invoice_deposit_slot_with_index_without_customer(
+        self,
+    ):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F02"
+        )
+        self.project.vault = vault_address
+        self.project.save(update_fields=["vault"])
+        invoice = self.create_test_invoice(
+            out_no="contract-slot-row",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+
+        with self.captureOnCommitCallbacks(execute=False):
+            pay_address, recipient_address, pay_amount = (
+                invoice._allocate_contract_slot(
+                    self.crypto,
+                    self.chain,
+                    Decimal("10"),
+                )
+            )
+
+        slot = DepositSlot.objects.get(
+            project=self.project,
+            usage=DepositSlotUsage.INVOICE,
+            invoice_index=0,
+            chain=self.chain,
+        )
+        self.assertIsNone(slot.customer_id)
+        self.assertEqual(slot.address, pay_address)
+        self.assertEqual(slot.vault_address, recipient_address)
+        self.assertEqual(pay_amount, Decimal("10"))
+
+    def test_contract_slot_selection_returns_invoice_deposit_slot(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F12"
+        )
+        self.project.vault = vault_address
+        self.project.save(update_fields=["vault"])
+        invoice = self.create_test_invoice(
+            out_no="contract-slot-object",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+
+        with self.captureOnCommitCallbacks(execute=False):
+            slot = invoice._get_contract_deposit_slot(
+                crypto=self.crypto,
+                chain=self.chain,
+                crypto_amount=Decimal("10"),
+            )
+
+        self.assertEqual(slot.project, self.project)
+        self.assertEqual(slot.chain, self.chain)
+        self.assertEqual(slot.usage, DepositSlotUsage.INVOICE)
+        self.assertEqual(slot.invoice_index, 0)
+        self.assertIsNone(slot.customer_id)
+        self.assertEqual(slot.vault_address, vault_address)
+
+    def test_contract_slot_reuses_existing_slot_when_payment_does_not_overlap(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F03"
+        )
+        self.project.vault = vault_address
+        self.project.save(update_fields=["vault"])
+        first_invoice = self.create_test_invoice(
+            out_no="contract-reuse-first",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+        first_pay_address, first_recipient_address, first_pay_amount = (
+            first_invoice._allocate_contract_slot(
+                self.crypto,
+                self.chain,
+                Decimal("10"),
+            )
+        )
+        InvoicePaySlot.objects.create(
+            invoice=first_invoice,
+            project=self.project,
+            version=1,
+            crypto=self.crypto,
+            chain=self.chain,
+            pay_address=first_pay_address,
+            pay_amount=first_pay_amount,
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            recipient_address=first_recipient_address,
+            status=InvoicePaySlotStatus.ACTIVE,
+        )
+        second_invoice = self.create_test_invoice(
+            out_no="contract-reuse-second",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+
+        second_pay_address, _, _ = second_invoice._allocate_contract_slot(
+            self.crypto,
+            self.chain,
+            Decimal("10"),
+        )
+
+        self.assertEqual(second_pay_address, first_pay_address)
+        self.assertEqual(
+            DepositSlot.objects.filter(
+                project=self.project,
+                usage=DepositSlotUsage.INVOICE,
+                chain=self.chain,
+            ).count(),
+            1,
+        )
+
+    def test_contract_slot_reuses_existing_slot_when_amount_differs(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F13"
+        )
+        self.project.vault = vault_address
+        self.project.save(update_fields=["vault"])
+        first_invoice = self.create_test_invoice(
+            out_no="contract-reuse-amount-first",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+        first_pay_address, first_recipient_address, first_pay_amount = (
+            first_invoice._allocate_contract_slot(
+                self.crypto,
+                self.chain,
+                Decimal("10"),
+            )
+        )
+        InvoicePaySlot.objects.create(
+            invoice=first_invoice,
+            project=self.project,
+            version=1,
+            crypto=self.crypto,
+            chain=self.chain,
+            pay_address=first_pay_address,
+            pay_amount=first_pay_amount,
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            recipient_address=first_recipient_address,
+            status=InvoicePaySlotStatus.ACTIVE,
+        )
+        second_invoice = self.create_test_invoice(
+            out_no="contract-reuse-amount-second",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+
+        second_pay_address, _, _ = second_invoice._allocate_contract_slot(
+            self.crypto,
+            self.chain,
+            Decimal("10.00000001"),
+        )
+
+        self.assertEqual(second_pay_address, first_pay_address)
+        self.assertEqual(
+            DepositSlot.objects.filter(
+                project=self.project,
+                usage=DepositSlotUsage.INVOICE,
+                chain=self.chain,
+            ).count(),
+            1,
+        )
+
+    def test_contract_slot_reuses_existing_slot_when_crypto_differs(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F14"
+        )
+        self.project.vault = vault_address
+        self.project.save(update_fields=["vault"])
+        other_crypto = Crypto.objects.create(
+            name="USD Coin Contract",
+            symbol="USDCC",
+            prices={"USD": "1"},
+            coingecko_id="usdc-contract-slot",
+        )
+        first_invoice = self.create_test_invoice(
+            out_no="contract-reuse-crypto-first",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+        first_pay_address, first_recipient_address, first_pay_amount = (
+            first_invoice._allocate_contract_slot(
+                self.crypto,
+                self.chain,
+                Decimal("10"),
+            )
+        )
+        InvoicePaySlot.objects.create(
+            invoice=first_invoice,
+            project=self.project,
+            version=1,
+            crypto=self.crypto,
+            chain=self.chain,
+            pay_address=first_pay_address,
+            pay_amount=first_pay_amount,
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            recipient_address=first_recipient_address,
+            status=InvoicePaySlotStatus.ACTIVE,
+        )
+        second_invoice = self.create_test_invoice(
+            out_no="contract-reuse-crypto-second",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+
+        second_pay_address, _, _ = second_invoice._allocate_contract_slot(
+            other_crypto,
+            self.chain,
+            Decimal("10"),
+        )
+
+        self.assertEqual(second_pay_address, first_pay_address)
+        self.assertEqual(
+            DepositSlot.objects.filter(
+                project=self.project,
+                usage=DepositSlotUsage.INVOICE,
+                chain=self.chain,
+            ).count(),
+            1,
+        )
+
+    def test_contract_slot_creates_next_index_when_existing_payment_overlaps(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F04"
+        )
+        self.project.vault = vault_address
+        self.project.save(update_fields=["vault"])
+        first_invoice = self.create_test_invoice(
+            out_no="contract-overlap-first",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+        first_pay_address, first_recipient_address, first_pay_amount = (
+            first_invoice._allocate_contract_slot(
+                self.crypto,
+                self.chain,
+                Decimal("10"),
+            )
+        )
+        InvoicePaySlot.objects.create(
+            invoice=first_invoice,
+            project=self.project,
+            version=1,
+            crypto=self.crypto,
+            chain=self.chain,
+            pay_address=first_pay_address,
+            pay_amount=first_pay_amount,
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            recipient_address=first_recipient_address,
+            status=InvoicePaySlotStatus.ACTIVE,
+        )
+        second_invoice = self.create_test_invoice(
+            out_no="contract-overlap-second",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+
+        second_pay_address, _, _ = second_invoice._allocate_contract_slot(
+            self.crypto,
+            self.chain,
+            Decimal("10"),
+        )
+
+        self.assertNotEqual(second_pay_address, first_pay_address)
+        second_slot = DepositSlot.objects.get(
+            project=self.project,
+            usage=DepositSlotUsage.INVOICE,
+            chain=self.chain,
+            invoice_index=1,
+        )
+        self.assertEqual(second_pay_address, second_slot.address)
+        self.assertEqual(
+            DepositSlot.objects.filter(
+                project=self.project,
+                usage=DepositSlotUsage.INVOICE,
+                chain=self.chain,
+            ).count(),
+            2,
+        )
+
+    def test_select_method_contract_retries_and_reselects_slot_after_integrity_error(
+        self,
+    ):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F15"
+        )
+        self.project.vault = vault_address
+        self.project.save(update_fields=["vault"])
+        invoice = self.create_test_invoice(
+            out_no="contract-retry-reselect",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+        with self.captureOnCommitCallbacks(execute=False):
+            DepositSlot.get_invoice_address(
+                project=self.project,
+                chain=self.chain,
+                invoice_index=0,
+            )
+            DepositSlot.get_invoice_address(
+                project=self.project,
+                chain=self.chain,
+                invoice_index=1,
+            )
+        slot0 = DepositSlot.objects.get(
+            project=self.project,
+            chain=self.chain,
+            usage=DepositSlotUsage.INVOICE,
+            invoice_index=0,
+        )
+        slot1 = DepositSlot.objects.get(
+            project=self.project,
+            chain=self.chain,
+            usage=DepositSlotUsage.INVOICE,
+            invoice_index=1,
+        )
+        original_create = InvoicePaySlot.objects.create
+
+        def create_with_first_conflict(*args, **kwargs):
+            if create_with_first_conflict.calls == 0:
+                create_with_first_conflict.calls += 1
+                raise IntegrityError("simulated active pay slot conflict")
+            create_with_first_conflict.calls += 1
+            return original_create(*args, **kwargs)
+
+        create_with_first_conflict.calls = 0
+
+        with (
+            patch.object(
+                invoice,
+                "_get_contract_deposit_slot",
+                side_effect=[slot0, slot1],
+            ) as slot_selector,
+            patch.object(
+                InvoicePaySlot.objects,
+                "create",
+                side_effect=create_with_first_conflict,
+            ) as create_mock,
+        ):
+            invoice.select_method(self.crypto, self.chain)
+
+        invoice.refresh_from_db()
+        active_slot = invoice.pay_slots.get(status=InvoicePaySlotStatus.ACTIVE)
+        self.assertEqual(slot_selector.call_count, 2)
+        self.assertEqual(create_mock.call_count, 2)
+        self.assertEqual(active_slot.pay_address, slot1.address)
+        self.assertEqual(invoice.pay_address, slot1.address)
+
+    def test_contract_slot_rejects_project_without_vault(self):
+        invoice = self.create_test_invoice(
+            out_no="contract-vault-missing",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+
+        with self.assertRaises(Invoice.InvoiceAllocationError):
+            invoice._allocate_contract_slot(self.crypto, self.chain, Decimal("10"))
+
 
 class TryMatchContractInvoiceTest(TestCase, InvoiceTestMixin):
     def setUp(self):
@@ -1628,6 +2005,23 @@ class TryMatchContractInvoiceTest(TestCase, InvoiceTestMixin):
         matched = InvoiceService.try_match_invoice(transfer)
 
         self.assertTrue(matched)
+
+    @patch("evm.models.DepositSlot.schedule_collect_for_invoice")
+    @patch("invoices.service.send_internal_callback")
+    @patch("invoices.service.WebhookService.create_event")
+    def test_confirm_contract_invoice_schedules_erc20_slot_collection(
+        self,
+        _create_event_mock,
+        _send_internal_callback_mock,
+        schedule_collect_mock,
+    ):
+        transfer = self._make_transfer(Decimal("100"))
+        InvoiceService.try_match_invoice(transfer)
+        self.invoice.refresh_from_db()
+
+        InvoiceService.confirm_invoice(self.invoice)
+
+        schedule_collect_mock.assert_called_once_with(self.invoice.pk)
 
     def test_does_not_match_when_transfer_amount_less_than_pay_amount(self):
         transfer = self._make_transfer(Decimal("99.99"))

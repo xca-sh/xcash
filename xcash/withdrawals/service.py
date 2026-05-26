@@ -22,7 +22,7 @@ from common.internal_callback import send_internal_callback
 from common.utils.math import format_decimal_stripped
 from users.otp import validate_admin_approval_context
 from webhooks.service import WebhookService
-from withdrawals.models import VaultFunding
+from withdrawals.models import HotWalletFunding
 from withdrawals.models import Withdrawal
 from withdrawals.models import WithdrawalReviewLog
 from withdrawals.models import WithdrawalStatus
@@ -341,7 +341,7 @@ class WithdrawalService:
 
         vault_address = project.wallet.get_address(
             chain_type=chain.type,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
         )
         adapter = AdapterFactory.get_adapter(chain.type)
         verify_fn = cls._make_balance_verify_fn(
@@ -769,19 +769,19 @@ class WithdrawalService:
         cls.notify_status_changed(withdrawal)
 
     @staticmethod
-    def try_match_withdrawal_funding(
+    def try_record_hot_wallet_funding(
         transfer: "Transfer",
     ) -> bool:
         from django.db import IntegrityError
 
         try:
-            vault = AddressService.get_by_address(
+            hot_wallet = AddressService.get_by_address(
                 address=transfer.to_address,
                 chain_type=transfer.chain.type,
-                usage=AddressUsage.Vault,
+                usage=AddressUsage.HotWallet,
             )
-            VaultFunding.objects.create(
-                project=vault.wallet.project,
+            HotWalletFunding.objects.create(
+                project=hot_wallet.wallet.project,
                 transfer=transfer,
             )
             transfer.type = TransferType.Prefunding

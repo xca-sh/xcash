@@ -309,8 +309,8 @@ def create_deposit_context(*, native: bool = False):
     vault = Address.objects.create(
         wallet=wallet,
         chain_type=ChainType.EVM,
-        usage=AddressUsage.Vault,
-        bip44_account=Wallet.get_bip44_account(AddressUsage.Vault),
+        usage=AddressUsage.HotWallet,
+        bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
         address_index=0,
         address=Web3.to_checksum_address("0x0000000000000000000000000000000000000d01"),
     )

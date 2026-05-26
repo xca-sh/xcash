@@ -7,7 +7,6 @@ from web3.exceptions import TransactionNotFound
 from chains.adapters import TxCheckStatus
 from chains.models import Chain
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from common.time import ago
 from evm.constants import EVM_PENDING_REBROADCAST_TIMEOUT
@@ -16,8 +15,8 @@ from evm.models import EvmTxTask
 logger = structlog.get_logger()
 
 
-class InternalEvmTaskCoordinator:
-    """协调内部 EVM 任务的链上终局状态。
+class EvmTaskPoller:
+    """轮询内部 EVM 任务的链上终局状态。
 
     对 PENDING_CHAIN 超过阈值仍未终局的任务，遍历所有历史 tx_hash 查询 receipt：
     - 查到 receipt (status=1) -> 构建 ObservedTransferPayload 喂回扫描器管线
@@ -26,13 +25,13 @@ class InternalEvmTaskCoordinator:
     """
 
     @classmethod
-    def reconcile_chain(cls, *, chain: Chain) -> None:
+    def poll_chain(cls, *, chain: Chain) -> None:
         queryset = (
             EvmTxTask.objects.select_related("base_task", "address")
             .filter(
                 chain=chain,
                 base_task__stage=TxTaskStage.PENDING_CHAIN,
-                base_task__result=TxTaskResult.UNKNOWN,
+                base_task__success__isnull=True,
                 last_attempt_at__lt=ago(seconds=EVM_PENDING_REBROADCAST_TIMEOUT),
             )
             .order_by("address_id", "nonce", "created_at")
@@ -45,7 +44,7 @@ class InternalEvmTaskCoordinator:
             )
             if isinstance(status, Exception):
                 logger.warning(
-                    "EVM 任务超时收口查链失败",
+                    "EVM 任务轮询查链失败",
                     chain=chain.code,
                     address=evm_task.address.address,
                     nonce=evm_task.nonce,
@@ -64,7 +63,7 @@ class InternalEvmTaskCoordinator:
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception(
-                        "协调器观察确认交易失败",
+                        "轮询器观察确认交易失败",
                         chain=chain.code,
                         address=evm_task.address.address,
                         nonce=evm_task.nonce,
@@ -76,7 +75,7 @@ class InternalEvmTaskCoordinator:
                     cls._finalize_failed_task(evm_task=evm_task)
                 except Exception:  # noqa: BLE001
                     logger.exception(
-                        "协调器收口失败交易异常",
+                        "轮询器收口失败交易异常",
                         chain=chain.code,
                         address=evm_task.address.address,
                         nonce=evm_task.nonce,
@@ -139,7 +138,7 @@ class InternalEvmTaskCoordinator:
         tx_hash: str,
         receipt: dict,
     ) -> None:
-        """协调器兜底命中 receipt 时，把交易交给内部处理器统一推进。"""
+        """轮询命中 receipt 时，把交易交给内部处理器统一推进。"""
         from evm.internal_tx.processor import process_internal_transaction
 
         chain = evm_task.chain
@@ -149,14 +148,14 @@ class InternalEvmTaskCoordinator:
     @staticmethod
     @db_transaction.atomic
     def _finalize_failed_task(*, evm_task: EvmTxTask) -> bool:
-        from evm.internal_tx.handlers import get_handler
+        from evm.internal_tx.routing import get_handler
 
         locked_task = EvmTxTask.objects.select_for_update().get(pk=evm_task.pk)
 
         base_task = locked_task.base_task
         if (
             base_task.stage != TxTaskStage.PENDING_CHAIN
-            or base_task.result != TxTaskResult.UNKNOWN
+            or base_task.success is not None
         ):
             return False
 
@@ -171,7 +170,7 @@ class InternalEvmTaskCoordinator:
             handler = get_handler(base_task.tx_type)
         except KeyError:
             logger.warning(
-                "coordinator 收口失败但 handler 未注册",
+                "poller 收口失败但 handler 未注册",
                 tx_type=base_task.tx_type,
                 base_task_id=base_task.pk,
             )

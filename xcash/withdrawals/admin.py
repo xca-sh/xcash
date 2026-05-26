@@ -21,7 +21,7 @@ from users.otp import record_admin_access
 from users.otp import refresh_admin_otp_verification
 from users.otp import set_pending_admin_otp
 from users.otp import verify_otp_token
-from withdrawals.models import VaultFunding
+from withdrawals.models import HotWalletFunding
 from withdrawals.models import Withdrawal
 from withdrawals.models import WithdrawalReviewLog
 from withdrawals.models import WithdrawalStatus
@@ -77,8 +77,8 @@ class WithdrawalReviewLogInline(admin.TabularInline):
         return False
 
 
-@admin.register(VaultFunding)
-class VaultFundingAdmin(ReadOnlyModelAdmin):
+@admin.register(HotWalletFunding)
+class HotWalletFundingAdmin(ReadOnlyModelAdmin):
     list_display = (
         "project",
         "transfer_chain",

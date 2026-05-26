@@ -6,7 +6,7 @@ from common.fields import HashField
 from common.fields import SysNoField
 
 
-class VaultFunding(models.Model):
+class HotWalletFunding(models.Model):
     project = models.ForeignKey(
         "projects.Project",
         on_delete=models.PROTECT,
@@ -21,8 +21,8 @@ class VaultFunding(models.Model):
     )
 
     class Meta:
-        verbose_name = _("金库注资")
-        verbose_name_plural = _("金库注资")
+        verbose_name = _("热钱包注资")
+        verbose_name_plural = _("热钱包注资")
 
     def __str__(self):
         return f"{self.project_id}:{self.transfer_id}"

@@ -1,17 +1,19 @@
-"""core app 仅保留后台看板、系统初始化入口与平台级运行参数。"""
+"""core app 仅保留后台看板、系统初始化入口与系统级运行对象。"""
 
 from decimal import Decimal
 
 from django.core.cache import cache
 from django.core.validators import MinValueValidator
+from django.db import IntegrityError
 from django.db import models
+from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 
-PLATFORM_SETTINGS_CACHE_KEY = "core:platform_settings:singleton"
+SYSTEM_SETTINGS_CACHE_KEY = "core:system_settings:singleton"
 
 
-class PlatformSettings(models.Model):
-    """平台级运行参数中心。
+class SystemSettings(models.Model):
+    """系统级运行参数中心。
 
     第一性原则：只有“上线后可能调整、且不属于密钥/部署机密”的运行参数，
     才应该进入后台由超管维护。
@@ -130,7 +132,7 @@ class PlatformSettings(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="created_platform_settings",
+        related_name="created_system_settings",
         verbose_name=_("创建人"),
     )
     updated_by = models.ForeignKey(
@@ -138,24 +140,85 @@ class PlatformSettings(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="updated_platform_settings",
+        related_name="updated_system_settings",
         verbose_name=_("更新人"),
     )
     created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
     updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
 
     class Meta:
-        verbose_name = _("平台运行参数")
+        verbose_name = _("系统运行参数")
         verbose_name_plural = verbose_name
 
     def __str__(self) -> str:
-        return str(_("平台运行参数"))
+        return str(_("系统运行参数"))
 
     def save(self, *args, **kwargs):
         # 强制收口为单例记录，避免后台误建第二份配置导致读取口径分叉。
         self.singleton_key = 1
         super().save(*args, **kwargs)
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
 
     def delete(self, *args, **kwargs):
-        raise RuntimeError("平台运行参数不允许删除")
+        raise RuntimeError("系统运行参数不允许删除")
+
+
+class SystemWallet(models.Model):
+    """全平台唯一系统级热钱包归属声明。
+
+    Wallet 仍然只负责 signer 钱包引用和地址派生；SystemWallet 只表达
+    “系统级热钱包业务归属”，避免和项目级热钱包混淆。
+    """
+
+    singleton_key = models.PositiveSmallIntegerField(
+        _("单例键"),
+        default=1,
+        unique=True,
+        editable=False,
+    )
+    wallet = models.OneToOneField(
+        "chains.Wallet",
+        on_delete=models.PROTECT,
+        related_name="system_wallet",
+        verbose_name=_("系统级热钱包"),
+        help_text=_("用于平台基础设施交易，例如统一部署 DepositSlot 合约。"),
+    )
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("系统级热钱包")
+        verbose_name_plural = verbose_name
+
+    def __str__(self) -> str:
+        return str(_("系统级热钱包"))
+
+    def save(self, *args, **kwargs):
+        # 强制收口为单例记录，避免系统级热钱包入口分叉。
+        self.singleton_key = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_current(cls) -> "SystemWallet":
+        system_wallet = cls.objects.select_related("wallet").order_by("pk").first()
+        if system_wallet is not None:
+            return system_wallet
+
+        from chains.models import Wallet
+        from chains.signer import SignerServiceError
+        from chains.signer import get_signer_backend
+
+        try:
+            with transaction.atomic():
+                wallet = Wallet.objects.create()
+                system_wallet = cls.objects.create(wallet=wallet)
+                try:
+                    get_signer_backend().create_wallet(wallet_id=wallet.pk)
+                except SignerServiceError as exc:
+                    raise RuntimeError("signer 服务不可用，无法创建系统级热钱包") from exc
+                return system_wallet
+        except IntegrityError:
+            return cls.objects.select_related("wallet").get(singleton_key=1)
+
+    def delete(self, *args, **kwargs):
+        raise RuntimeError("系统级热钱包不允许删除")

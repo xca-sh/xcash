@@ -68,5 +68,5 @@ class InternalDepositViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet)
             raise APIError(ErrorCode.INVALID_CHAIN)
 
         customer, _ = Customer.objects.get_or_create(project=project, uid=uid)
-        deposit_address = DepositSlot.get_address(chain=chain, customer=customer)
+        deposit_address = DepositSlot.get_deposit_address(chain=chain, customer=customer)
         return Response({"deposit_address": deposit_address})

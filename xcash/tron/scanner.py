@@ -59,7 +59,7 @@ class TronUsdtPaymentScanner:
             )
             .get()
         )
-        # filter_addresses 命中 Redis 缓存，RecipientAddress 变更走 tron/signals.py 失效；
+        # filter_addresses 命中 Redis 缓存，DifferRecipientAddress 变更走 tron/signals.py 失效；
         # 旧的"每轮 DB 全表读"模式对单 chain_type 而非单 chain pk 缓存，多 Tron 链共享一份。
         filter_addresses = load_tron_filter_addresses()
         cursor = cls._get_or_create_cursor(
@@ -295,9 +295,7 @@ class TronUsdtPaymentScanner:
         if not contract_address:
             return None
         try:
-            normalized_contract_address = cls._event_address_to_base58(
-                contract_address
-            )
+            normalized_contract_address = cls._event_address_to_base58(contract_address)
         except ValueError:
             return None
         if normalized_contract_address != usdt_mapping.address:
@@ -391,8 +389,6 @@ class TronUsdtPaymentScanner:
         if len(normalized) == 40:
             normalized = f"{TronAddressCodec.ADDRESS_HEX_PREFIX}{normalized}"
         elif len(normalized) == 64:
-            normalized = (
-                f"{TronAddressCodec.ADDRESS_HEX_PREFIX}{normalized[-40:]}"
-            )
+            normalized = f"{TronAddressCodec.ADDRESS_HEX_PREFIX}{normalized[-40:]}"
 
         return TronAddressCodec.hex41_to_base58(normalized)

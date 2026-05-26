@@ -90,9 +90,9 @@ SIDEBAR_UNFOLD = {
                         "link": reverse_lazy("admin:index"),
                     },
                     {
-                        "title": _("平台参数"),
+                        "title": _("系统参数"),
                         "icon": "tune",
-                        "link": reverse_lazy("admin:core_platformsettings_changelist"),
+                        "link": reverse_lazy("admin:core_systemsettings_changelist"),
                     },
                     {
                         "title": _("用户管理"),

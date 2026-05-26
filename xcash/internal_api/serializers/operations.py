@@ -1,15 +1,15 @@
 from rest_framework import serializers
 
 from chains.serializers import TransferSerializer
-from withdrawals.models import VaultFunding
+from withdrawals.models import HotWalletFunding
 from withdrawals.models import WithdrawalReviewLog
 
 
-class VaultFundingSerializer(serializers.ModelSerializer):
+class HotWalletFundingSerializer(serializers.ModelSerializer):
     tx = TransferSerializer(source="transfer", read_only=True)
 
     class Meta:
-        model = VaultFunding
+        model = HotWalletFunding
         fields = [
             "id",
             "tx",

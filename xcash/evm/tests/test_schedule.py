@@ -7,7 +7,6 @@ from chains.models import Address
 from chains.models import AddressChainState
 from chains.models import AddressUsage
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from chains.models import TxTaskType
 from chains.models import Chain
@@ -42,8 +41,8 @@ class EvmTxTaskScheduleTests(TestCase):
         self.address = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
-            bip44_account=Wallet.get_bip44_account(AddressUsage.Vault),
+            usage=AddressUsage.HotWallet,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
             address_index=0,
             address=Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000a01"
@@ -93,7 +92,7 @@ class EvmTxTaskScheduleTests(TestCase):
         self.assertEqual(base_task.address, intent.address)
         self.assertEqual(base_task.tx_type, intent.tx_type)
         self.assertEqual(base_task.stage, TxTaskStage.QUEUED)
-        self.assertEqual(base_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(base_task.success)
 
         state = AddressChainState.objects.get(address=self.address, chain=self.chain)
         self.assertEqual(state.address, self.address)

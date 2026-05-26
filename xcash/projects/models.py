@@ -11,6 +11,7 @@ from chains.models import Chain
 from chains.models import ChainType
 from common.consts import UPPER_ALPHABET
 from common.fields import AddressField
+from common.fields import EvmAddressField
 
 
 class Project(models.Model):
@@ -28,7 +29,12 @@ class Project(models.Model):
         help_text=_("对外作为商户名展示"),
         unique=True,
     )
-    wallet = models.OneToOneField("chains.Wallet", on_delete=models.CASCADE)
+    wallet = models.OneToOneField(
+        "chains.Wallet",
+        on_delete=models.CASCADE,
+        verbose_name=_("项目级热钱包"),
+        help_text=_("用于项目提币、归集等项目资产流转交易。"),
+    )
     ip_white_list = models.TextField(
         _("IP白名单"),
         default="*",
@@ -66,6 +72,16 @@ class Project(models.Model):
     hmac_key = ShortUUIDField(
         verbose_name=_("HMAC密钥"),
         length=32,
+    )
+    vault = AddressField(
+        _("DepositSlot 多签归集地址"),
+        null=True,
+        blank=True,
+        help_text=_(
+            "用于生成 EVM DepositSlot 合约的不可变 vault。留空时禁止生成 DepositSlot；"
+            "一旦设置不可修改。"
+        ),
+        unique=True,
     )
 
     withdrawal_review_required = models.BooleanField(
@@ -112,6 +128,19 @@ class Project(models.Model):
     def __str__(self):
         return self.name
 
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            old_vault = (
+                self.__class__.objects.filter(pk=self.pk)
+                .values_list("vault", flat=True)
+                .first()
+            )
+            if old_vault and self.vault != old_vault:
+                raise ValidationError(
+                    {"vault": _("DepositSlot 多签归集地址一旦设置不可修改。")}
+                )
+        return super().save(*args, **kwargs)
+
     @classmethod
     def retrieve(cls, appid: str):
         try:
@@ -121,19 +150,19 @@ class Project(models.Model):
 
     @property
     def is_ready(self) -> tuple[bool, list[str]]:
-        # 错误项采用统一的"短名词 + 状态"格式，便于前端横排拼接（如"通知地址未配置、支付地址未配置"）
+        # 错误项采用统一的"短名词 + 状态"格式，便于前端横排拼接（如"通知地址未配置、差额账单收款地址未配置"）
         errors: list[str] = []
         if not self.ip_white_list:
             errors.append(_("IP 白名单未配置"))
         if not self.webhook:
             errors.append(_("通知地址未配置"))
-        if not RecipientAddress.objects.filter(project=self).exists():
-            errors.append(_("支付地址未配置"))
+        if not DifferRecipientAddress.objects.filter(project=self).exists():
+            errors.append(_("差额账单收款地址未配置"))
         return (not errors), errors
 
     def recipients(self, chain: Chain):
         return set(
-            RecipientAddress.objects.filter(
+            DifferRecipientAddress.objects.filter(
                 project=self,
                 chain_type=chain.type,
             ).values_list(
@@ -147,8 +176,14 @@ def status(request):
     return ""
 
 
-class RecipientAddress(models.Model):
-    name = models.CharField(verbose_name=_("名称"), blank=True)
+class DifferRecipientAddress(models.Model):
+    """差额账单的商户收款地址。
+
+    新架构下合约账单不再使用该模型分配收款地址；它只服务于差额账单，
+    用于在没有 DepositSlot 合约收款方案的链上扫描买家入账。
+    """
+
+    name = models.CharField(verbose_name=_("备注名称"), blank=True)
     project = models.ForeignKey(
         "projects.Project",
         on_delete=models.CASCADE,
@@ -159,7 +194,7 @@ class RecipientAddress(models.Model):
         choices=ChainType,
         help_text="EVM: Ethereum, BSC, Polygon, Base...<br>Tron: Tron",
     )
-    address = AddressField(verbose_name=_("收币地址"))
+    address = EvmAddressField(verbose_name=_("差额账单收款地址"))
     created_at = models.DateTimeField(auto_now_add=True, verbose_name=_("创建时间"))
 
     class Meta:
@@ -167,22 +202,22 @@ class RecipientAddress(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=("chain_type", "address"),
-                name="uniq_recipient_address_chain_type_address",
+                name="uniq_differ_recipient_address_chain_type_address",
             ),
         ]
-        verbose_name = _("收币地址")
-        verbose_name_plural = _("收币地址")
+        verbose_name = _("差额账单收款地址")
+        verbose_name_plural = _("差额账单收款地址")
 
     def __str__(self):
         return self.address
 
     def save(self, *args, **kwargs):
-        # 收币地址的链上发现完全由内部扫描器负责；模型层只保留数据校验，不再派发外部订阅同步。
+        # 差额账单收款地址的链上发现完全由内部扫描器负责；模型层只保留数据校验，不再派发外部订阅同步。
         self.full_clean()
         return super().save(*args, **kwargs)
 
     def clean(self) -> None:
-        """校验项目收币地址允许进入的链类型。"""
+        """校验差额账单收款地址允许进入的链类型。"""
         super().clean()
         if not self.chain_type:
             return
@@ -191,4 +226,6 @@ class RecipientAddress(models.Model):
             self.chain_type
             not in ChainProductCapabilityService.INVOICE_RECIPIENT_CHAIN_TYPES
         ):
-            raise ValidationError({"chain_type": _("当前版本支付地址仅支持 EVM / Tron。")})
+            raise ValidationError(
+                {"chain_type": _("当前版本差额账单收款地址仅支持 EVM / Tron。")}
+            )

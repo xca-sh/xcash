@@ -41,7 +41,9 @@ class DepositViewSet(viewsets.GenericViewSet):
         请求头：XC-Appid
         Query 参数：uid、chain（链代码）、crypto（代币符号）
         """
-        appid = request.headers.get(APPID_HEADER)
+        appid = request.headers.get(APPID_HEADER, None)
+        if not appid:
+            raise APIError(ErrorCode.INVALID_APPID)
         project = Project.retrieve(appid=appid)
         if project is None:
             raise APIError(ErrorCode.INVALID_APPID)
@@ -89,5 +91,5 @@ class DepositViewSet(viewsets.GenericViewSet):
 
         customer, _ = Customer.objects.get_or_create(project=project, uid=uid)
 
-        deposit_address = DepositSlot.get_address(chain, customer)
+        deposit_address = DepositSlot.get_deposit_address(chain, customer)
         return Response({"deposit_address": deposit_address})

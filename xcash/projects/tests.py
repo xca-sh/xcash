@@ -17,10 +17,11 @@ from chains.models import ChainType
 from chains.test_signer import build_test_remote_signer_backend
 from common.admin import ModelAdmin
 from currencies.models import Crypto
-from projects.admin import PaymentAddressInline
+from projects.admin import DifferRecipientAddressInline
 from projects.admin import ProjectAdmin
+from projects.admin import ProjectForm
+from projects.models import DifferRecipientAddress
 from projects.models import Project
-from projects.models import RecipientAddress
 from users.models import User
 from users.otp import ADMIN_OTP_VERIFIED_AT_SESSION_KEY
 
@@ -104,6 +105,28 @@ class ProjectAdminTests(TestCase):
         request.user.otp_device = device
         return request
 
+    def _build_multisig_w3(self, *, code: bytes = b"\x60", threshold=2, owners=None):
+        owners = owners or [
+            "0x0000000000000000000000000000000000000001",
+            "0x0000000000000000000000000000000000000002",
+        ]
+
+        return SimpleNamespace(
+            eth=SimpleNamespace(
+                get_code=lambda address: code,
+                contract=lambda address, abi: SimpleNamespace(
+                    functions=SimpleNamespace(
+                        getThreshold=lambda: SimpleNamespace(
+                            call=lambda: threshold,
+                        ),
+                        getOwners=lambda: SimpleNamespace(
+                            call=lambda: owners,
+                        ),
+                    )
+                ),
+            )
+        )
+
     def test_project_admin_save_model_requires_fresh_otp_for_withdrawal_policy_change(
         self,
     ):
@@ -146,7 +169,7 @@ class ProjectAdminTests(TestCase):
         request = self.factory.get("/admin/projects/project/add/")
         request.user = self.user
 
-        inline = PaymentAddressInline(Project, admin.site)
+        inline = DifferRecipientAddressInline(Project, admin.site)
         formset_class = inline.get_formset(request, self.project)
         form = formset_class.form(
             data={
@@ -154,18 +177,166 @@ class ProjectAdminTests(TestCase):
                 "chain_type": ChainType.EVM,
                 "address": "0x52908400098527886E0F7030069857D2E4169EE7",
             },
-            instance=RecipientAddress(project=self.project),
+            instance=DifferRecipientAddress(project=self.project),
         )
 
         self.assertTrue(form.is_valid(), form.errors)
 
+    def test_project_form_accepts_contract_vault(self):
+        contract_address = "0x52908400098527886E0F7030069857D2E4169EE7"
+        form = ProjectForm(
+            data={
+                "name": self.project.name,
+                "wallet": self.project.wallet_id,
+                "ip_white_list": self.project.ip_white_list,
+                "webhook": self.project.webhook,
+                "webhook_open": self.project.webhook_open,
+                "failed_count": self.project.failed_count,
+                "pre_notify": self.project.pre_notify,
+                "fast_confirm_threshold": self.project.fast_confirm_threshold,
+                "hmac_key": self.project.hmac_key,
+                "withdrawal_review_required": self.project.withdrawal_review_required,
+                "active": self.project.active,
+                "vault": contract_address,
+            },
+            instance=self.project,
+        )
 
-class RecipientAddressCapabilityTests(TestCase):
+        w3 = self._build_multisig_w3()
+        with patch.object(Chain, "_build_w3", return_value=w3):
+            self.assertTrue(form.is_valid(), form.errors)
+
+        self.assertEqual(form.cleaned_data["vault"], contract_address)
+
+    def test_project_form_accepts_multisig_when_address_has_code_on_one_evm_chain(
+        self,
+    ):
+        Crypto.objects.create(
+            name="Second Ethereum Project",
+            symbol="ETHP2",
+            coingecko_id="ethereum-project-2",
+        )
+        second_chain = Chain.objects.create(
+            name="Second Ethereum Project",
+            code="eth-project-2",
+            type=ChainType.EVM,
+            native_coin=self.crypto,
+            chain_id=404,
+            rpc="http://localhost:8546",
+            active=True,
+        )
+        contract_address = "0x52908400098527886E0F7030069857D2E4169EE7"
+        form = ProjectForm(
+            data={
+                "name": self.project.name,
+                "wallet": self.project.wallet_id,
+                "ip_white_list": self.project.ip_white_list,
+                "webhook": self.project.webhook,
+                "webhook_open": self.project.webhook_open,
+                "failed_count": self.project.failed_count,
+                "pre_notify": self.project.pre_notify,
+                "fast_confirm_threshold": self.project.fast_confirm_threshold,
+                "hmac_key": self.project.hmac_key,
+                "withdrawal_review_required": self.project.withdrawal_review_required,
+                "active": self.project.active,
+                "vault": contract_address,
+            },
+            instance=self.project,
+        )
+        valid_multisig_w3 = self._build_multisig_w3()
+        no_code_w3 = self._build_multisig_w3(code=b"")
+
+        def build_w3(chain, *, force_poa=False):
+            return valid_multisig_w3 if chain.pk == self.chain.pk else no_code_w3
+
+        with patch.object(Chain, "_build_w3", autospec=True, side_effect=build_w3):
+            self.assertTrue(form.is_valid(), form.errors)
+
+        self.assertEqual(second_chain.type, ChainType.EVM)
+
+    def test_project_form_rejects_eoa_vault(self):
+        form = ProjectForm(
+            data={
+                "name": self.project.name,
+                "wallet": self.project.wallet_id,
+                "ip_white_list": self.project.ip_white_list,
+                "webhook": self.project.webhook,
+                "webhook_open": self.project.webhook_open,
+                "failed_count": self.project.failed_count,
+                "pre_notify": self.project.pre_notify,
+                "fast_confirm_threshold": self.project.fast_confirm_threshold,
+                "hmac_key": self.project.hmac_key,
+                "withdrawal_review_required": self.project.withdrawal_review_required,
+                "active": self.project.active,
+                "vault": "0x52908400098527886E0F7030069857D2E4169EE7",
+            },
+            instance=self.project,
+        )
+
+        w3 = self._build_multisig_w3(code=b"")
+        with patch.object(Chain, "_build_w3", return_value=w3):
+            self.assertFalse(form.is_valid())
+
+        self.assertIn("vault", form.errors)
+
+    def test_project_form_rejects_non_multisig_contract_vault(
+        self,
+    ):
+        form = ProjectForm(
+            data={
+                "name": self.project.name,
+                "wallet": self.project.wallet_id,
+                "ip_white_list": self.project.ip_white_list,
+                "webhook": self.project.webhook,
+                "webhook_open": self.project.webhook_open,
+                "failed_count": self.project.failed_count,
+                "pre_notify": self.project.pre_notify,
+                "fast_confirm_threshold": self.project.fast_confirm_threshold,
+                "hmac_key": self.project.hmac_key,
+                "withdrawal_review_required": self.project.withdrawal_review_required,
+                "active": self.project.active,
+                "vault": "0x52908400098527886E0F7030069857D2E4169EE7",
+            },
+            instance=self.project,
+        )
+
+        w3 = self._build_multisig_w3(threshold=1)
+        with patch.object(Chain, "_build_w3", return_value=w3):
+            self.assertFalse(form.is_valid())
+
+        self.assertIn("vault", form.errors)
+
+    def test_project_form_rejects_changing_existing_vault(self):
+        self.project.vault = "0x52908400098527886E0F7030069857D2E4169EE7"
+        self.project.save(update_fields=["vault"])
+        form = ProjectForm(
+            data={
+                "name": self.project.name,
+                "wallet": self.project.wallet_id,
+                "ip_white_list": self.project.ip_white_list,
+                "webhook": self.project.webhook,
+                "webhook_open": self.project.webhook_open,
+                "failed_count": self.project.failed_count,
+                "pre_notify": self.project.pre_notify,
+                "fast_confirm_threshold": self.project.fast_confirm_threshold,
+                "hmac_key": self.project.hmac_key,
+                "withdrawal_review_required": self.project.withdrawal_review_required,
+                "active": self.project.active,
+                "vault": "0x8617E340B3D01FA5F11F306F4090FD50E238070D",
+            },
+            instance=self.project,
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("vault", form.errors)
+
+
+class DifferRecipientAddressCapabilityTests(TestCase):
     def setUp(self):
         self.project = Project.objects.create(name="Recipient Capability Project")
 
     def test_clean_allows_tron_recipient_address(self):
-        recipient = RecipientAddress(
+        recipient = DifferRecipientAddress(
             name="Tron Recipient",
             project=self.project,
             chain_type=ChainType.TRON,
@@ -177,13 +348,13 @@ class RecipientAddressCapabilityTests(TestCase):
     def test_invoice_recipient_queryset_returns_project_recipients(self):
         from projects.service import ProjectService
 
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="Invoice Recipient",
             project=self.project,
             chain_type=ChainType.EVM,
             address="0x52908400098527886E0F7030069857D2E4169EE7",
         )
-        recipient = RecipientAddress(
+        recipient = DifferRecipientAddress(
             name="Other Chain Recipient",
             project=self.project,
             chain_type=ChainType.TRON,
@@ -217,13 +388,13 @@ class PrimaryInvoiceRecipientTest(TestCase):
     def test_returns_first_invoice_recipient_by_created_at(self):
         from projects.service import ProjectService
 
-        first = RecipientAddress.objects.create(
+        first = DifferRecipientAddress.objects.create(
             name="First Invoice",
             project=self.project,
             chain_type=ChainType.EVM,
             address="0x52908400098527886E0F7030069857D2E4169EE7",
         )
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="Second Invoice",
             project=self.project,
             chain_type=ChainType.EVM,

@@ -37,12 +37,8 @@ EVM_BROADCAST_SCHEDULE_SECONDS = get_int_default(
     "CELERY_EVM_BROADCAST_SCHEDULE_SECONDS",
     8,
 )
-EVM_ERC20_SCAN_SCHEDULE_SECONDS = get_int(
-    "CELERY_EVM_ERC20_SCAN_SCHEDULE_SECONDS",
-    "evm_scan_seconds",
-)
-EVM_RECONCILE_SCHEDULE_SECONDS = get_int_default(
-    "CELERY_EVM_RECONCILE_SCHEDULE_SECONDS",
+EVM_RESCAN_SCHEDULE_SECONDS = get_int_default(
+    "CELERY_EVM_RESCAN_SCHEDULE_SECONDS",
     45,
 )
 TRON_SCAN_SCHEDULE_SECONDS = get_int(
@@ -95,15 +91,10 @@ evm_tasks = {
         "task": "evm.tasks.dispatch_due_evm_tx_tasks",
         "schedule": EVM_BROADCAST_SCHEDULE_SECONDS,
     },
-    "scan_active_evm_erc20_chains": {
-        # ERC20 走 eth_getLogs，RPC 成本低于原生币 full block 扫描，可保持较高频率。
-        "task": "evm.tasks.scan_active_evm_erc20_chains",
-        "schedule": EVM_ERC20_SCAN_SCHEDULE_SECONDS,
-    },
-    "reconcile_stale_pending_chain_for_active_evm_chains": {
-        # 兜底：主扫描漏扫导致的 PENDING_CHAIN 卡单，周期性按 receipt 主动命中并定点复扫。
-        "task": "evm.tasks.reconcile_stale_pending_chain_for_active_evm_chains",
-        "schedule": EVM_RECONCILE_SCHEDULE_SECONDS,
+    "rescan_pending_evm_chains": {
+        # 兜底：主扫描漏扫导致的 PENDING_CHAIN 卡单，周期性按 receipt 主动命中并定点重扫。
+        "task": "evm.tasks.rescan_pending_evm_chains",
+        "schedule": EVM_RESCAN_SCHEDULE_SECONDS,
     },
 }
 

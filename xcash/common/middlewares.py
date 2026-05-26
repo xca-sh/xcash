@@ -22,7 +22,7 @@ from projects.models import Project
 
 
 class AdminSessionTimeoutMiddleware:
-    """根据 PlatformSettings 动态设置后台 session 超时时间。"""
+    """根据 SystemSettings 动态设置后台 session 超时时间。"""
 
     def __init__(self, get_response):
         self.get_response = get_response

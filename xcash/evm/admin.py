@@ -89,10 +89,9 @@ class EvmScanCursorAdmin(SyncScanCursorToLatestActionMixin, ReadOnlyModelAdmin):
         "disable_selected_scanners",
         "sync_selected_to_latest",
     )
-    ordering = ("chain__name", "scanner_type")
+    ordering = ("chain__name",)
     list_display = (
         "display_chain",
-        "scanner_type",
         "display_enabled",
         "display_lag_state",
         "display_chain_latest_block",
@@ -102,12 +101,11 @@ class EvmScanCursorAdmin(SyncScanCursorToLatestActionMixin, ReadOnlyModelAdmin):
         "display_error_summary",
         "updated_at",
     )
-    list_filter = ("scanner_type", "enabled", "chain")
+    list_filter = ("enabled", "chain")
     search_fields = ("chain__name", "chain__code", "last_error")
     list_select_related = ("chain",)
     readonly_fields = (
         "chain",
-        "scanner_type",
         "display_enabled",
         "last_scanned_block",
         "display_chain_latest_block",

@@ -6,7 +6,7 @@ from chains.models import Chain
 from chains.models import Transfer
 from chains.models import TxTask
 from evm.internal_tx.direct_transfer import match_direct_transfer_fact
-from evm.internal_tx.facts import MatchedTransferFact
+from evm.internal_tx.routing import MatchedTransferFact
 
 
 def withdrawal_matcher(

@@ -29,7 +29,6 @@ from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TxHash
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from chains.models import TxTaskType
 from chains.models import TransferType
@@ -329,7 +328,7 @@ class TxTaskValidationTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address="0x0000000000000000000000000000000000000001",
@@ -343,7 +342,7 @@ class TxTaskValidationTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "1" * 64,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.FAILED,
+            success=False,
         )
 
         with self.assertRaises(ValidationError):
@@ -352,7 +351,7 @@ class TxTaskValidationTests(TestCase):
 
 class WalletBip44AccountMapTests(TestCase):
     def test_vault_maps_to_bip44_account_0(self):
-        self.assertEqual(Wallet.get_bip44_account(AddressUsage.Vault), 0)
+        self.assertEqual(Wallet.get_bip44_account(AddressUsage.HotWallet), 0)
 
     def test_unknown_usage_raises_value_error(self):
         with self.assertRaises(ValueError):
@@ -379,7 +378,7 @@ class TxHashModelTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address="0x0000000000000000000000000000000000000011",
@@ -390,7 +389,7 @@ class TxHashModelTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "a1" * 32,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
 
     def test_tx_hash_unique_per_chain_hash(self):
@@ -472,7 +471,7 @@ class TxTaskTxHashHistoryTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address="0x0000000000000000000000000000000000000021",
@@ -483,7 +482,7 @@ class TxTaskTxHashHistoryTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "e1" * 32,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
 
     def test_append_tx_hash_updates_current_tx_hash_and_keeps_history(self):
@@ -528,7 +527,7 @@ class AddressIdentityTests(TestCase):
         Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address="0x0000000000000000000000000000000000000001",
@@ -538,7 +537,7 @@ class AddressIdentityTests(TestCase):
             Address.objects.create(
                 wallet=wallet,
                 chain_type=ChainType.EVM,
-                usage=AddressUsage.Vault,
+                usage=AddressUsage.HotWallet,
                 bip44_account=0,
                 address_index=0,
                 address="0x0000000000000000000000000000000000000002",
@@ -558,7 +557,7 @@ class AddressIdentityTests(TestCase):
         Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address="0x0000000000000000000000000000000000000001",
@@ -567,7 +566,7 @@ class AddressIdentityTests(TestCase):
         with self.assertRaises(RuntimeError):
             wallet.get_address(
                 chain_type=ChainType.EVM,
-                usage=AddressUsage.Vault,
+                usage=AddressUsage.HotWallet,
                 address_index=0,
             )
 
@@ -587,7 +586,7 @@ class AddressIdentityTests(TestCase):
         Address.objects.create(
             wallet=occupied_wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=9_999,
             address=expected_address,
@@ -596,7 +595,7 @@ class AddressIdentityTests(TestCase):
         with self.assertRaises(IntegrityError):
             wallet.get_address(
                 chain_type=ChainType.EVM,
-                usage=AddressUsage.Vault,
+                usage=AddressUsage.HotWallet,
                 address_index=0,
             )
 
@@ -615,11 +614,11 @@ class AddressIdentityTests(TestCase):
         wallet = Wallet.objects.create()
         # 预创建等价于"对方事务已提交"的身份记录；bip44_account 必须与  Vault
         # 的 BIP44 映射一致，否则会触发 get_address 的身份完整性检查。
-        bip44_account = Wallet.get_bip44_account(AddressUsage.Vault)
+        bip44_account = Wallet.get_bip44_account(AddressUsage.HotWallet)
         Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=bip44_account,
             address_index=0,
             address=expected_address,
@@ -633,7 +632,7 @@ class AddressIdentityTests(TestCase):
         ):
             addr = wallet.get_address(
                 chain_type=ChainType.EVM,
-                usage=AddressUsage.Vault,
+                usage=AddressUsage.HotWallet,
                 address_index=0,
             )
 
@@ -659,7 +658,7 @@ class AddressIdentityTests(TestCase):
         ), self.assertRaises(IntegrityError):
             wallet.get_address(
                 chain_type=ChainType.EVM,
-                usage=AddressUsage.Vault,
+                usage=AddressUsage.HotWallet,
                 address_index=0,
             )
 
@@ -684,7 +683,7 @@ class AddressChainStateAcquireTests(TestCase):
         self.address = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -752,7 +751,7 @@ class TransferConfirmDispatchTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -776,7 +775,7 @@ class TransferConfirmDispatchTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=TxTaskStage.PENDING_CONFIRM,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         withdrawal = Withdrawal.objects.create(
             project=project,
@@ -1001,7 +1000,7 @@ class TransferConfirmDispatchTests(TestCase):
         self.assertEqual(withdrawal.transfer_id, transfer.pk)
         tx_task.refresh_from_db()
         self.assertEqual(tx_task.stage, TxTaskStage.PENDING_CONFIRM)
-        self.assertEqual(tx_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(tx_task.success)
 
     @patch("common.decorators.cache.delete", return_value=True)
     @patch("common.decorators.cache.add", return_value=True)
@@ -1028,7 +1027,7 @@ class TransferConfirmDispatchTests(TestCase):
         self.assertIsNone(withdrawal.transfer)
         tx_task.refresh_from_db()
         self.assertEqual(tx_task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(tx_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(tx_task.success)
 
     @patch("common.decorators.cache.delete", return_value=True)
     @patch("common.decorators.cache.add", return_value=True)
@@ -1445,7 +1444,7 @@ class WalletRemoteGenerationTests(TestCase):
         wallet = Wallet.generate()
         addr = wallet.get_address(
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
         )
 
         self.assertEqual(wallet.pk, created_wallet_id)
@@ -1481,7 +1480,7 @@ class WalletRemoteGenerationTests(TestCase):
         with self.assertRaisesMessage(RuntimeError, "signer 服务不可用，无法为钱包"):
             wallet.get_address(
                 chain_type=ChainType.EVM,
-                usage=AddressUsage.Vault,
+                usage=AddressUsage.HotWallet,
             )
 
 
@@ -1668,7 +1667,7 @@ class TxTaskTransitionTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -1681,7 +1680,7 @@ class TxTaskTransitionTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "dd" * 32,
             stage=TxTaskStage.PENDING_CONFIRM,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
 
     def test_mark_finalized_success_transitions_correctly(self):
@@ -1691,7 +1690,7 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(updated, 1)
         self.task.refresh_from_db()
         self.assertEqual(self.task.stage, TxTaskStage.FINALIZED)
-        self.assertEqual(self.task.result, TxTaskResult.SUCCESS)
+        self.assertIs(self.task.success, True)
 
     def test_reset_to_pending_chain_transitions_correctly(self):
         updated = TxTask.reset_to_pending_chain(
@@ -1700,7 +1699,7 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(updated, 1)
         self.task.refresh_from_db()
         self.assertEqual(self.task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(self.task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(self.task.success)
 
     def test_mark_finalized_success_can_resolve_old_hash(self):
         old_hash = self.task.tx_hash
@@ -1715,7 +1714,7 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(updated, 1)
         self.task.refresh_from_db()
         self.assertEqual(self.task.stage, TxTaskStage.FINALIZED)
-        self.assertEqual(self.task.result, TxTaskResult.SUCCESS)
+        self.assertIs(self.task.success, True)
         self.assertEqual(self.task.tx_hash, old_hash)
 
     def test_reset_to_pending_chain_can_resolve_old_hash(self):
@@ -1731,7 +1730,7 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(updated, 1)
         self.task.refresh_from_db()
         self.assertEqual(self.task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(self.task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(self.task.success)
         self.assertEqual(self.task.tx_hash, old_hash)
 
     def test_mark_finalized_failed_transitions_correctly(self):
@@ -1741,7 +1740,7 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(updated, 1)
         self.task.refresh_from_db()
         self.assertEqual(self.task.stage, TxTaskStage.FINALIZED)
-        self.assertEqual(self.task.result, TxTaskResult.FAILED)
+        self.assertIs(self.task.success, False)
 
     def test_mark_finalized_failed_honors_expected_stage(self):
         updated = TxTask.mark_finalized_failed(
@@ -1752,7 +1751,7 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(updated, 0)
         self.task.refresh_from_db()
         self.assertEqual(self.task.stage, TxTaskStage.PENDING_CONFIRM)
-        self.assertEqual(self.task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(self.task.success)
 
     def test_mark_finalized_success_does_not_override_failed_final_state(self):
         TxTask.mark_finalized_failed(
@@ -1767,7 +1766,7 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(updated, 0)
         self.task.refresh_from_db()
         self.assertEqual(self.task.stage, TxTaskStage.FINALIZED)
-        self.assertEqual(self.task.result, TxTaskResult.FAILED)
+        self.assertIs(self.task.success, False)
 
     def test_mark_finalized_failed_does_not_override_success_final_state(self):
         TxTask.mark_finalized_success(
@@ -1782,7 +1781,7 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(updated, 0)
         self.task.refresh_from_db()
         self.assertEqual(self.task.stage, TxTaskStage.FINALIZED)
-        self.assertEqual(self.task.result, TxTaskResult.SUCCESS)
+        self.assertIs(self.task.success, True)
 
     def test_mark_pending_confirm_skips_finalized_tasks(self):
         # 先将任务标记为已完结
@@ -1814,13 +1813,13 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(updated, 1)
         self.task.refresh_from_db()
         self.assertEqual(self.task.stage, TxTaskStage.PENDING_CONFIRM)
-        self.assertEqual(self.task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(self.task.success)
         self.assertEqual(self.task.tx_hash, old_hash)
 
     def test_reset_to_pending_chain_skips_non_pending_confirm_tasks(self):
         TxTask.objects.filter(pk=self.task.pk).update(
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         updated = TxTask.reset_to_pending_chain(
             chain=self.chain,
@@ -1830,7 +1829,7 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(updated, 0)
         self.task.refresh_from_db()
         self.assertEqual(self.task.stage, TxTaskStage.QUEUED)
-        self.assertEqual(self.task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(self.task.success)
 
 
 class BlockNumberUpdatedCompensationTests(TestCase):
@@ -1857,7 +1856,7 @@ class BlockNumberUpdatedCompensationTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -1956,8 +1955,8 @@ def test_address_send_crypto_schedules_native_transfer_intent():
     address = Address.objects.create(
         wallet=Wallet.objects.create(),
         chain_type=ChainType.EVM,
-        usage=AddressUsage.Vault,
-        bip44_account=Wallet.get_bip44_account(AddressUsage.Vault),
+        usage=AddressUsage.HotWallet,
+        bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
         address_index=0,
         address=Web3.to_checksum_address(
             "0x0000000000000000000000000000000000121201"
@@ -2022,8 +2021,8 @@ def test_address_send_crypto_schedules_erc20_transfer_intent():
     address = Address.objects.create(
         wallet=Wallet.objects.create(),
         chain_type=ChainType.EVM,
-        usage=AddressUsage.Vault,
-        bip44_account=Wallet.get_bip44_account(AddressUsage.Vault),
+        usage=AddressUsage.HotWallet,
+        bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
         address_index=0,
         address=Web3.to_checksum_address(
             "0x0000000000000000000000000000000000121203"

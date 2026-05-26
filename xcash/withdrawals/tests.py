@@ -22,13 +22,12 @@ from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from chains.models import TxTaskType
 from chains.models import Wallet
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
-from core.models import PLATFORM_SETTINGS_CACHE_KEY
+from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from currencies.models import Crypto
 from evm.choices import TxKind
 from evm.models import EvmTxTask
@@ -110,7 +109,7 @@ class WithdrawalTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address="0x0000000000000000000000000000000000000001",
@@ -121,7 +120,7 @@ class WithdrawalTxTaskTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "2" * 64,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         EvmTxTask.objects.create(
             base_task=tx_task,
@@ -167,7 +166,7 @@ class WithdrawalTxTaskTests(TestCase):
         self.assertEqual(withdrawal.status, WithdrawalStatus.CONFIRMING)
         self.assertEqual(transfer.type, TransferType.Withdrawal)
         self.assertEqual(tx_task.stage, TxTaskStage.PENDING_CONFIRM)
-        self.assertEqual(tx_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(tx_task.success)
 
     @patch("withdrawals.service.WebhookService.create_event")
     def test_confirm_withdrawal_emits_completed_webhook(self, create_event_mock):
@@ -426,10 +425,10 @@ class WithdrawalBalanceReservationTests(TestCase):
 
 class CreateWithdrawalSerializerCapabilityTests(TestCase):
     def setUp(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
 
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
     def test_validate_rejects_tron_usdt_before_balance_check(self):
@@ -1754,7 +1753,7 @@ class WithdrawalStateTransitionTests(TestCase):
         addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address="0x0000000000000000000000000000000000000099",
@@ -1802,7 +1801,7 @@ class WithdrawalStateTransitionTests(TestCase):
         # TxTask 状态不应被 drop_withdrawal 修改, 保持原状
         tx_task.refresh_from_db()
         self.assertEqual(tx_task.stage, TxTaskStage.PENDING_CONFIRM)
-        self.assertEqual(tx_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(tx_task.success)
 
     # --- fail_withdrawal 测试 ---
 
@@ -1812,7 +1811,7 @@ class WithdrawalStateTransitionTests(TestCase):
         addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address="0x00000000000000000000000000000000000000A1",
@@ -1823,7 +1822,7 @@ class WithdrawalStateTransitionTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=TxTaskStage.FINALIZED,
-            result=TxTaskResult.FAILED,
+            success=False,
         )
         withdrawal = Withdrawal.objects.create(
             project=self.project,
@@ -1897,7 +1896,7 @@ class WithdrawalStateTransitionTests(TestCase):
         addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=2,
             address_index=0,
             address="0x00000000000000000000000000000000000000A2",
@@ -1908,7 +1907,7 @@ class WithdrawalStateTransitionTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=TxTaskStage.FINALIZED,
-            result=TxTaskResult.FAILED,
+            success=False,
         )
         # 不应抛异常
         WithdrawalService.fail_withdrawal(tx_task=tx_task)
@@ -1962,7 +1961,7 @@ class WithdrawalTryMatchTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=1,
             address="0x0000000000000000000000000000000000000098",
@@ -1998,7 +1997,7 @@ class WithdrawalTryMatchTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=stage,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         EvmTxTask.objects.create(
             base_task=tx_task,

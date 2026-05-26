@@ -10,25 +10,23 @@ from web3 import Web3
 
 from chains.models import Address
 from chains.models import AddressUsage
-from chains.models import TxTask
-from chains.models import TxTaskResult
-from chains.models import TxTaskStage
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import TxTaskType
 from chains.models import TxHash
+from chains.models import TxTask
+from chains.models import TxTaskStage
+from chains.models import TxTaskType
 from chains.models import Wallet
 from chains.service import ObservedTransferPayload
 from chains.service import TransferService
-from core.models import PLATFORM_SETTINGS_CACHE_KEY
+from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from currencies.models import Crypto
 from evm.choices import TxKind
 from evm.intents import build_native_transfer_intent
-from evm.models import EvmTxTask
 from evm.models import EvmScanCursor
-from evm.models import EvmScanCursorType
-from evm.scanner.erc20 import EvmErc20ScanResult
-from evm.scanner.native_deposits import EvmNativeDepositScanResult
+from evm.models import EvmTxTask
+from evm.scanner.logs import EvmLogKindResult
+from evm.scanner.logs import EvmLogRangeResult
 from evm.scanner.rpc import EvmScannerRpcError
 from evm.scanner.service import EvmChainScannerService
 from evm.scanner.watchers import EvmWatchSet
@@ -36,7 +34,7 @@ from evm.scanner.watchers import EvmWatchSet
 
 class EvmChainScannerServiceTests(TestCase):
     def setUp(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         self.native = Crypto.objects.create(
             name="Ethereum Scanner Service",
             symbol="ETHSS",
@@ -54,112 +52,84 @@ class EvmChainScannerServiceTests(TestCase):
         )
 
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
-    @patch("evm.scanner.service.EvmNativeDepositScanner.scan_chain")
-    @patch("evm.scanner.service.EvmErc20TransferScanner.scan_chain")
-    def test_scan_chain_skips_disabled_erc20_cursor(
+    @patch("evm.scanner.service.EvmLogScanner.scan_chain")
+    def test_scan_chain_skips_disabled_cursor(
         self,
-        erc20_scan_mock,
-        native_scan_mock,
+        scan_chain_mock,
     ):
         EvmScanCursor.objects.create(
             chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
             enabled=False,
         )
 
         result = EvmChainScannerService.scan_chain(chain=self.chain)
 
-        erc20_scan_mock.assert_not_called()
-        native_scan_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
+        scan_chain_mock.assert_not_called()
         self.assertEqual(result.erc20.created_transfers, 0)
         self.assertEqual(result.erc20.latest_block, 88)
 
-    @patch("evm.scanner.service.EvmNativeDepositScanner.scan_chain")
-    @patch("evm.scanner.service.EvmErc20TransferScanner.scan_chain")
+    @patch("evm.scanner.service.EvmLogScanner.scan_chain")
     def test_scan_chain_scans_native_and_erc20(
         self,
-        erc20_scan_mock,
-        native_scan_mock,
+        scan_chain_mock,
     ):
-        native_scan_mock.return_value = EvmNativeDepositScanResult(
-            from_block=1,
-            to_block=1,
-            latest_block=88,
-            observed_logs=2,
-            created_transfers=2,
-        )
-        erc20_scan_mock.return_value = EvmErc20ScanResult(
-            from_block=1,
-            to_block=1,
-            latest_block=88,
-            observed_logs=1,
-            created_transfers=1,
+        scan_chain_mock.return_value = type(
+            "Result",
+            (),
+            {
+                "native": EvmLogKindResult(1, 1, 88, 2, 2),
+                "erc20": EvmLogKindResult(1, 1, 88, 1, 1),
+            },
         )
 
         result = EvmChainScannerService.scan_chain(chain=self.chain)
 
-        native_scan_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
-        erc20_scan_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
+        scan_chain_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
         self.assertEqual(result.native.created_transfers, 2)
         self.assertEqual(result.erc20.created_transfers, 1)
 
     @patch(
-        "evm.scanner.service.EvmNativeDepositScanner.scan_chain",
-        side_effect=EvmScannerRpcError("native rpc timeout"),
+        "evm.scanner.service.EvmLogScanner.scan_chain",
+        side_effect=EvmScannerRpcError("rpc timeout"),
     )
-    @patch("evm.scanner.service.EvmErc20TransferScanner.scan_chain")
-    def test_scan_chain_keeps_erc20_when_native_rpc_fails(
+    def test_scan_chain_returns_empty_when_rpc_fails(
         self,
-        erc20_scan_mock,
-        native_scan_mock,
+        scan_chain_mock,
     ):
-        erc20_scan_mock.return_value = EvmErc20ScanResult(
-            from_block=3,
-            to_block=4,
-            latest_block=88,
-            observed_logs=1,
-            created_transfers=1,
-        )
-
         result = EvmChainScannerService.scan_chain(chain=self.chain)
 
-        native_scan_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
-        erc20_scan_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
+        scan_chain_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
         self.assertEqual(result.native.created_transfers, 0)
-        self.assertEqual(result.erc20.created_transfers, 1)
+        self.assertEqual(result.erc20.created_transfers, 0)
 
     @patch("evm.scanner.service.load_watch_set")
-    @patch("evm.scanner.service.EvmNativeDepositScanner.scan_range_without_cursor")
-    @patch("evm.scanner.service.EvmErc20TransferScanner.scan_range_without_cursor")
-    def test_scan_blocks_for_reconcile_scans_native_and_erc20_ranges(
+    @patch("evm.scanner.service.EvmLogScanner.scan_range_without_cursor")
+    def test_rescan_blocks_scans_native_and_erc20_ranges(
         self,
-        erc20_scan_range_mock,
-        native_scan_range_mock,
+        scan_range_mock,
         load_watch_set_mock,
     ):
         load_watch_set_mock.return_value = EvmWatchSet(
             watched_addresses=frozenset(),
             tokens_by_address={},
         )
-        native_scan_range_mock.return_value = ([{"kind": "native"}], 1)
-        erc20_scan_range_mock.return_value = ([{"kind": "erc20"}], 2)
+        scan_range_mock.return_value = EvmLogRangeResult(
+            raw_logs=[{"kind": "log"}],
+            native_observed=1,
+            erc20_observed=1,
+            native_created=1,
+            erc20_created=2,
+        )
 
-        result = EvmChainScannerService.scan_blocks_for_reconcile(
+        result = EvmChainScannerService.rescan_blocks(
             chain=self.chain,
             block_numbers={10},
         )
 
-        native_scan_range_mock.assert_called_once_with(
-            chain=self.chain,
-            rpc_client=ANY,
-            watch_set=load_watch_set_mock.return_value,
-            from_block=10,
-            to_block=10,
-        )
-        erc20_scan_range_mock.assert_called_once_with(
+        scan_range_mock.assert_called_once_with(
             chain=self.chain,
             rpc_client=ANY,
             watch_set=load_watch_set_mock.return_value,
@@ -195,7 +165,7 @@ class EvmChainScannerServiceTests(TestCase):
         addr = Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -207,7 +177,7 @@ class EvmChainScannerServiceTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -252,7 +222,7 @@ class EvmChainScannerServiceTests(TestCase):
         addr = Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -303,7 +273,7 @@ class EvmChainScannerServiceTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -370,7 +340,7 @@ class EvmChainScannerServiceTests(TestCase):
         addr = Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -384,7 +354,7 @@ class EvmChainScannerServiceTests(TestCase):
                 address=addr,
                 tx_type=TxTaskType.Withdrawal,
                 stage=TxTaskStage.FINALIZED,
-                result=TxTaskResult.SUCCESS,
+                success=True,
             )
             EvmTxTask.objects.create(
                 base_task=filler_base,
@@ -405,7 +375,7 @@ class EvmChainScannerServiceTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "ef" * 32,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         EvmTxTask.objects.create(
             base_task=base_task,
@@ -467,7 +437,7 @@ class EvmChainScannerServiceTests(TestCase):
         addr = Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(

@@ -18,8 +18,8 @@ from alerts.service import TelegramAlertService
 from chains.models import Chain
 from chains.models import ChainType
 from chains.test_signer import build_test_remote_signer_backend
-from core.models import PLATFORM_SETTINGS_CACHE_KEY
-from core.models import PlatformSettings
+from core.models import SYSTEM_SETTINGS_CACHE_KEY
+from core.models import SystemSettings
 from currencies.models import Crypto
 from users.models import Customer
 from users.models import User
@@ -52,7 +52,7 @@ def tearDownModule():
 )
 class TelegramAlertServiceTests(TestCase):
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
     def setUp(self):
@@ -189,9 +189,9 @@ class TelegramAlertServiceTests(TestCase):
         self.assertIsNotNone(self.config.last_test_sent_at)
         self.assertIsNotNone(self.config.last_verified_at)
 
-    def test_service_reads_repeat_interval_from_platform_settings(self):
+    def test_service_reads_repeat_interval_from_system_settings(self):
         # 告警重复发送节流窗口应支持平台后台运行期调整，而不是固定绑定 settings。
-        PlatformSettings.objects.create(alerts_repeat_interval_minutes=7)
+        SystemSettings.objects.create(alerts_repeat_interval_minutes=7)
 
         service = TelegramAlertService()
 

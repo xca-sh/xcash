@@ -10,14 +10,19 @@ from web3 import Web3
 
 from chains.models import Chain
 from chains.models import TxTask
+from chains.models import TxTaskType
 from chains.service import ObservedTransferCreateResult
 from chains.service import ObservedTransferPayload
 from chains.service import TransferService
-from evm.internal_tx.exceptions import UnknownInternalBroadcastError
-from evm.internal_tx.handlers import get_handler
-from evm.internal_tx.matchers import get_matcher
+from evm.internal_tx.routing import UnknownInternalBroadcastError
+from evm.internal_tx.routing import get_handler
+from evm.internal_tx.routing import get_matcher
 
 logger = structlog.get_logger()
+
+NO_TRANSFER_SUCCESS_TASK_TYPES = {
+    TxTaskType.DepositSlotDeploy,
+}
 
 
 def _normalize_tx_hash(value: Any) -> str:
@@ -60,7 +65,10 @@ def _finalize_failed(*, tx_task: TxTask) -> None:
         )
         if not updated:
             return
-        handler = get_handler(tx_task.tx_type)
+        try:
+            handler = get_handler(tx_task.tx_type)
+        except KeyError:
+            return
         handler.finalize_failed(tx_task)
 
 
@@ -87,6 +95,10 @@ def process_internal_transaction(
     status = _receipt_status(receipt)
     if status == 0:
         _finalize_failed(tx_task=tx_task)
+        return None
+
+    if tx_task.tx_type in NO_TRANSFER_SUCCESS_TASK_TYPES:
+        TxTask.mark_finalized_success(chain=chain, tx_hash=tx_hash)
         return None
 
     matcher = get_matcher(tx_task.tx_type)

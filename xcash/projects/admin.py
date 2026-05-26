@@ -12,6 +12,7 @@ from unfold.admin import StackedInline
 from unfold.admin import TabularInline
 from unfold.decorators import display
 from unfold.widgets import UnfoldAdminTextInputWidget
+from web3 import Web3
 
 from alerts.admin import ProjectTelegramAlertConfigInline
 from alerts.models import ProjectTelegramAlertConfig
@@ -23,8 +24,8 @@ from chains.models import Chain
 from chains.models import ChainType
 from common.admin import ModelAdmin
 from invoices.models import EpayMerchant
+from projects.models import DifferRecipientAddress
 from projects.models import Project
-from projects.models import RecipientAddress
 from users.forms import OTPVerifyForm
 from users.models import AdminAccessLog
 from users.otp import AdminOTPRequiredError
@@ -38,11 +39,44 @@ from users.otp import verify_otp_token
 
 # Register your models here.
 
+MULTISIG_WALLET_ABI = [
+    {
+        "inputs": [],
+        "name": "getThreshold",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "getOwners",
+        "outputs": [{"internalType": "address[]", "name": "", "type": "address[]"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
 
 class ProjectForm(forms.ModelForm):
     class Meta:
         model = Project
-        fields = ("ip_white_list",)
+        fields = (
+            "name",
+            "wallet",
+            "ip_white_list",
+            "webhook",
+            "webhook_open",
+            "failed_count",
+            "pre_notify",
+            "fast_confirm_threshold",
+            "hmac_key",
+            "vault",
+            "withdrawal_review_required",
+            "withdrawal_review_exempt_limit",
+            "withdrawal_single_limit",
+            "withdrawal_daily_limit",
+            "active",
+        )
 
     def __init__(self, *args, **kwargs):
         # 从 kwargs 中提取用户
@@ -65,6 +99,66 @@ class ProjectForm(forms.ModelForm):
             raise forms.ValidationError(_("IP 白名单格式错误."))
 
         return ip_white_list
+
+    def clean_vault(self):
+        address = self.cleaned_data.get("vault")
+        if not address:
+            return None
+
+        if not Web3.is_address(address):
+            raise forms.ValidationError(_("DepositSlot 多签归集地址必须是 EVM 地址。"))
+
+        address = Web3.to_checksum_address(address)
+        old_address = None
+        if self.instance and self.instance.pk:
+            old_address = (
+                Project.objects.filter(pk=self.instance.pk)
+                .values_list("vault", flat=True)
+                .first()
+            )
+        if old_address:
+            if Web3.to_checksum_address(old_address) != address:
+                raise forms.ValidationError(
+                    _("DepositSlot 多签归集地址一旦设置不可修改。")
+                )
+            return Web3.to_checksum_address(old_address)
+
+        evm_chains = Chain.objects.filter(type=ChainType.EVM, active=True).exclude(
+            rpc=""
+        )
+        if not evm_chains.exists():
+            raise forms.ValidationError(_("没有可用于校验合约地址的已启用 EVM 链。"))
+
+        checked_chain_names = []
+        for chain in evm_chains:
+            checked_chain_names.append(chain.name)
+            try:
+                code = chain.w3.eth.get_code(address)
+            except Exception:
+                code = None
+            if not code:
+                continue
+
+            try:
+                contract = chain.w3.eth.contract(
+                    address=address,
+                    abi=MULTISIG_WALLET_ABI,
+                )
+                threshold = contract.functions.getThreshold().call()
+                owners = contract.functions.getOwners().call()
+            except Exception:
+                threshold = 0
+                owners = []
+
+            if threshold >= 2 and len(owners) >= threshold:
+                return address
+
+        raise forms.ValidationError(
+            _(
+                "DepositSlot 多签归集地址未在任何可校验 EVM 链上检测到有效多签合约：%(chains)s"
+            ),
+            params={"chains": ", ".join(checked_chain_names)},
+        )
 
 
 class ProjectHmacKeyWidget(UnfoldAdminTextInputWidget):
@@ -107,13 +201,13 @@ class ProjectHmacKeyWidget(UnfoldAdminTextInputWidget):
         )
 
 
-class RecipientAddressInlineForm(forms.ModelForm):
-    """支付地址 inline 表单，包含地址格式校验和跨项目占用检查。"""
+class DifferRecipientAddressInlineForm(forms.ModelForm):
+    """差额账单收款地址 inline 表单，包含地址格式校验和跨项目占用检查。"""
 
     allowed_chain_types = frozenset(ChainType.values)
 
     class Meta:
-        model = RecipientAddress
+        model = DifferRecipientAddress
         fields = ("name", "chain_type", "address")
 
     def __init__(self, *args, **kwargs):
@@ -141,7 +235,7 @@ class RecipientAddressInlineForm(forms.ModelForm):
         # inline 场景下 project 由 parent 自动注入，不在 cleaned_data 里；
         # 用 instance.project_id 或 parent_instance 来做跨项目占用检查。
         project = getattr(self.instance, "project", None)
-        qs = RecipientAddress.objects.filter(address=address)
+        qs = DifferRecipientAddress.objects.filter(address=address)
         if project:
             qs = qs.exclude(project=project)
         if qs.exists():
@@ -156,16 +250,16 @@ class RecipientAddressInlineForm(forms.ModelForm):
         return address
 
 
-class PaymentAddressInline(TabularInline):
+class DifferRecipientAddressInline(TabularInline):
     """项目差额账单收款地址 inline。"""
 
-    model = RecipientAddress
-    form = RecipientAddressInlineForm
+    model = DifferRecipientAddress
+    form = DifferRecipientAddressInlineForm
     extra = 0
     fields = ("name", "chain_type", "address")
     allowed_chain_types = ChainProductCapabilityService.INVOICE_RECIPIENT_CHAIN_TYPES
-    verbose_name = _("支付地址")
-    verbose_name_plural = _("支付地址")
+    verbose_name = _("差额账单收款地址")
+    verbose_name_plural = _("差额账单收款地址")
 
     def get_formset(self, request, obj=None, **kwargs):
         base_form = self.form
@@ -213,11 +307,12 @@ class ProjectAdmin(ModelAdmin):
             "withdrawal_review_exempt_limit",
             "withdrawal_single_limit",
             "withdrawal_daily_limit",
+            "vault",
         }
     )
     form = ProjectForm
     inlines = (
-        PaymentAddressInline,
+        DifferRecipientAddressInline,
         EpayMerchantInline,
         ProjectTelegramAlertConfigInline,
     )
@@ -479,13 +574,16 @@ class ProjectAdmin(ModelAdmin):
 
     def get_readonly_fields(self, request, obj=None):
         if obj:  # 修改项目
-            return (
+            readonly_fields = (
                 "wallet",
                 "appid",
                 "failed_count",
-                "display_vault_addresses",
+                "display_hot_wallet_addresses",
                 "display_ready_detail",
             )
+            if obj.vault:
+                readonly_fields += ("vault",)
+            return readonly_fields
         # 新建项目
         return (
             "wallet",
@@ -529,9 +627,12 @@ class ProjectAdmin(ModelAdmin):
             },
         ),
         (
-            _("金库"),
+            _("项目资金"),
             {
-                "fields": ("display_vault_addresses",),
+                "fields": (
+                    "display_hot_wallet_addresses",
+                    "vault",
+                ),
             },
         ),
         (
@@ -591,8 +692,8 @@ class ProjectAdmin(ModelAdmin):
             f"{review} / 免审:{exempt_limit} / 单笔:{single_limit} / 单日:{daily_limit}"
         )
 
-    @display(description=_("金库地址"))
-    def display_vault_addresses(self, instance: Project):
+    @display(description=_("项目级热钱包地址"))
+    def display_hot_wallet_addresses(self, instance: Project):
         rows = []
         for chain_type, chain_label in ChainType.choices:
             if chain_type != ChainType.EVM:
@@ -601,15 +702,15 @@ class ProjectAdmin(ModelAdmin):
                 Chain.objects.filter(type=chain_type).values_list("name", flat=True)
             )
             try:
-                vault_address = instance.wallet.get_address(
+                hot_wallet_address = instance.wallet.get_address(
                     chain_type=chain_type,
-                    usage=AddressUsage.Vault,
+                    usage=AddressUsage.HotWallet,
                 )
                 rows.append(
                     (
                         chain_label,
                         " / ".join(chain_names) or "-",
-                        vault_address.address,
+                        hot_wallet_address.address,
                     )
                 )
             except RuntimeError:
@@ -647,7 +748,7 @@ class ProjectAdmin(ModelAdmin):
             "</div>",
             _("地址格式"),
             _("适用链"),
-            _("金库地址"),
+            _("项目级热钱包地址"),
             body,
         )
 

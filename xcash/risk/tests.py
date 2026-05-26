@@ -27,7 +27,7 @@ from chains.models import ChainType
 from chains.models import TransferType
 from chains.models import Transfer
 from chains.models import Wallet
-from core.models import PlatformSettings
+from core.models import SystemSettings
 from currencies.models import Crypto
 from currencies.models import Fiat
 from deposits.models import Deposit
@@ -75,7 +75,7 @@ class RiskTestMixin:
             timestamp=1_700_000_000,
             datetime=timezone.now(),
         )
-        self.platform_settings = PlatformSettings.objects.create(
+        self.system_settings = SystemSettings.objects.create(
             risk_marking_enabled=True,
             risk_marking_threshold_usd=Decimal("100"),
             risk_marking_cache_seconds=300,
@@ -467,8 +467,8 @@ class RiskMarkingServiceTests(RiskTestMixin, TestCase):
 
     @patch("risk.service.QuicknodeMistTrackClient.address_risk_score")
     def test_marking_disabled_does_not_create_assessment(self, score):
-        self.platform_settings.risk_marking_enabled = False
-        self.platform_settings.save(update_fields=["risk_marking_enabled"])
+        self.system_settings.risk_marking_enabled = False
+        self.system_settings.save(update_fields=["risk_marking_enabled"])
         invoice = self.make_invoice(worth=Decimal("500"))
 
         RiskMarkingService.mark_invoice(invoice.pk)
@@ -625,8 +625,8 @@ class RiskMarkingServiceTests(RiskTestMixin, TestCase):
         self, openapi_score, quicknode_score
     ):
         invoice = self.make_invoice(worth=Decimal("500"))
-        self.platform_settings.misttrack_openapi_api_key = "openapi-secret"
-        self.platform_settings.save(update_fields=["misttrack_openapi_api_key"])
+        self.system_settings.misttrack_openapi_api_key = "openapi-secret"
+        self.system_settings.save(update_fields=["misttrack_openapi_api_key"])
         openapi_score.return_value = MistTrackRiskResult(
             risk_level=RiskLevel.HIGH,
             risk_score=Decimal("75"),
@@ -668,8 +668,8 @@ class RiskMarkingServiceTests(RiskTestMixin, TestCase):
     def test_openapi_unsupported_chain_is_skipped_without_external_query(self, score):
         """OpenAPI 路径未覆盖的链/币种与 QuickNode 一致走 SKIPPED 而非 FAILED。"""
         invoice = self.make_invoice(worth=Decimal("500"))
-        self.platform_settings.misttrack_openapi_api_key = "openapi-secret"
-        self.platform_settings.save(update_fields=["misttrack_openapi_api_key"])
+        self.system_settings.misttrack_openapi_api_key = "openapi-secret"
+        self.system_settings.save(update_fields=["misttrack_openapi_api_key"])
         # 切到 OpenAPI 也未映射的某条 EVM 链
         self.chain.chain_id = 999999
         self.chain.code = "exotic-chain"
@@ -685,9 +685,9 @@ class RiskMarkingServiceTests(RiskTestMixin, TestCase):
 
     def test_provider_not_configured_records_skip_reason(self):
         invoice = self.make_invoice(worth=Decimal("500"))
-        self.platform_settings.quicknode_misttrack_endpoint_url = ""
-        self.platform_settings.misttrack_openapi_api_key = ""
-        self.platform_settings.save(
+        self.system_settings.quicknode_misttrack_endpoint_url = ""
+        self.system_settings.misttrack_openapi_api_key = ""
+        self.system_settings.save(
             update_fields=[
                 "quicknode_misttrack_endpoint_url",
                 "misttrack_openapi_api_key",

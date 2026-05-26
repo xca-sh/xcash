@@ -14,7 +14,7 @@ from currencies.models import ChainToken
 from evm.choices import TxKind
 from evm.internal_tx._log_utils import matches_transfer_log
 from evm.internal_tx._log_utils import normalize_log_index
-from evm.internal_tx.facts import MatchedTransferFact
+from evm.internal_tx.routing import MatchedTransferFact
 
 if TYPE_CHECKING:
     from chains.models import Chain

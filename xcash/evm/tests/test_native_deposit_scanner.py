@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest.mock import Mock
 from unittest.mock import patch
 
 from django.core.cache import cache
@@ -10,10 +11,9 @@ from web3 import Web3
 
 from chains.models import Transfer
 from chains.models import TransferStatus
-from core.models import PLATFORM_SETTINGS_CACHE_KEY
+from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from evm.models import EvmScanCursor
-from evm.models import EvmScanCursorType
-from evm.scanner.native_deposits import EvmNativeDepositScanner
+from evm.scanner.logs import EvmLogScanner
 from evm.scanner.watchers import EvmWatchSet
 from evm.tests._fixtures import make_crypto
 from evm.tests._fixtures import make_evm_chain
@@ -23,7 +23,7 @@ from evm.tests._fixtures import make_evm_system_address
 class EvmNativeDepositScanWindowTests(SimpleTestCase):
     def test_native_compute_scan_window_initial_cursor_starts_from_first_batch(self):
         cursor = EvmScanCursor(last_scanned_block=0)
-        from_block, to_block = EvmNativeDepositScanner._compute_scan_window(
+        from_block, to_block = EvmLogScanner._compute_scan_window(
             cursor=cursor,
             latest_block=2000,
             batch_size=100,
@@ -34,7 +34,7 @@ class EvmNativeDepositScanWindowTests(SimpleTestCase):
 
     def test_native_compute_scan_window_batch_size_is_net_forward_progress(self):
         cursor = EvmScanCursor(last_scanned_block=1000)
-        from_block, to_block = EvmNativeDepositScanner._compute_scan_window(
+        from_block, to_block = EvmLogScanner._compute_scan_window(
             cursor=cursor,
             latest_block=2000,
             batch_size=100,
@@ -45,9 +45,9 @@ class EvmNativeDepositScanWindowTests(SimpleTestCase):
 
 
 @override_settings(DEBUG=False)
-class EvmNativeDepositScannerTests(TestCase):
+class EvmLogScannerTests(TestCase):
     def setUp(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         self.native = make_crypto(symbol="NATIVE-SCAN", name="Native Scanner Coin")
         self.native.decimals = 18
         self.native.save(update_fields=["decimals"])
@@ -64,7 +64,7 @@ class EvmNativeDepositScannerTests(TestCase):
         )
 
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
     @staticmethod
@@ -110,12 +110,14 @@ class EvmNativeDepositScannerTests(TestCase):
             },
         )()
 
-        logs, created = EvmNativeDepositScanner.scan_range_without_cursor(
-            chain=self.chain,
-            rpc_client=rpc_client,
-            watch_set=self.watch_set,
-            from_block=120,
-            to_block=120,
+        logs, _native_observed, _erc20_observed, created, _created_erc20 = (
+            EvmLogScanner.scan_range_without_cursor(
+                chain=self.chain,
+                rpc_client=rpc_client,
+                watch_set=self.watch_set,
+                from_block=120,
+                to_block=120,
+            )
         )
 
         transfer = Transfer.objects.get()
@@ -130,7 +132,7 @@ class EvmNativeDepositScannerTests(TestCase):
         self.assertEqual(transfer.hash, "0x" + "cd" * 32)
         self.assertEqual(transfer.block_hash, "0x" + "22" * 32)
 
-    @patch("evm.scanner.native_deposits.TransferService.create_observed_transfer")
+    @patch("evm.scanner.observed_transfers.TransferService.create_observed_transfer")
     def test_scan_range_builds_observed_payload_for_native_event(
         self,
         create_observed_transfer_mock,
@@ -149,7 +151,7 @@ class EvmNativeDepositScannerTests(TestCase):
             },
         )()
 
-        EvmNativeDepositScanner.scan_range_without_cursor(
+        EvmLogScanner.scan_range_without_cursor(
             chain=self.chain,
             rpc_client=rpc_client,
             watch_set=self.watch_set,
@@ -189,12 +191,14 @@ class EvmNativeDepositScannerTests(TestCase):
             },
         )()
 
-        observed_logs, created = EvmNativeDepositScanner.scan_range_without_cursor(
-            chain=self.chain,
-            rpc_client=rpc_client,
-            watch_set=self.watch_set,
-            from_block=120,
-            to_block=120,
+        observed_logs, _native_observed, _erc20_observed, created, _created_erc20 = (
+            EvmLogScanner.scan_range_without_cursor(
+                chain=self.chain,
+                rpc_client=rpc_client,
+                watch_set=self.watch_set,
+                from_block=120,
+                to_block=120,
+            )
         )
 
         self.assertEqual(len(observed_logs), 3)
@@ -222,21 +226,23 @@ class EvmNativeDepositScannerTests(TestCase):
             },
         )()
 
-        observed_logs, created = EvmNativeDepositScanner.scan_range_without_cursor(
-            chain=self.chain,
-            rpc_client=rpc_client,
-            watch_set=self.watch_set,
-            from_block=120,
-            to_block=120,
+        observed_logs, _native_observed, _erc20_observed, created, _created_erc20 = (
+            EvmLogScanner.scan_range_without_cursor(
+                chain=self.chain,
+                rpc_client=rpc_client,
+                watch_set=self.watch_set,
+                from_block=120,
+                to_block=120,
+            )
         )
 
         self.assertEqual(len(observed_logs), 4)
         self.assertEqual(created, 0)
         create_observed_transfer_mock.assert_not_called()
 
-    @patch("evm.scanner.native_deposits.load_watch_set")
-    @patch("evm.scanner.native_deposits.EvmScannerRpcClient.get_logs")
-    @patch("evm.scanner.native_deposits.EvmScannerRpcClient.get_latest_block_number")
+    @patch("evm.scanner.logs.load_watch_set")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_chain_advances_cursor_to_latest_when_watch_set_empty(
         self,
         get_latest_block_number_mock,
@@ -249,12 +255,9 @@ class EvmNativeDepositScannerTests(TestCase):
             tokens_by_address={},
         )
 
-        result = EvmNativeDepositScanner.scan_chain(chain=self.chain, batch_size=32)
+        result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32).native
 
-        cursor = EvmScanCursor.objects.get(
-            chain=self.chain,
-            scanner_type=EvmScanCursorType.NATIVE_DEPOSIT,
-        )
+        cursor = EvmScanCursor.objects.get(chain=self.chain)
         self.assertEqual(result.latest_block, 200)
         self.assertEqual(result.observed_logs, 0)
         self.assertEqual(cursor.last_scanned_block, 200)
@@ -286,14 +289,55 @@ class EvmNativeDepositScannerTests(TestCase):
             },
         )()
 
-        logs, created = EvmNativeDepositScanner.scan_range_without_cursor(
-            chain=self.chain,
-            rpc_client=rpc_client,
-            watch_set=self.watch_set,
-            from_block=119,
-            to_block=121,
+        logs, _native_observed, _erc20_observed, created, _created_erc20 = (
+            EvmLogScanner.scan_range_without_cursor(
+                chain=self.chain,
+                rpc_client=rpc_client,
+                watch_set=self.watch_set,
+                from_block=119,
+                to_block=121,
+            )
         )
 
         self.assertEqual(logs, [])
         self.assertEqual(created, 0)
+        self.assertFalse(Transfer.objects.filter(pk=old_transfer.pk).exists())
+
+    def test_scan_range_ignores_removed_log_hash_when_dropping_reorged_transfer(self):
+        old_transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=120,
+            block_hash="0x" + "11" * 32,
+            hash="0x" + "cd" * 32,
+            event_id="native:7",
+            crypto=self.native,
+            from_address=self.payer,
+            to_address=self.slot.address,
+            value=Decimal(10**18),
+            amount=Decimal("1"),
+            timestamp=1_700_000_000,
+            datetime=timezone.now(),
+            status=TransferStatus.CONFIRMING,
+        )
+        removed_log = self._build_native_log()
+        removed_log["removed"] = True
+        removed_log["blockHash"] = bytes.fromhex("11" * 32)
+        rpc_client = Mock()
+        rpc_client.get_logs.return_value = [removed_log]
+        rpc_client.get_block_hash.return_value = "0x" + "22" * 32
+
+        logs, _native_observed, _erc20_observed, created, _created_erc20 = (
+            EvmLogScanner.scan_range_without_cursor(
+                chain=self.chain,
+                rpc_client=rpc_client,
+                watch_set=self.watch_set,
+                from_block=119,
+                to_block=121,
+            )
+        )
+
+        self.assertEqual(logs, [removed_log])
+        self.assertEqual(created, 0)
+        rpc_client.get_block_hash.assert_called_once_with(block_number=120)
+        rpc_client.get_block_timestamp.assert_not_called()
         self.assertFalse(Transfer.objects.filter(pk=old_transfer.pk).exists())

@@ -5,17 +5,16 @@ from django.db.models.signals import post_delete
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
-from chains.models import Address
 from chains.models import ChainType
 from currencies.models import ChainToken
 from currencies.models import Crypto
+from evm.models import DepositSlot
 from evm.scanner.watchers import clear_evm_chain_tokens_cache
 from evm.scanner.watchers import clear_evm_watched_addresses_cache
 from evm.scanner.watchers import load_watch_set
 from evm.scanner.watchers import refresh_evm_watched_addresses
 from invoices.models import InvoiceBillingMode
 from invoices.models import InvoicePaySlot
-from projects.models import RecipientAddress
 
 
 def _refresh_evm_watched_addresses_on_commit() -> None:
@@ -49,18 +48,10 @@ def _refresh_crypto_chain_tokens_on_commit(*, crypto: Crypto) -> None:
     transaction.on_commit(refresh_chain_watch_sets)
 
 
-@receiver(post_save, sender=Address)
-@receiver(post_delete, sender=Address)
-def refresh_watch_set_when_address_changes(sender, instance: Address, **kwargs):
-    _refresh_evm_watched_addresses_on_commit()
-
-
-@receiver(post_save, sender=RecipientAddress)
-@receiver(post_delete, sender=RecipientAddress)
-def refresh_watch_set_when_recipient_address_changes(
-    sender,
-    instance: RecipientAddress,
-    **kwargs,
+@receiver(post_save, sender=DepositSlot)
+@receiver(post_delete, sender=DepositSlot)
+def refresh_watch_set_when_deposit_slot_changes(
+    sender, instance: DepositSlot, **kwargs
 ):
     _refresh_evm_watched_addresses_on_commit()
 

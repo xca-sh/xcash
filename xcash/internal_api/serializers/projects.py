@@ -178,7 +178,7 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
         try:
             addr = obj.wallet.get_address(
                 chain_type=ChainType.EVM,
-                usage=AddressUsage.Vault,
+                usage=AddressUsage.HotWallet,
             )
         except Exception:
             return None

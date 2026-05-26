@@ -19,7 +19,6 @@ from common.exceptions import APIError
 from common.serializers import StrippedDecimalField
 from currencies.service import CryptoService
 from currencies.service import FiatService
-from evm.deployments import get_xcash_deposit_deployment
 from projects.service import ProjectService
 
 from .models import Invoice
@@ -208,15 +207,6 @@ class InvoiceCreateSerializer(Serializer):
         ):
             raise APIError(ErrorCode.CONTRACT_BILLING_EVM_ONLY)
 
-        evm_chains = list(chains_by_code.values())
-        for chain in evm_chains:
-            try:
-                get_xcash_deposit_deployment(chain.code)
-            except RuntimeError as exc:
-                raise APIError(
-                    ErrorCode.CONTRACT_BILLING_FACTORY_NOT_CONFIGURED
-                ) from exc
-
         for crypto_symbol, chain_codes in methods.items():
             crypto = CryptoService.get_by_symbol(crypto_symbol)
             for chain_code in chain_codes:
@@ -225,7 +215,7 @@ class InvoiceCreateSerializer(Serializer):
                     raise APIError(ErrorCode.CHAIN_CRYPTO_NOT_SUPPORT)
 
     def _validate_differ_billing(self, attrs):
-        # 差额账单依赖商户配置的 RecipientAddress；新架构下 EVM 一律走 DepositSlot，
+        # 差额账单依赖商户配置的差额账单收款地址；新架构下 EVM 一律走 DepositSlot，
         # 差额模式只对 Tron 这类没有合约收款方案的链有意义。
         methods = attrs.get("methods") or {}
 

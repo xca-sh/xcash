@@ -7,12 +7,11 @@ from django.db.models import Q
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from common.decorators import singleton_task
 from common.time import ago
-from evm.coordinator import InternalEvmTaskCoordinator
 from evm.models import EvmTxTask
+from evm.poller import EvmTaskPoller
 from evm.scanner.rpc import EvmScannerRpcError
 from evm.scanner.service import EvmChainScannerService
 
@@ -24,19 +23,19 @@ _DEFAULT_AVG_BLOCK_INTERVAL_SECONDS = 15
 _AVG_BLOCK_INTERVAL_SAMPLE_SIZE = 20
 # 平均间隔按链缓存 5 分钟，不必每轮都查 RPC。
 _AVG_BLOCK_INTERVAL_CACHE_TTL_SECONDS = 300
-# 单轮兜底最多处理的候选任务数，避免长时间积压把 reconcile 拖成长任务。
-_RECONCILE_CANDIDATE_LIMIT = 50
+# 单轮重扫最多处理的候选任务数，避免长时间积压把重扫拖成长任务。
+_RESCAN_CANDIDATE_LIMIT = 50
 
 
 @shared_task(ignore_result=True)
 @singleton_task(timeout=30, use_params=True)
-def broadcast_evm_task(pk: int) -> None:
+def _broadcast_evm_task(pk: int) -> None:
     # 任务入口统一使用 TxTask 命名，避免继续暴露旧的广播载荷概念。
     tx_task = EvmTxTask.objects.select_related("base_task").get(pk=pk)
     # 普通 Celery 入口只负责 QUEUED 首次广播；PENDING_CHAIN 重播统一由
-    # coordinator 在超时与查 receipt 后触发，避免重复消息绕过重播间隔。
+    # poller 在超时与查 receipt 后触发，避免重复消息绕过重播间隔。
     if (
-        tx_task.base_task.result != TxTaskResult.UNKNOWN
+        tx_task.base_task.success is not None
         or tx_task.base_task.stage != TxTaskStage.QUEUED
     ):
         return
@@ -56,10 +55,10 @@ def broadcast_evm_task(pk: int) -> None:
         return
     tx_task.broadcast()
     # 广播成功后，链式调度同地址下一个 QUEUED nonce，快速填充 pipeline。
-    tx_task.base_task.refresh_from_db(fields=["stage", "result"])
+    tx_task.base_task.refresh_from_db(fields=["stage", "success"])
     if (
         tx_task.base_task.stage != TxTaskStage.PENDING_CHAIN
-        or tx_task.base_task.result != TxTaskResult.UNKNOWN
+        or tx_task.base_task.success is not None
     ):
         return
     _chain_dispatch_next(tx_task)
@@ -80,7 +79,7 @@ def _chain_dispatch_next(completed_task: EvmTxTask) -> None:
         .first()
     )
     if next_task is not None:
-        broadcast_evm_task.delay(next_task.pk)
+        _broadcast_evm_task.delay(next_task.pk)
 
 
 @shared_task(ignore_result=True)
@@ -118,16 +117,14 @@ def dispatch_due_evm_tx_tasks() -> None:
 
     for task in selected:
         task_pk = task.pk
-        db_transaction.on_commit(lambda pk=task_pk: broadcast_evm_task.delay(pk))
+        db_transaction.on_commit(lambda pk=task_pk: _broadcast_evm_task.delay(pk))
 
 
 @shared_task(ignore_result=True)
 @singleton_task(timeout=48, use_params=True)
-def scan_evm_chain(chain_pk: int) -> None:
-    """按链执行一次 EVM 原生币充值 + ERC20 Transfer 自扫描。"""
+def _scan_evm_chain(chain_pk: int) -> None:
+    """按链执行一次 EVM DepositSlot 充值日志统一扫描。"""
     chain = Chain.objects.get(pk=chain_pk)
-    if not chain.active:
-        return
 
     result = None
     try:
@@ -135,7 +132,7 @@ def scan_evm_chain(chain_pk: int) -> None:
     except EvmScannerRpcError:
         logger.warning("EVM 自扫描 RPC 失败", chain=chain.code)
 
-    InternalEvmTaskCoordinator.reconcile_chain(chain=chain)
+    EvmTaskPoller.poll_chain(chain=chain)
     if result is None:
         return
 
@@ -154,51 +151,13 @@ def scan_evm_chain(chain_pk: int) -> None:
 
 
 @shared_task(ignore_result=True)
-@singleton_task(timeout=48, use_params=True)
-def scan_evm_erc20_chain(chain_pk: int) -> None:
-    """按链执行一次 EVM ERC20 Transfer 自扫描。"""
-    chain = Chain.objects.get(pk=chain_pk)
-    if not chain.active:
-        return
-
-    result = None
-    try:
-        result = EvmChainScannerService.scan_erc20(chain=chain)
-    except EvmScannerRpcError:
-        logger.warning("EVM ERC20 自扫描 RPC 失败", chain=chain.code)
-
-    InternalEvmTaskCoordinator.reconcile_chain(chain=chain)
-    if result is None:
-        return
-
-    logger.info(
-        "EVM ERC20 自扫描完成",
-        chain=chain.code,
-        erc20_from=result.from_block,
-        erc20_to=result.to_block,
-        erc20_logs=result.observed_logs,
-        erc20_created=result.created_transfers,
-    )
-
-
-@shared_task(ignore_result=True)
 def scan_active_evm_chains() -> None:
-    """批量调度 EVM 链原生币充值 + ERC20 自扫描任务。"""
+    """批量调度 EVM 链统一日志扫描任务。"""
     for chain_pk in Chain.objects.filter(
         active=True,
         type=ChainType.EVM,
     ).values_list("pk", flat=True):
-        scan_evm_chain.delay(chain_pk)
-
-
-@shared_task(ignore_result=True)
-def scan_active_evm_erc20_chains() -> None:
-    """批量调度所有启用中的 EVM 链 ERC20 自扫描任务。"""
-    for chain_pk in Chain.objects.filter(
-        active=True,
-        type=ChainType.EVM,
-    ).values_list("pk", flat=True):
-        scan_evm_erc20_chain.delay(chain_pk)
+        _scan_evm_chain.delay(chain_pk)
 
 
 def _estimate_avg_block_interval(chain) -> float:
@@ -253,7 +212,7 @@ def _get_avg_block_interval(chain) -> float:
     return interval
 
 
-def _compute_reconcile_threshold_seconds(chain) -> tuple[int, float]:
+def _compute_rescan_threshold_seconds(chain) -> tuple[int, float]:
     """按链动态推算 "超出该时长仍停在 PENDING_CHAIN 即视为需要兜底" 的阈值。
 
     = max(30, avg_block_interval * confirm_block_count * 2 + 30)
@@ -309,13 +268,13 @@ def _collect_blocks_from_receipts(chain, task: TxTask) -> set[int]:
 
 @shared_task(ignore_result=True)
 @singleton_task(timeout=48, use_params=True)
-def reconcile_stale_pending_chain_evm(chain_pk: int) -> None:
-    """针对单条 EVM 链，给长时间停在 PENDING_CHAIN 的任务做 receipt 兜底。
+def _rescan_pending_evm_chain(chain_pk: int) -> None:
+    """针对单条 EVM 链，给长时间停在 PENDING_CHAIN 的任务做 receipt 重扫兜底。
 
-    DEBUG 模式下 worker 重启会把 cursor 对齐链头，cursor 停滞期间新上链的 tx 会被
-    主扫描漏掉，对应 TxTask 会永久卡在 PENDING_CHAIN。这里主动对候选任务的
-    全部历史 tx_hash 查链上 receipt，命中后交给扫描器 scan_blocks_for_reconcile
-    对那些块做一次定点复扫，让 Transfer + process/confirm 管线自然推进。
+    若扫描器因 RPC 故障、节点重组、长时间下线等原因漏扫了某些块，对应 TxTask 会
+    卡在 PENDING_CHAIN。这里主动对候选任务的全部历史 tx_hash 查链上 receipt，
+    命中后交给扫描器 rescan_blocks 对那些块做一次定点重扫，让 Transfer +
+    process/confirm 管线自然推进。
     """
     from chains.models import Chain
 
@@ -323,14 +282,14 @@ def reconcile_stale_pending_chain_evm(chain_pk: int) -> None:
     if not chain.active:
         return
 
-    threshold_seconds, avg_block_interval = _compute_reconcile_threshold_seconds(chain)
+    threshold_seconds, avg_block_interval = _compute_rescan_threshold_seconds(chain)
     stale_tasks = list(
         TxTask.objects.filter(
             chain_id=chain_pk,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success__isnull=True,
             updated_at__lt=ago(seconds=threshold_seconds),
-        ).order_by("updated_at")[:_RECONCILE_CANDIDATE_LIMIT]
+        ).order_by("updated_at")[:_RESCAN_CANDIDATE_LIMIT]
     )
 
     blocks_to_rescan: set[int] = set()
@@ -342,12 +301,12 @@ def reconcile_stale_pending_chain_evm(chain_pk: int) -> None:
             blocks_to_rescan.update(task_blocks)
 
     if blocks_to_rescan:
-        EvmChainScannerService.scan_blocks_for_reconcile(
+        EvmChainScannerService.rescan_blocks(
             chain=chain, block_numbers=blocks_to_rescan
         )
 
     logger.info(
-        "EVM 兜底复扫完成",
+        "EVM 重扫完成",
         chain=chain.code,
         stale_count=len(stale_tasks),
         resolved_count=resolved_count,
@@ -358,8 +317,8 @@ def reconcile_stale_pending_chain_evm(chain_pk: int) -> None:
 
 
 @shared_task(ignore_result=True)
-def reconcile_stale_pending_chain_for_active_evm_chains() -> None:
-    """批量为所有启用的 EVM 链触发兜底复扫，风格对齐 scan_active_evm_chains。"""
+def rescan_pending_evm_chains() -> None:
+    """批量为所有启用的 EVM 链触发重扫，风格对齐 scan_active_evm_chains。"""
     from chains.models import Chain
     from chains.models import ChainType
 
@@ -367,4 +326,4 @@ def reconcile_stale_pending_chain_for_active_evm_chains() -> None:
         active=True,
         type=ChainType.EVM,
     ).values_list("pk", flat=True):
-        reconcile_stale_pending_chain_evm.delay(chain_pk)
+        _rescan_pending_evm_chain.delay(chain_pk)

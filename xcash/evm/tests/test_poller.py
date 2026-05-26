@@ -1,11 +1,11 @@
 """
-协调器 _observe_confirmed_transaction 和 _parse_erc20_transfer_log 的单元测试。
+轮询器 _observe_confirmed_transaction 和 _parse_erc20_transfer_log 的单元测试。
 
 覆盖：
 - 原生币路径：get_block + get_transaction → 构建正确的 ObservedTransferPayload
 - ERC-20 路径：从 receipt.logs 解析 Transfer 事件 → 构建正确的 ObservedTransferPayload
 - _parse_erc20_transfer_log 独立测试：正常解析、空 logs、非 Transfer topic
-- 集成测试：reconcile_chain → create_observed_transfer → process() 完整管线
+- 集成测试：poll_chain → create_observed_transfer → process() 完整管线
 """
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ from web3 import Web3
 from chains.models import Address
 from chains.models import AddressUsage
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from chains.models import Chain
 from chains.models import ChainType
@@ -35,7 +34,7 @@ from chains.models import Wallet
 from currencies.models import ChainToken
 from currencies.models import Crypto
 from evm.choices import TxKind
-from evm.coordinator import InternalEvmTaskCoordinator
+from evm.poller import EvmTaskPoller
 from evm.internal_tx._log_utils import matches_transfer_log
 from evm.internal_tx._log_utils import normalize_log_index
 from evm.models import EvmTxTask
@@ -187,14 +186,14 @@ class ObserveConfirmedNativeTest(TestCase):
 
     def setUp(self):
         self.eth = Crypto.objects.create(
-            name="Ethereum Coordinator Native",
+            name="Ethereum Poller Native",
             symbol="ETHCN",
             decimals=18,
-            coingecko_id="ethereum-coordinator-native",
+            coingecko_id="ethereum-poller-native",
         )
         self.chain = Chain.objects.create(
             code="eth-coord-native",
-            name="Ethereum Coordinator Native",
+            name="Ethereum Poller Native",
             type=ChainType.EVM,
             chain_id=90_001,
             # rpc 设为空字符串以跳过 save() 内的自动 RPC 检测
@@ -209,7 +208,7 @@ class ObserveConfirmedNativeTest(TestCase):
         self.address = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=_VAULT_HEX,
@@ -219,7 +218,7 @@ class ObserveConfirmedNativeTest(TestCase):
             address=self.address,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         self.evm_task = EvmTxTask.objects.create(
             base_task=self.base_task,
@@ -256,7 +255,7 @@ class ObserveConfirmedNativeTest(TestCase):
             patch.object(type(self.chain), "w3", new_callable=lambda: property(lambda self: mock_w3)),
             patch("evm.internal_tx.processor.process_internal_transaction") as process_mock,
         ):
-            InternalEvmTaskCoordinator._observe_confirmed_transaction(
+            EvmTaskPoller._observe_confirmed_transaction(
                 evm_task=self.evm_task,
                 tx_hash=tx_hash,
                 receipt=receipt,
@@ -277,20 +276,20 @@ class ObserveConfirmedErc20Test(TestCase):
 
     def setUp(self):
         self.eth = Crypto.objects.create(
-            name="Ethereum Coordinator ERC20",
+            name="Ethereum Poller ERC20",
             symbol="ETHCE",
             decimals=18,
-            coingecko_id="ethereum-coordinator-erc20",
+            coingecko_id="ethereum-poller-erc20",
         )
         self.usdt = Crypto.objects.create(
-            name="Tether Coordinator",
+            name="Tether Poller",
             symbol="USDTC",
             decimals=6,
-            coingecko_id="tether-coordinator",
+            coingecko_id="tether-poller",
         )
         self.chain = Chain.objects.create(
             code="eth-coord-erc20",
-            name="Ethereum Coordinator ERC20",
+            name="Ethereum Poller ERC20",
             type=ChainType.EVM,
             chain_id=90_002,
             rpc="",
@@ -310,7 +309,7 @@ class ObserveConfirmedErc20Test(TestCase):
         self.address = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=_VAULT_HEX,
@@ -320,7 +319,7 @@ class ObserveConfirmedErc20Test(TestCase):
             address=self.address,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         # ERC-20 发送时 value=0，data 包含 transfer calldata
         self.evm_task = EvmTxTask.objects.create(
@@ -361,7 +360,7 @@ class ObserveConfirmedErc20Test(TestCase):
             patch.object(type(self.chain), "w3", new_callable=lambda: property(lambda self: mock_w3)),
             patch("evm.internal_tx.processor.process_internal_transaction") as process_mock,
         ):
-            InternalEvmTaskCoordinator._observe_confirmed_transaction(
+            EvmTaskPoller._observe_confirmed_transaction(
                 evm_task=self.evm_task,
                 tx_hash=tx_hash,
                 receipt=receipt,
@@ -398,7 +397,7 @@ class ObserveConfirmedErc20Test(TestCase):
             patch.object(type(self.chain), "w3", new_callable=lambda: property(lambda self: mock_w3)),
             patch("evm.internal_tx.processor.process_internal_transaction") as process_mock,
         ):
-            InternalEvmTaskCoordinator._observe_confirmed_transaction(
+            EvmTaskPoller._observe_confirmed_transaction(
                 evm_task=self.evm_task,
                 tx_hash=tx_hash,
                 receipt=receipt,
@@ -408,28 +407,28 @@ class ObserveConfirmedErc20Test(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 集成测试：reconcile_chain → TransferService → process() 完整管线
+# 集成测试：poll_chain → TransferService → process() 完整管线
 # ---------------------------------------------------------------------------
-class CoordinatorIntegrationTest(TestCase):
+class PollerIntegrationTest(TestCase):
     """协调器兜底路径集成测试：scanner 漏扫时，协调器作为兜底创建 Transfer 并完成匹配。"""
 
     def setUp(self):
         self.wallet = Wallet.objects.create()
         self.native = Crypto.objects.create(
-            name="Ethereum Coordinator Integration",
+            name="Ethereum Poller Integration",
             symbol="ETHCI",
-            coingecko_id="ethereum-coordinator-integration",
+            coingecko_id="ethereum-poller-integration",
             decimals=18,
         )
         self.token = Crypto.objects.create(
-            name="USDC Coordinator Integration",
+            name="USDC Poller Integration",
             symbol="USDCCI",
-            coingecko_id="usdc-coordinator-integration",
+            coingecko_id="usdc-poller-integration",
             decimals=6,
         )
         self.chain = Chain.objects.create(
             code="eth-coord-integ",
-            name="Ethereum Coordinator Integration",
+            name="Ethereum Poller Integration",
             type=ChainType.EVM,
             chain_id=90_100,
             rpc="",
@@ -446,7 +445,7 @@ class CoordinatorIntegrationTest(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=_VAULT_HEX,
@@ -472,7 +471,7 @@ class CoordinatorIntegrationTest(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         TxHash.objects.create(
             tx_task=base_task, chain=self.chain, hash=tx_hash, version=0,
@@ -522,7 +521,7 @@ class CoordinatorIntegrationTest(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         TxHash.objects.create(
             tx_task=base_task, chain=self.chain, hash=tx_hash, version=0,
@@ -608,7 +607,7 @@ class CoordinatorIntegrationTest(TestCase):
     @patch("withdrawals.service.WebhookService.create_event")
     @patch("chains.tasks.process_transfer.apply_async")
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_erc20_coordinator_creates_onchain_transfer_and_dispatches_process(
+    def test_erc20_poller_creates_onchain_transfer_and_dispatches_process(
         self,
         chain_w3_mock,
         process_mock,
@@ -621,7 +620,7 @@ class CoordinatorIntegrationTest(TestCase):
         chain_w3_mock.return_value = self._mock_erc20_rpc(tx_hash=tx_hash)
 
         with self.captureOnCommitCallbacks(execute=True):
-            InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+            EvmTaskPoller.poll_chain(chain=self.chain)
 
         # 验证 Transfer 被创建且字段正确
         self.assertEqual(
@@ -646,13 +645,13 @@ class CoordinatorIntegrationTest(TestCase):
     @patch("withdrawals.service.WebhookService.create_event")
     @patch("chains.tasks.process_transfer.apply_async")
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_erc20_coordinator_observe_then_process_matches_withdrawal(
+    def test_erc20_poller_observe_then_process_matches_withdrawal(
         self,
         chain_w3_mock,
         process_mock,
         webhook_mock,
     ):
-        """ERC-20 完整管线：reconcile 创建 Transfer → process() 匹配提币。"""
+        """ERC-20 完整管线：poll_chain 创建 Transfer → process() 匹配提币。"""
         from withdrawals.models import WithdrawalStatus
 
         tx_hash = "0x" + "a2" * 32
@@ -661,7 +660,7 @@ class CoordinatorIntegrationTest(TestCase):
         chain_w3_mock.return_value = self._mock_erc20_rpc(tx_hash=tx_hash)
 
         with self.captureOnCommitCallbacks(execute=True):
-            InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+            EvmTaskPoller.poll_chain(chain=self.chain)
 
         # 手动调用 process()（模拟 Celery worker 执行）
         transfer = Transfer.objects.get(chain=self.chain, hash=tx_hash)
@@ -712,13 +711,13 @@ class CoordinatorIntegrationTest(TestCase):
     @patch("withdrawals.service.WebhookService.create_event")
     @patch("chains.tasks.process_transfer.apply_async")
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_native_coordinator_observe_then_process_matches_withdrawal(
+    def test_native_poller_observe_then_process_matches_withdrawal(
         self,
         chain_w3_mock,
         process_mock,
         webhook_mock,
     ):
-        """Native 完整管线：reconcile 创建 Transfer → process() 匹配提币。"""
+        """Native 完整管线：poll_chain 创建 Transfer → process() 匹配提币。"""
         from withdrawals.models import WithdrawalStatus
 
         tx_hash = "0x" + "a3" * 32
@@ -727,7 +726,7 @@ class CoordinatorIntegrationTest(TestCase):
         chain_w3_mock.return_value = self._mock_native_rpc(tx_hash=tx_hash)
 
         with self.captureOnCommitCallbacks(execute=True):
-            InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+            EvmTaskPoller.poll_chain(chain=self.chain)
 
         transfer = Transfer.objects.get(chain=self.chain, hash=tx_hash)
         self.assertEqual(transfer.event_id, "native:tx")
@@ -747,7 +746,7 @@ class CoordinatorIntegrationTest(TestCase):
     @patch("withdrawals.service.WebhookService.create_event")
     @patch("chains.tasks.process_transfer.apply_async")
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_coordinator_idempotent_when_scanner_already_created_transfer(
+    def test_poller_idempotent_when_scanner_already_created_transfer(
         self,
         chain_w3_mock,
         process_mock,
@@ -776,7 +775,7 @@ class CoordinatorIntegrationTest(TestCase):
         chain_w3_mock.return_value = self._mock_erc20_rpc(tx_hash=tx_hash)
 
         with self.captureOnCommitCallbacks(execute=True):
-            InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+            EvmTaskPoller.poll_chain(chain=self.chain)
 
         # 不应产生重复记录
         self.assertEqual(
@@ -792,7 +791,7 @@ class CoordinatorIntegrationTest(TestCase):
 
     @patch("withdrawals.service.WebhookService.create_event")
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_coordinator_marks_failed_when_receipt_status_zero(
+    def test_poller_marks_failed_when_receipt_status_zero(
         self,
         chain_w3_mock,
         webhook_mock,
@@ -811,12 +810,12 @@ class CoordinatorIntegrationTest(TestCase):
         )
 
         with self.captureOnCommitCallbacks(execute=True):
-            InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+            EvmTaskPoller.poll_chain(chain=self.chain)
 
         base_task.refresh_from_db()
         withdrawal.refresh_from_db()
         self.assertEqual(base_task.stage, TxTaskStage.FINALIZED)
-        self.assertEqual(base_task.result, TxTaskResult.FAILED)
+        self.assertIs(base_task.success, False)
         self.assertEqual(withdrawal.status, WithdrawalStatus.FAILED)
         # 失败交易不应创建 Transfer
         self.assertEqual(
@@ -824,7 +823,7 @@ class CoordinatorIntegrationTest(TestCase):
         )
 
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_reconcile_continues_when_failed_finalize_raises(
+    def test_poll_continues_when_failed_finalize_raises(
         self,
         chain_w3_mock,
     ):
@@ -835,7 +834,7 @@ class CoordinatorIntegrationTest(TestCase):
                 tx_type=TxTaskType.Withdrawal,
                 tx_hash=tx_hash,
                 stage=TxTaskStage.PENDING_CHAIN,
-                result=TxTaskResult.UNKNOWN,
+                success=None,
             )
             return EvmTxTask.objects.create(
                 base_task=base_task,
@@ -861,10 +860,10 @@ class CoordinatorIntegrationTest(TestCase):
         )
 
         with patch.object(
-            InternalEvmTaskCoordinator,
+            EvmTaskPoller,
             "_finalize_failed_task",
             side_effect=[RuntimeError("handler failed"), True],
         ) as finalize_failed_mock:
-            InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+            EvmTaskPoller.poll_chain(chain=self.chain)
 
         self.assertEqual(finalize_failed_mock.call_count, 2)

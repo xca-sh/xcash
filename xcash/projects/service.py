@@ -6,8 +6,8 @@ if TYPE_CHECKING:
     from django.db.models import QuerySet
 
 from chains.service import ChainService
+from projects.models import DifferRecipientAddress
 from projects.models import Project
-from projects.models import RecipientAddress
 
 
 class ProjectService:
@@ -26,8 +26,8 @@ class ProjectService:
         project: Project,
         *,
         chain_type: str | None = None,
-    ) -> QuerySet[RecipientAddress]:
-        qs = RecipientAddress.objects.filter(project=project)
+    ) -> QuerySet[DifferRecipientAddress]:
+        qs = DifferRecipientAddress.objects.filter(project=project)
         if chain_type:
             qs = qs.filter(chain_type=chain_type)
         return qs
@@ -50,12 +50,8 @@ class ProjectService:
         *,
         project: Project,
         chain_type: str,
-    ) -> RecipientAddress | None:
-        """取指定链类型下最早创建的账单收款地址。
-
-        合约账单首次派生 collector 时用它锁定 recipient;后续应复用
-        InvoicePaySlot 历史记录,避免商户调整收款地址导致 collector 地址漂移。
-        """
+    ) -> DifferRecipientAddress | None:
+        """取指定链类型下最早创建的差额账单收款地址。"""
         return (
             ProjectService.invoice_recipients(project, chain_type=chain_type)
             .order_by("created_at", "id")

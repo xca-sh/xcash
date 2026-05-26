@@ -166,7 +166,7 @@ class TransferAdmin(ReadOnlyModelAdmin):
 
 @admin.register(TxTask)
 class TxTaskAdmin(ReadOnlyModelAdmin):
-    # TxTask 是跨链统一锚点；后台只做观察与排障，禁止人工修改，避免破坏 stage/result 二元一致约束。
+    # TxTask 是跨链统一锚点；后台只做观察与排障，禁止人工修改，避免破坏 stage/success 二元一致约束。
     ordering = ("-created_at",)
     list_display = (
         "display_address",
@@ -176,7 +176,7 @@ class TxTaskAdmin(ReadOnlyModelAdmin):
         "display_status",
         "created_at",
     )
-    list_filter = ("stage", "result", "tx_type", "chain")
+    list_filter = ("stage", "success", "tx_type", "chain")
     list_select_related = ("address", "chain")
     search_fields = ("tx_hash", "address__address")
 
@@ -208,6 +208,6 @@ class TxTaskAdmin(ReadOnlyModelAdmin):
         },
     )
     def display_status(self, instance: TxTask):
-        # TxTask.display_status 已将 stage/result 融合为面向运营的单字段语义，
+        # TxTask.display_status 已将 stage/success 融合为面向运营的单字段语义，
         # 这里沿用同一来源避免后台与业务代码的展示口径漂移。
         return instance.display_status

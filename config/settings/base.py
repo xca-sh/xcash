@@ -249,7 +249,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
-    # 后台 session 超时由 PlatformSettings 动态控制，每次请求刷新过期时间。
+    # 后台 session 超时由 SystemSettings 动态控制，每次请求刷新过期时间。
     "common.middlewares.AdminSessionTimeoutMiddleware",
     # 让 request.user 挂载 otp_device / is_verified，后续后台访问控制统一复用这层状态。
     "django_otp.middleware.OTPMiddleware",
@@ -423,8 +423,8 @@ CELERY_WORKER_HIJACK_ROOT_LOGGER = False  # 减少日志开销
 
 # 队列隔离：扫描任务路由到独立队列，防止被 confirm/broadcast/process 高频任务饥饿。
 CELERY_TASK_ROUTES = {
-    "evm.tasks.scan_evm_erc20_chain": {"queue": "scan"},
-    "evm.tasks.scan_active_evm_erc20_chains": {"queue": "scan"},
+    "evm.tasks._scan_evm_chain": {"queue": "scan"},
+    "evm.tasks.scan_active_evm_chains": {"queue": "scan"},
     "tron.tasks.scan_tron_chain": {"queue": "scan"},
     "tron.tasks.scan_active_tron_chains": {"queue": "scan"},
     "stress.tasks.prepare_stress": {"queue": "stress"},

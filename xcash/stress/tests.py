@@ -12,11 +12,9 @@ from django.test import RequestFactory
 from django.test import SimpleTestCase
 from django.test import TestCase
 from django.test import override_settings
-from django.utils import timezone
 from hexbytes import HexBytes
 from stress.evm import send_erc20
 from stress.evm import send_native
-from stress.models import DepositStressCase
 from stress.models import DepositStressCaseStatus
 from stress.models import InvoiceStressCase
 from stress.models import InvoiceStressCaseStatus
@@ -26,24 +24,21 @@ from stress.payment import simulate_payment
 from stress.service import _ANVIL_RECIPIENT_ADDRESSES
 from stress.service import StressService
 from stress.service import _build_deposit_cases
-from stress.service import _setup_recipient_addresses
+from stress.service import _setup_differ_recipient_addresses
 from stress.tasks import _execute
 from stress.tasks import _execute_deposit
 from stress.tasks import execute_deposit_case_payment
 from stress.tasks import execute_stress_case_payment
 from stress.tasks import prepare_stress
 from stress.views import _handle_webhook
-from web3 import Web3
 
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import Transfer
 from chains.models import Wallet
 from currencies.models import ChainToken
 from currencies.models import Crypto
+from projects.models import DifferRecipientAddress
 from projects.models import Project
-from projects.models import RecipientAddress
-from users.models import Customer
 
 
 @override_settings(STRESS_WEBHOOK_BASE_URL="http://localhost")
@@ -207,7 +202,7 @@ class StressServiceTests(SimpleTestCase):
             patch(
                 "stress.service.Project.objects.create", return_value=created_project
             ),
-            patch("stress.service._setup_recipient_addresses"),
+            patch("stress.service._setup_differ_recipient_addresses"),
             patch(
                 "stress.service.InvoiceStressCase.objects.bulk_create", bulk_create_mock
             ),
@@ -237,13 +232,9 @@ class StressServiceTests(SimpleTestCase):
             patch(
                 "stress.service.Project.objects.create", return_value=created_project
             ),
-            patch("stress.service._setup_recipient_addresses"),
-            patch(
-                "stress.service._setup_wallet_for_withdrawal"
-            ) as setup_wallet_mock,
-            patch(
-                "stress.service._fund_vault_for_withdrawal"
-            ) as fund_vault_mock,
+            patch("stress.service._setup_differ_recipient_addresses"),
+            patch("stress.service._setup_wallet_for_withdrawal") as setup_wallet_mock,
+            patch("stress.service._fund_vault_for_withdrawal") as fund_vault_mock,
             patch(
                 "stress.service.InvoiceStressCase.objects.bulk_create"
             ) as bulk_create_mock,
@@ -277,7 +268,7 @@ class StressServiceTests(SimpleTestCase):
             patch(
                 "stress.service.Project.objects.create", return_value=created_project
             ),
-            patch("stress.service._setup_recipient_addresses"),
+            patch("stress.service._setup_differ_recipient_addresses"),
             patch("stress.service.cache", create=True) as cache_mock,
             patch("stress.service.InvoiceStressCase.objects.bulk_create"),
             patch("stress.service.random.random", return_value=0.9),
@@ -304,7 +295,7 @@ class StressServiceTests(SimpleTestCase):
         with (
             patch("stress.service.Project.objects.create", return_value=Project(pk=99)),
             patch(
-                "stress.service._setup_recipient_addresses",
+                "stress.service._setup_differ_recipient_addresses",
                 side_effect=RuntimeError("recipient setup failed"),
             ),
             patch("stress.service.cache", create=True) as cache_mock,
@@ -381,7 +372,9 @@ class StressServiceTests(SimpleTestCase):
             patch(
                 "stress.tasks.execute_stress_case_payment.apply_async"
             ) as payment_dispatch_mock,
-            patch("stress.tasks.check_webhook_timeout.apply_async") as webhook_dispatch_mock,
+            patch(
+                "stress.tasks.check_webhook_timeout.apply_async"
+            ) as webhook_dispatch_mock,
             patch("stress.tasks.StressService.on_case_finished"),
         ):
             _execute(case)
@@ -421,9 +414,7 @@ class StressServiceTests(SimpleTestCase):
             payer.address,
             "pending",
         )
-        w3.provider.make_request.assert_called_once_with(
-            "anvil_setBalance", [ANY, ANY]
-        )
+        w3.provider.make_request.assert_called_once_with("anvil_setBalance", [ANY, ANY])
 
     def test_send_native_uses_dedicated_payer_account(self):
         payer = Mock()
@@ -449,9 +440,7 @@ class StressServiceTests(SimpleTestCase):
             )
 
         w3.eth.account.create.assert_called_once_with()
-        w3.provider.make_request.assert_called_once_with(
-            "anvil_setBalance", [ANY, ANY]
-        )
+        w3.provider.make_request.assert_called_once_with("anvil_setBalance", [ANY, ANY])
         self.assertEqual(result["payer_address"], payer.address)
         payment_tx = payer.sign_transaction.call_args.args[0]
         self.assertEqual(payment_tx["from"], payer.address)
@@ -462,8 +451,8 @@ class StressServiceTests(SimpleTestCase):
         payer.sign_transaction.return_value = SimpleNamespace(raw_transaction=b"payer")
 
         contract = Mock()
-        contract.functions.mint.return_value.build_transaction.side_effect = (
-            lambda tx: tx
+        contract.functions.mint.return_value.build_transaction.side_effect = lambda tx: (
+            tx
         )
         contract.functions.transfer.return_value.build_transaction.side_effect = (
             lambda tx: tx
@@ -504,9 +493,7 @@ class StressServiceTests(SimpleTestCase):
             )
 
         w3.eth.account.create.assert_called_once_with()
-        w3.provider.make_request.assert_called_once_with(
-            "anvil_setBalance", [ANY, ANY]
-        )
+        w3.provider.make_request.assert_called_once_with("anvil_setBalance", [ANY, ANY])
         contract.functions.mint.assert_called_once_with(payer.address, 5_000_000)
         transfer_tx = payer.sign_transaction.call_args.args[0]
         self.assertEqual(transfer_tx["from"], payer.address)
@@ -714,7 +701,9 @@ class StressPaymentTaskTests(SimpleTestCase):
         # 成功路径不应触发 on_case_finished（由 webhook / timeout 推进）
         on_finished_mock.assert_not_called()
 
-    def test_execute_stress_case_payment_keeps_webhook_ok_when_webhook_arrives_early(self):
+    def test_execute_stress_case_payment_keeps_webhook_ok_when_webhook_arrives_early(
+        self,
+    ):
         """链上支付期间 webhook 可能先到，payment task 不得把 WEBHOOK_OK 回退为 PAID。"""
         case = self._make_invoice_case()
 
@@ -948,11 +937,13 @@ class StressRecipientSetupTests(TestCase):
             active=True,
         )
 
-    def test_setup_recipient_addresses_creates_local_recipients_without_templates(self):
-        _setup_recipient_addresses(self.project)
+    def test_setup_differ_recipient_addresses_creates_local_recipients_without_templates(
+        self,
+    ):
+        _setup_differ_recipient_addresses(self.project)
 
         recipients = list(
-            RecipientAddress.objects.filter(project=self.project)
+            DifferRecipientAddress.objects.filter(project=self.project)
             .order_by("chain_type", "address")
             .values("chain_type", "address")
         )
@@ -1179,7 +1170,7 @@ class HandleInvoiceWebhookBillingModeTests(TestCase):
             project=project,
             status=StressRunStatus.RUNNING,
         )
-        case = InvoiceStressCase.objects.create(
+        return InvoiceStressCase.objects.create(
             stress_run=stress,
             sequence=1,
             scheduled_offset=0,
@@ -1188,13 +1179,13 @@ class HandleInvoiceWebhookBillingModeTests(TestCase):
             status=InvoiceStressCaseStatus.PAID,
             billing_mode=billing_mode,
         )
-        return case
 
     def _post_webhook(self, *, case):
+        from stress.views import stress_webhook_view
+
         from common.consts import NONCE_HEADER
         from common.consts import SIGNATURE_HEADER
         from common.consts import TIMESTAMP_HEADER
-        from stress.views import stress_webhook_view
 
         body = {
             "type": "invoice",

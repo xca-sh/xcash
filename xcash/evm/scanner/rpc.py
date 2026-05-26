@@ -33,7 +33,7 @@ class EvmScannerRpcClient:
         # eth_getBlockReceipts 特性检测结果：None 未探测，True 支持，False 不支持。
         # 每个扫描 tick 构造新 client，单 tick 最多触发一次"不支持"探测，避免每块重试。
         self._block_receipts_supported: bool | None = None
-        # 单 tick 内 latest_block 缓存：native + erc20 共用同一 client 时只打一次 RPC。
+        # 单 tick 内 latest_block 缓存：统一日志扫描和兜底复扫复用时只打一次 RPC。
         self._cached_latest_block: int | None = None
 
     def get_latest_block_number(self) -> int:
@@ -49,32 +49,16 @@ class EvmScannerRpcClient:
         self._cached_latest_block = latest_block
         return latest_block
 
-    def get_transfer_logs(
-        self,
-        *,
-        from_block: int,
-        to_block: int,
-        token_addresses: list[str],
-        topic0: str,
-    ) -> list[dict[str, Any]]:
-        return self.get_logs(
-            from_block=from_block,
-            to_block=to_block,
-            addresses=token_addresses,
-            topic0=topic0,
-            summary="获取 ERC20 日志失败",
-        )
-
     def get_logs(
         self,
         *,
         from_block: int,
         to_block: int,
-        addresses: list[str],
-        topic0: str,
+        addresses: list[str] | None,
+        topic0: str | list[str],
         summary: str = "获取 EVM 日志失败",
     ) -> list[dict[str, Any]]:
-        if from_block > to_block or not addresses:
+        if from_block > to_block or addresses == []:
             return []
 
         max_block_range = max(
@@ -103,20 +87,20 @@ class EvmScannerRpcClient:
         *,
         from_block: int,
         to_block: int,
-        addresses: list[str],
-        topic0: str,
+        addresses: list[str] | None,
+        topic0: str | list[str],
         summary: str,
     ) -> list[dict[str, Any]]:
+        filter_params: dict[str, Any] = {
+            "fromBlock": from_block,
+            "toBlock": to_block,
+            "topics": [topic0],
+        }
+        if addresses is not None:
+            filter_params["address"] = addresses
         return list(
             self._call_with_retry(
-                fn=lambda: self.chain.w3.eth.get_logs(  # noqa: SLF001
-                    {
-                        "fromBlock": from_block,
-                        "toBlock": to_block,
-                        "address": addresses,
-                        "topics": [topic0],
-                    }
-                ),
+                fn=lambda: self.chain.w3.eth.get_logs(filter_params),  # noqa: SLF001
                 summary=summary,
                 method="eth_getLogs",
                 context=f"from={from_block} to={to_block}",

@@ -30,8 +30,8 @@ from currencies.models import Fiat
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 from invoices.models import Invoice
 from invoices.models import InvoiceStatus
+from projects.models import DifferRecipientAddress
 from projects.models import Project
-from projects.models import RecipientAddress
 
 
 @override_settings(TRON_RPC_TIMEOUT=3.0)
@@ -267,14 +267,14 @@ class TronFilterAddressesCacheTests(TestCase):
 
         invoice_addr = "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb"
         evm_addr = "0x1111111111111111111111111111111111111111"
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="tron-invoice",
             project=self.project,
             chain_type=ChainType.TRON,
             address=invoice_addr,
         )
-        # EVM 链上的 RecipientAddress 不应漏进 Tron 观察集，避免跨链型误观测。
-        RecipientAddress.objects.create(
+        # EVM 链上的 DifferRecipientAddress 不应漏进 Tron 观察集，避免跨链型误观测。
+        DifferRecipientAddress.objects.create(
             name="evm-invoice",
             project=self.project,
             chain_type=ChainType.EVM,
@@ -289,12 +289,12 @@ class TronFilterAddressesCacheTests(TestCase):
     def test_signal_invalidates_cache_on_recipient_address_create(self):
         from tron.watchers import load_tron_filter_addresses
 
-        # 预热缓存：当前无 Tron RecipientAddress，缓存为空 frozenset。
+        # 预热缓存：当前无 Tron DifferRecipientAddress，缓存为空 frozenset。
         self.assertEqual(load_tron_filter_addresses(), frozenset())
 
         invoice_addr = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
         with self.captureOnCommitCallbacks(execute=True):
-            RecipientAddress.objects.create(
+            DifferRecipientAddress.objects.create(
                 name="tron-invoice-2",
                 project=self.project,
                 chain_type=ChainType.TRON,
@@ -308,7 +308,7 @@ class TronFilterAddressesCacheTests(TestCase):
         from tron.watchers import load_tron_filter_addresses
 
         invoice_addr = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
-        recipient = RecipientAddress.objects.create(
+        recipient = DifferRecipientAddress.objects.create(
             name="tron-invoice-3",
             project=self.project,
             chain_type=ChainType.TRON,
@@ -534,7 +534,7 @@ class TronUsdtPaymentScannerTests(TestCase):
         )
         Fiat.objects.get_or_create(code="USD")
         self.watch_address = "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb"
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="tron-pay",
             project=self.project,
             chain_type=ChainType.TRON,

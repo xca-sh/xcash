@@ -7,8 +7,8 @@ from django.test import override_settings
 from django.utils import timezone
 
 from chains.models import Wallet
-from core.models import PLATFORM_SETTINGS_CACHE_KEY
-from core.models import PlatformSettings
+from core.models import SYSTEM_SETTINGS_CACHE_KEY
+from core.models import SystemSettings
 from projects.models import Project
 from webhooks.models import DeliveryAttempt
 from webhooks.models import WebhookEvent
@@ -31,7 +31,7 @@ def _make_project(**kwargs):
 
 class WebhookServiceTests(TestCase):
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
     @patch("webhooks.tasks.deliver_event.delay")
@@ -47,9 +47,9 @@ class WebhookServiceTests(TestCase):
 
         deliver_event_mock.assert_called_once_with(event.pk)
 
-    def test_next_backoff_uses_platform_settings_cap(self):
-        # Webhook 退避上限应可由平台参数中心调整，避免固定 120 秒无法匹配实际值守策略。
-        PlatformSettings.objects.create(webhook_delivery_max_backoff_seconds=20)
+    def test_next_backoff_uses_system_settings_cap(self):
+        # Webhook 退避上限应可由系统参数中心调整，避免固定 120 秒无法匹配实际值守策略。
+        SystemSettings.objects.create(webhook_delivery_max_backoff_seconds=20)
 
         self.assertEqual(next_backoff(1), 4)
         self.assertEqual(next_backoff(10), 20)
@@ -59,7 +59,7 @@ class DeliverEventTests(TestCase):
     """覆盖 deliver_event 各核心分支。"""
 
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         cache.clear()
         super().tearDown()
 
@@ -171,7 +171,7 @@ class DeliverEventTests(TestCase):
     @patch("webhooks.tasks._execute_http_delivery")
     def test_breaker_trips_after_threshold(self, mock_http):
         """连续失败达到阈值后自动关闭项目 webhook。"""
-        PlatformSettings.objects.create(webhook_delivery_breaker_threshold=2)
+        SystemSettings.objects.create(webhook_delivery_breaker_threshold=2)
         mock_http.return_value = (False, 500, {}, "error", "", 50)
         project = _make_project(failed_count=1)
         event = self._create_event(project=project)
@@ -310,7 +310,7 @@ class DeliverEventTests(TestCase):
 
     @patch("webhooks.tasks._execute_http_delivery")
     def test_exceeds_max_retries_marks_failed(self, mock_http):
-        PlatformSettings.objects.create(webhook_delivery_max_retries=1)
+        SystemSettings.objects.create(webhook_delivery_max_retries=1)
         mock_http.return_value = (False, 500, {}, "error", "", 50)
         event = self._create_event()
         # 模拟已有 1 次尝试
@@ -332,7 +332,7 @@ class WebhookDeliveryPolicyTests(TestCase):
     """验证 GET_QUERY 与 POST_JSON 两种投递方式的分派逻辑。"""
 
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
     @patch("webhooks.tasks._execute_http_delivery")

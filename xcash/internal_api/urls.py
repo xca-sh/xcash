@@ -12,11 +12,13 @@ router.register("chains", InternalChainViewSet, basename="internal-chain")
 
 # 嵌套在 /projects/{appid}/ 下的业务端点
 from internal_api.viewsets.deposits import InternalDepositViewSet
+from internal_api.viewsets.differ_recipient_addresses import (
+    DifferRecipientAddressViewSet,
+)
 from internal_api.viewsets.epay import EpayMerchantView
 from internal_api.viewsets.invoices import InternalInvoiceViewSet
-from internal_api.viewsets.operations import VaultFundingViewSet
+from internal_api.viewsets.operations import HotWalletFundingViewSet
 from internal_api.viewsets.operations import WithdrawalReviewLogViewSet
-from internal_api.viewsets.recipient_addresses import RecipientAddressViewSet
 from internal_api.viewsets.stats import StatsViewSet
 from internal_api.viewsets.webhooks import DeliveryAttemptViewSet
 from internal_api.viewsets.webhooks import WebhookEventViewSet
@@ -29,10 +31,14 @@ project_router.register(
     "withdrawals", InternalWithdrawalViewSet, basename="internal-withdrawal"
 )
 project_router.register(
-    "recipient-addresses", RecipientAddressViewSet, basename="internal-recipient-address"
+    "recipient-addresses",
+    DifferRecipientAddressViewSet,
+    basename="internal-recipient-address",
 )
 project_router.register(
-    "vault-fundings", VaultFundingViewSet, basename="internal-vault-funding"
+    "hot-wallet-fundings",
+    HotWalletFundingViewSet,
+    basename="internal-hot-wallet-funding",
 )
 project_router.register(
     "withdrawal-review-logs",

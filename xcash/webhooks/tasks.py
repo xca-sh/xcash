@@ -76,7 +76,7 @@ def _is_safe_delivery_url(url: str) -> bool:
 
 
 def next_backoff(try_number: int) -> int:
-    # Webhook 重试节奏允许通过平台参数中心调节，但仍保持指数退避，避免失败时瞬时洪泛商户端。
+    # Webhook 重试节奏允许通过系统参数中心调节，但仍保持指数退避，避免失败时瞬时洪泛商户端。
     return min(2 ** (try_number + 1), get_webhook_delivery_max_backoff_seconds())
 
 

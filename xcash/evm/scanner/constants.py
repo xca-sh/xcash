@@ -12,20 +12,16 @@ XCASH_NATIVE_DEPOSITED_TOPIC0 = Web3.to_hex(
     Web3.keccak(text="XcashNativeDeposited(address,uint256)")
 )
 
-# 单次日志扫描默认块跨度：首版先保守一些，后续可结合链和节点能力再调大。
-DEFAULT_ERC20_SCAN_BATCH_SIZE = 100
+# DepositSlot 归集事件签名主题；log.address 即 DepositSlot 地址。
+XCASH_COLLECTED_TOPIC0 = Web3.to_hex(Web3.keccak(text="XcashCollected(address,uint256)"))
 
-# ERC20 日志扫描每轮额外复扫的旧块数；只用于幂等补偿轻量重组、任务中断和 RPC 抖动。
-DEFAULT_ERC20_SCAN_REPLAY_BLOCKS = 2
+# DepositFactory 部署 DepositSlot 事件签名主题；log.address 即固定 Factory 地址。
+XCASH_DEPOSIT_SLOT_DEPLOYED_TOPIC0 = Web3.to_hex(
+    Web3.keccak(text="XcashDepositSlotDeployed(address,address,bytes32)")
+)
 
-# DepositSlot 原生币充值事件扫描默认块跨度。
-DEFAULT_NATIVE_DEPOSIT_SCAN_BATCH_SIZE = 100
+# 单次 EVM 日志扫描默认净推进块数：首版先保守一些，后续可结合链和节点能力再调大。
+DEFAULT_DEPOSIT_LOG_SCAN_BATCH_SIZE = 100
 
-# DepositSlot 原生币充值事件扫描每轮额外复扫的旧块数。
-DEFAULT_NATIVE_DEPOSIT_SCAN_REPLAY_BLOCKS = 2
-
-# 原生币直转需要逐块取完整交易，单次跨度应明显小于日志扫描。
-DEFAULT_NATIVE_SCAN_BATCH_SIZE = 32
-
-# 原生币扫描每轮额外复扫的旧块数；只用于幂等补偿轻量重组、任务中断和 RPC 抖动。
-DEFAULT_NATIVE_SCAN_REPLAY_BLOCKS = 2
+# EVM 日志扫描每轮至少复扫的旧块数；实际扫描还会取 max(该值, chain.confirm_block_count)。
+DEFAULT_DEPOSIT_LOG_SCAN_REPLAY_BLOCKS = 2

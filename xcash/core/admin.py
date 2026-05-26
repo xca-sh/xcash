@@ -5,7 +5,8 @@ from django.urls import reverse
 from django_celery_results.models import TaskResult
 from unfold.admin import ModelAdmin
 
-from core.models import PlatformSettings
+from core.models import SystemSettings
+from core.models import SystemWallet
 
 admin.site.unregister(TaskResult)
 
@@ -16,8 +17,8 @@ class TaskResultAdmin(ModelAdmin):
     list_filter = ("status", "task_name", "date_done")
 
 
-@admin.register(PlatformSettings)
-class PlatformSettingsAdmin(ModelAdmin):
+@admin.register(SystemSettings)
+class SystemSettingsAdmin(ModelAdmin):
     fieldsets = (
         (
             "后台安全",
@@ -89,7 +90,7 @@ class PlatformSettingsAdmin(ModelAdmin):
     )
 
     def has_module_permission(self, request):
-        # 平台运行参数属于系统级治理能力，只向超管暴露模块入口。
+        # 系统运行参数属于系统级治理能力，只向超管暴露模块入口。
         return bool(request.user.is_active and request.user.is_superuser)
 
     def has_view_permission(self, request, obj=None):
@@ -101,7 +102,7 @@ class PlatformSettingsAdmin(ModelAdmin):
     def has_add_permission(self, request):
         return (
             self.has_module_permission(request)
-            and not PlatformSettings.objects.exists()
+            and not SystemSettings.objects.exists()
         )
 
     def has_delete_permission(self, request, obj=None):
@@ -110,13 +111,13 @@ class PlatformSettingsAdmin(ModelAdmin):
     def changelist_view(self, request, extra_context=None):
         if not self.has_view_permission(request):
             raise PermissionDenied
-        # 平台参数中心天然是单例，列表页直接收口到唯一那一份配置。
-        config = PlatformSettings.objects.order_by("pk").first()
+        # 系统参数中心天然是单例，列表页直接收口到唯一那一份配置。
+        config = SystemSettings.objects.order_by("pk").first()
         if config is not None:
             return redirect(
-                reverse("admin:core_platformsettings_change", args=[config.pk])
+                reverse("admin:core_systemsettings_change", args=[config.pk])
             )
-        return redirect(reverse("admin:core_platformsettings_add"))
+        return redirect(reverse("admin:core_systemsettings_add"))
 
     def save_model(self, request, obj, form, change):
         if change:
@@ -124,5 +125,27 @@ class PlatformSettingsAdmin(ModelAdmin):
         else:
             obj.created_by = request.user
             obj.updated_by = request.user
-        # 平台运行参数需要保留明确的操作者审计，避免关键阈值被静默修改。
+        # 系统运行参数需要保留明确的操作者审计，避免关键阈值被静默修改。
         super().save_model(request, obj, form, change)
+
+
+@admin.register(SystemWallet)
+class SystemWalletAdmin(ModelAdmin):
+    readonly_fields = ("wallet", "created_at", "updated_at")
+    list_display = ("id", "wallet", "updated_at")
+
+    def has_module_permission(self, request):
+        # 系统级热钱包是平台基础设施入口，只向超管暴露。
+        return bool(request.user.is_active and request.user.is_superuser)
+
+    def has_view_permission(self, request, obj=None):
+        return self.has_module_permission(request)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

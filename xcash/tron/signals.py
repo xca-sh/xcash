@@ -9,7 +9,7 @@ from tron.watchers import clear_tron_filter_addresses_cache
 from tron.watchers import refresh_tron_filter_addresses
 
 from chains.models import ChainType
-from projects.models import RecipientAddress
+from projects.models import DifferRecipientAddress
 
 
 def _refresh_tron_filter_addresses_on_commit() -> None:
@@ -22,27 +22,27 @@ def _refresh_tron_filter_addresses_on_commit() -> None:
     transaction.on_commit(_refresh)
 
 
-@receiver(pre_save, sender=RecipientAddress)
+@receiver(pre_save, sender=DifferRecipientAddress)
 def remember_old_chain_type_for_tron_filter_cache(
     sender,
-    instance: RecipientAddress,
+    instance: DifferRecipientAddress,
     **kwargs,
 ):
     if instance.pk is None:
         instance._old_chain_type = None
         return
     instance._old_chain_type = (
-        RecipientAddress.objects.filter(pk=instance.pk)
+        DifferRecipientAddress.objects.filter(pk=instance.pk)
         .values_list("chain_type", flat=True)
         .first()
     )
 
 
-@receiver(post_save, sender=RecipientAddress)
-@receiver(post_delete, sender=RecipientAddress)
-def refresh_tron_filter_addresses_when_recipient_address_changes(
+@receiver(post_save, sender=DifferRecipientAddress)
+@receiver(post_delete, sender=DifferRecipientAddress)
+def refresh_tron_filter_addresses_when_differ_recipient_address_changes(
     sender,
-    instance: RecipientAddress,
+    instance: DifferRecipientAddress,
     **kwargs,
 ):
     # 旧值或新值任一为 Tron 都要失效；否则 TRON -> EVM 修改会留下陈旧观察地址。

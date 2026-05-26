@@ -11,37 +11,35 @@ from web3 import Web3
 
 from chains.models import Address
 from chains.models import AddressUsage
-from chains.models import TxTask
-from chains.models import TxTaskResult
-from chains.models import TxTaskStage
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import TxTaskType
 from chains.models import Transfer
 from chains.models import TransferStatus
+from chains.models import TxTask
+from chains.models import TxTaskStage
+from chains.models import TxTaskType
 from chains.models import Wallet
-from core.models import PLATFORM_SETTINGS_CACHE_KEY
+from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from currencies.models import ChainToken
 from currencies.models import Crypto
 from evm.choices import TxKind
-from evm.models import EvmTxTask
+from evm.models import DepositSlot
 from evm.models import EvmScanCursor
-from evm.models import EvmScanCursorType
-from evm.scanner.erc20 import EvmErc20ScanResult
-from evm.scanner.erc20 import EvmErc20TransferScanner
+from evm.models import EvmTxTask
+from evm.scanner.logs import EvmLogScanner
 from evm.scanner.rpc import EvmScannerRpcError
 from evm.scanner.watchers import EvmWatchSet
 from evm.scanner.watchers import load_watch_set
 from evm.tasks import scan_active_evm_chains
-from evm.tasks import scan_active_evm_erc20_chains
-from evm.tasks import scan_evm_chain
-from evm.tasks import scan_evm_erc20_chain
+from evm.tasks import _scan_evm_chain
+from projects.models import Project
+from users.models import Customer
 
 
 class EvmErc20ScanWindowTests(SimpleTestCase):
     def test_erc20_compute_scan_window_initial_cursor_starts_from_first_batch(self):
         cursor = EvmScanCursor(last_scanned_block=0)
-        from_block, to_block = EvmErc20TransferScanner._compute_scan_window(
+        from_block, to_block = EvmLogScanner._compute_scan_window(
             cursor=cursor,
             latest_block=2000,
             batch_size=100,
@@ -52,7 +50,7 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
 
     def test_erc20_compute_scan_window_batch_size_is_net_forward_progress(self):
         cursor = EvmScanCursor(last_scanned_block=1000)
-        from_block, to_block = EvmErc20TransferScanner._compute_scan_window(
+        from_block, to_block = EvmLogScanner._compute_scan_window(
             cursor=cursor,
             latest_block=2000,
             batch_size=100,
@@ -63,7 +61,7 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
 
     def test_erc20_compute_scan_window_caps_to_latest_when_near_chain_head(self):
         cursor = EvmScanCursor(last_scanned_block=1990)
-        from_block, to_block = EvmErc20TransferScanner._compute_scan_window(
+        from_block, to_block = EvmLogScanner._compute_scan_window(
             cursor=cursor,
             latest_block=2000,
             batch_size=100,
@@ -74,7 +72,7 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
 
     def test_erc20_compute_scan_window_returns_empty_when_latest_block_is_zero(self):
         cursor = EvmScanCursor(last_scanned_block=0)
-        from_block, to_block = EvmErc20TransferScanner._compute_scan_window(
+        from_block, to_block = EvmLogScanner._compute_scan_window(
             cursor=cursor,
             latest_block=0,
             batch_size=100,
@@ -86,7 +84,7 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
 @override_settings(DEBUG=False)
 class EvmErc20ScannerTests(TestCase):
     def setUp(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         self.native = Crypto.objects.create(
             name="Scanner BNB",
             symbol="BNB-SCANNER",
@@ -121,16 +119,34 @@ class EvmErc20ScannerTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000bb"
             ),
         )
+        self.project = Project.objects.create(
+            name="Scanner Project",
+            wallet=self.wallet,
+            webhook="https://example.com/webhook",
+        )
+        self.customer = Customer.objects.create(
+            project=self.project,
+            uid="scanner-customer",
+        )
+        self.deposit_slot = DepositSlot.objects.create(
+            customer=self.customer,
+            chain=self.chain,
+            address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000bc"
+            ),
+            vault_address=self.addr.address,
+            salt=b"\x01" * 32,
+        )
 
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
     @staticmethod
@@ -169,17 +185,16 @@ class EvmErc20ScannerTests(TestCase):
         value_raw: int = 123_000_000,
     ) -> tuple[TxTask, str]:
         recipient = recipient or Web3.to_checksum_address("0x" + "52" * 20)
-        encoded_args = (
-            recipient.removeprefix("0x").rjust(64, "0")
-            + hex(value_raw)[2:].rjust(64, "0")
-        )
+        encoded_args = recipient.removeprefix("0x").rjust(64, "0") + hex(value_raw)[
+            2:
+        ].rjust(64, "0")
         base_task = TxTask.objects.create(
             chain=self.chain,
             address=self.addr,
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         EvmTxTask.objects.create(
             base_task=base_task,
@@ -216,41 +231,39 @@ class EvmErc20ScannerTests(TestCase):
 
     @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_block_timestamp")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_transfer_logs")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_erc20_first_scan_without_cursor_starts_from_latest_tail_window(
         self,
         get_latest_block_number_mock,
-        get_transfer_logs_mock,
+        get_logs_mock,
         _get_block_timestamp_mock,
         _enqueue_processing_mock,
         _mark_pending_confirm_mock,
     ):
-        # 首次创建游标时不应从创世块补扫；应直接对齐到链头附近，仅覆盖近端重扫窗口。
+        # 首次创建统一日志游标时从首个批次开始推进。
         get_latest_block_number_mock.return_value = 100
-        get_transfer_logs_mock.return_value = []
+        get_logs_mock.return_value = []
 
-        result = EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=32)
+        result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32).erc20
 
         cursor = EvmScanCursor.objects.get(
             chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
         )
-        # erc20 replay_blocks = 2, from_block = 100 + 1 - 2 = 99
-        self.assertEqual(result.from_block, 99)
-        self.assertEqual(result.to_block, 100)
-        self.assertEqual(cursor.last_scanned_block, 100)
+        self.assertEqual(result.from_block, 1)
+        self.assertEqual(result.to_block, 32)
+        self.assertEqual(cursor.last_scanned_block, 32)
 
     @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_block_timestamp")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_transfer_logs")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_chain_creates_transfer_and_advances_cursor(
         self,
         get_latest_block_number_mock,
-        get_transfer_logs_mock,
+        get_logs_mock,
         get_block_timestamp_mock,
         _enqueue_processing_mock,
         _mark_pending_confirm_mock,
@@ -258,21 +271,24 @@ class EvmErc20ScannerTests(TestCase):
         # 命中的 ERC20 Transfer 应落到统一 Transfer 表；首扫会直接对齐链头附近窗口。
         get_latest_block_number_mock.return_value = 100
         get_block_timestamp_mock.return_value = 1_700_000_000
-        get_transfer_logs_mock.return_value = [
-            self._build_transfer_log(
-                from_address=Web3.to_checksum_address(
-                    "0x00000000000000000000000000000000000000cc"
+        get_logs_mock.side_effect = [
+            [],
+            [
+                self._build_transfer_log(
+                    from_address=Web3.to_checksum_address(
+                        "0x00000000000000000000000000000000000000cc"
+                    ),
+                    to_address=self.deposit_slot.address,
                 ),
-                to_address=self.addr.address,
-            )
+            ],
+            [],
         ]
 
-        result = EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=32)
+        result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32).erc20
 
         transfer = Transfer.objects.get()
         cursor = EvmScanCursor.objects.get(
             chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
         )
 
         self.assertEqual(result.created_transfers, 1)
@@ -280,20 +296,20 @@ class EvmErc20ScannerTests(TestCase):
         self.assertEqual(transfer.event_id, "erc20:5")
         self.assertEqual(transfer.hash, "0x" + "ab" * 32)
         self.assertEqual(
-            transfer.to_address, Web3.to_checksum_address(self.addr.address)
+            transfer.to_address, Web3.to_checksum_address(self.deposit_slot.address)
         )
         self.assertEqual(transfer.amount, Decimal("1"))
-        self.assertEqual(cursor.last_scanned_block, 100)
+        self.assertEqual(cursor.last_scanned_block, 32)
 
     @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_block_timestamp")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_transfer_logs")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_erc20_replay_drops_unconfirmed_transfer_when_block_hash_changes(
         self,
         get_latest_block_number_mock,
-        get_transfer_logs_mock,
+        get_logs_mock,
         get_block_timestamp_mock,
         _enqueue_processing_mock,
         _mark_pending_confirm_mock,
@@ -306,7 +322,7 @@ class EvmErc20ScannerTests(TestCase):
             event_id="erc20:5",
             crypto=self.token,
             from_address=Web3.to_checksum_address("0x" + "cc" * 20),
-            to_address=self.addr.address,
+            to_address=self.deposit_slot.address,
             value=Decimal(10**18),
             amount=Decimal("1"),
             timestamp=1_700_000_000,
@@ -315,7 +331,7 @@ class EvmErc20ScannerTests(TestCase):
         )
         get_latest_block_number_mock.return_value = 100
         get_block_timestamp_mock.return_value = 1_700_000_100
-        get_transfer_logs_mock.return_value = [
+        get_logs_mock.return_value = [
             self._build_transfer_log(
                 from_address=old_transfer.from_address,
                 to_address=old_transfer.to_address,
@@ -323,7 +339,7 @@ class EvmErc20ScannerTests(TestCase):
             )
         ]
 
-        result = EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=32)
+        result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32).erc20
 
         replacement = Transfer.objects.get(
             chain=self.chain,
@@ -334,7 +350,112 @@ class EvmErc20ScannerTests(TestCase):
         self.assertNotEqual(replacement.pk, old_transfer.pk)
         self.assertEqual(replacement.block_hash, "0x" + "10" * 32)
 
-    def test_erc20_scanner_routes_known_internal_hash_to_processor(self):
+    def test_scan_range_drops_reorged_erc20_transfer_when_replay_logs_empty(self):
+        old_transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=100,
+            block_hash="0x" + "99" * 32,
+            hash="0x" + "ab" * 32,
+            event_id="erc20:5",
+            crypto=self.token,
+            from_address=Web3.to_checksum_address("0x" + "cc" * 20),
+            to_address=self.deposit_slot.address,
+            value=Decimal(10**18),
+            amount=Decimal("1"),
+            timestamp=1_700_000_000,
+            datetime=timezone.now(),
+            status=TransferStatus.CONFIRMING,
+        )
+        rpc_client = type(
+            "Rpc",
+            (),
+            {
+                "get_logs": lambda *_args, **_kwargs: [],
+                "get_block_hash": lambda *_args, **_kwargs: "0x" + "10" * 32,
+                "get_block_timestamp": lambda *_args, **_kwargs: 1_700_000_000,
+            },
+        )()
+        watch_set = EvmWatchSet(
+            watched_addresses=frozenset({self.addr.address}),
+            tokens_by_address={self.token_deployment.address: self.token_deployment},
+        )
+
+        logs, _native_observed, _erc20_observed, _created_native, created_erc20 = (
+            EvmLogScanner.scan_range_without_cursor(
+                chain=self.chain,
+                rpc_client=rpc_client,
+                watch_set=watch_set,
+                from_block=99,
+                to_block=101,
+            )
+        )
+
+        self.assertEqual(logs, [])
+        self.assertEqual(created_erc20, 0)
+        self.assertFalse(Transfer.objects.filter(pk=old_transfer.pk).exists())
+
+    @patch("chains.service.TransferService.create_observed_transfer")
+    def test_scan_range_skips_malformed_erc20_logs_without_blocking_batch(
+        self,
+        create_observed_transfer_mock,
+    ):
+        sender = Web3.to_checksum_address("0x" + "cc" * 20)
+        malformed_logs = [
+            {
+                **self._build_transfer_log(
+                    from_address=sender,
+                    to_address=self.addr.address,
+                ),
+                "data": "0xnope",
+            },
+            {
+                key: value
+                for key, value in self._build_transfer_log(
+                    from_address=sender, to_address=self.addr.address
+                ).items()
+                if key != "transactionHash"
+            },
+            {
+                **self._build_transfer_log(
+                    from_address=sender,
+                    to_address=self.addr.address,
+                ),
+                "logIndex": "not-int",
+            },
+        ]
+        rpc_client = type(
+            "Rpc",
+            (),
+            {
+                "get_logs": lambda *_args, **kwargs: (
+                    malformed_logs
+                    if kwargs["topic0"]
+                    == Web3.to_hex(Web3.keccak(text="Transfer(address,address,uint256)"))
+                    else []
+                ),
+                "get_block_timestamp": lambda *_args, **_kwargs: 1_700_000_000,
+            },
+        )()
+        watch_set = EvmWatchSet(
+            watched_addresses=frozenset({self.addr.address}),
+            tokens_by_address={self.token_deployment.address: self.token_deployment},
+        )
+
+        logs, _native_observed, _erc20_observed, _created_native, created_erc20 = (
+            EvmLogScanner.scan_range_without_cursor(
+                chain=self.chain,
+                rpc_client=rpc_client,
+                watch_set=watch_set,
+                from_block=100,
+                to_block=100,
+            )
+        )
+
+        self.assertEqual(logs, malformed_logs)
+        self.assertEqual(created_erc20, 0)
+        create_observed_transfer_mock.assert_not_called()
+
+    def test_erc20_scanner_does_not_route_known_internal_hash_to_processor(self):
         tx_hash = "0x" + "51" * 32
         recipient = Web3.to_checksum_address("0x" + "52" * 20)
         wrong_recipient = Web3.to_checksum_address("0x" + "53" * 20)
@@ -372,22 +493,30 @@ class EvmErc20ScannerTests(TestCase):
             tokens_by_address={self.token_deployment.address: self.token_deployment},
         )
 
-        with patch("evm.internal_tx.processor._lookup_block_timestamp") as ts:
-            ts.return_value = (1_700_000_000, timezone.now())
-            created = EvmErc20TransferScanner._persist_logs(
+        with patch(
+            "evm.internal_tx.processor.process_internal_transaction"
+        ) as processor_mock:
+            created = EvmLogScanner._process_logs(
                 chain=self.chain,
                 logs=[log],
                 rpc_client=rpc_client,
                 watch_set=watch_set,
-            )
+                from_block=100,
+                to_block=100,
+            ).erc20_created
 
         base_task.refresh_from_db()
+        processor_mock.assert_not_called()
+        rpc_client.get_transaction.assert_not_called()
+        rpc_client.get_transaction_receipt.assert_not_called()
         self.assertEqual(created, 0)
         self.assertFalse(Transfer.objects.filter(hash=tx_hash).exists())
         self.assertEqual(base_task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(base_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(base_task.success)
 
-    def test_erc20_scanner_counts_known_internal_hash_created_by_processor(self):
+    def test_erc20_scanner_skips_known_internal_hash_even_when_receipt_would_match(
+        self,
+    ):
         tx_hash = "0x" + "5a" * 32
         recipient = Web3.to_checksum_address("0x" + "5b" * 20)
         value_raw = 123_000_000
@@ -423,22 +552,21 @@ class EvmErc20ScannerTests(TestCase):
             tokens_by_address={self.token_deployment.address: self.token_deployment},
         )
 
-        with patch("evm.internal_tx.processor._lookup_block_timestamp") as ts:
-            ts.return_value = (1_700_000_000, timezone.now())
-            created = EvmErc20TransferScanner._persist_logs(
-                chain=self.chain,
-                logs=[log],
-                rpc_client=rpc_client,
-                watch_set=watch_set,
-            )
+        created = EvmLogScanner._process_logs(
+            chain=self.chain,
+            logs=[log],
+            rpc_client=rpc_client,
+            watch_set=watch_set,
+            from_block=100,
+            to_block=100,
+        ).erc20_created
 
-        transfer = Transfer.objects.get(hash=tx_hash)
-        self.assertEqual(created, 1)
-        self.assertEqual(transfer.event_id, "erc20:11")
-        self.assertEqual(transfer.from_address, self.addr.address)
-        self.assertEqual(transfer.to_address, recipient)
+        self.assertEqual(created, 0)
+        rpc_client.get_transaction.assert_not_called()
+        rpc_client.get_transaction_receipt.assert_not_called()
+        self.assertFalse(Transfer.objects.filter(hash=tx_hash).exists())
 
-    def test_erc20_scanner_raises_when_known_internal_hash_missing_tx(self):
+    def test_erc20_scanner_does_not_require_internal_tx_details(self):
         tx_hash = "0x" + "54" * 32
         self._build_internal_erc20_task(tx_hash=tx_hash)
         log = self._build_transfer_log(
@@ -455,18 +583,22 @@ class EvmErc20ScannerTests(TestCase):
             tokens_by_address={self.token_deployment.address: self.token_deployment},
         )
 
-        with self.assertRaisesRegex(EvmScannerRpcError, tx_hash):
-            EvmErc20TransferScanner._persist_logs(
-                chain=self.chain,
-                logs=[log],
-                rpc_client=rpc_client,
-                watch_set=watch_set,
-            )
+        result = EvmLogScanner._process_logs(
+            chain=self.chain,
+            logs=[log],
+            rpc_client=rpc_client,
+            watch_set=watch_set,
+            from_block=100,
+            to_block=100,
+        )
 
+        self.assertEqual(result.erc20_created, 0)
+        rpc_client.get_transaction.assert_not_called()
+        rpc_client.get_transaction_receipt.assert_not_called()
         rpc_client.get_block_timestamp.assert_not_called()
         self.assertEqual(Transfer.objects.count(), 0)
 
-    def test_erc20_scanner_raises_when_known_internal_hash_missing_receipt(self):
+    def test_erc20_scanner_does_not_require_internal_tx_receipt(self):
         tx_hash = "0x" + "56" * 32
         _, encoded_args = self._build_internal_erc20_task(tx_hash=tx_hash)
         log = self._build_transfer_log(
@@ -488,14 +620,18 @@ class EvmErc20ScannerTests(TestCase):
             tokens_by_address={self.token_deployment.address: self.token_deployment},
         )
 
-        with self.assertRaisesRegex(EvmScannerRpcError, tx_hash):
-            EvmErc20TransferScanner._persist_logs(
-                chain=self.chain,
-                logs=[log],
-                rpc_client=rpc_client,
-                watch_set=watch_set,
-            )
+        result = EvmLogScanner._process_logs(
+            chain=self.chain,
+            logs=[log],
+            rpc_client=rpc_client,
+            watch_set=watch_set,
+            from_block=100,
+            to_block=100,
+        )
 
+        self.assertEqual(result.erc20_created, 0)
+        rpc_client.get_transaction.assert_not_called()
+        rpc_client.get_transaction_receipt.assert_not_called()
         rpc_client.get_block_timestamp.assert_not_called()
         self.assertEqual(Transfer.objects.count(), 0)
 
@@ -536,29 +672,29 @@ class EvmErc20ScannerTests(TestCase):
             tokens_by_address={self.token_deployment.address: self.token_deployment},
         )
 
-        with patch("evm.internal_tx.processor._lookup_block_timestamp") as ts:
-            ts.return_value = (1_700_000_000, timezone.now())
-            created = EvmErc20TransferScanner._persist_logs(
-                chain=self.chain,
-                logs=[first_log, second_log],
-                rpc_client=rpc_client,
-                watch_set=watch_set,
-            )
+        created = EvmLogScanner._process_logs(
+            chain=self.chain,
+            logs=[first_log, second_log],
+            rpc_client=rpc_client,
+            watch_set=watch_set,
+            from_block=100,
+            to_block=100,
+        ).erc20_created
 
         self.assertEqual(created, 0)
-        rpc_client.get_transaction.assert_called_once_with(tx_hash=tx_hash)
-        rpc_client.get_transaction_receipt.assert_called_once_with(tx_hash=tx_hash)
+        rpc_client.get_transaction.assert_not_called()
+        rpc_client.get_transaction_receipt.assert_not_called()
         self.assertEqual(Transfer.objects.count(), 0)
 
     @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_block_timestamp")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_transfer_logs")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_chain_rewind_window_keeps_transfer_idempotent(
         self,
         get_latest_block_number_mock,
-        get_transfer_logs_mock,
+        get_logs_mock,
         get_block_timestamp_mock,
         _enqueue_processing_mock,
         _mark_pending_confirm_mock,
@@ -570,56 +706,21 @@ class EvmErc20ScannerTests(TestCase):
             from_address=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000cc"
             ),
-            to_address=self.addr.address,
+            to_address=self.deposit_slot.address,
             block_number=100,
         )
-        get_transfer_logs_mock.return_value = [repeated_log]
+        get_logs_mock.return_value = [repeated_log]
 
-        first = EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=100)
-        second = EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=100)
+        first = EvmLogScanner.scan_chain(chain=self.chain, batch_size=100).erc20
+        second = EvmLogScanner.scan_chain(chain=self.chain, batch_size=100).erc20
 
         cursor = EvmScanCursor.objects.get(
             chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
         )
         self.assertEqual(first.created_transfers, 1)
         self.assertEqual(second.created_transfers, 0)
         self.assertEqual(Transfer.objects.count(), 1)
         self.assertEqual(cursor.last_scanned_block, 100)
-
-    @override_settings(DEBUG=True)
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_transfer_logs")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number")
-    def test_debug_mode_bootstraps_cursor_once_from_latest_block_per_process(
-        self,
-        get_latest_block_number_mock,
-        get_transfer_logs_mock,
-    ):
-        # 本地 DEBUG 开发模式下，首次扫描应直接把历史游标提升到当前链头；
-        # 但同一进程后续轮询不能重复执行这次"启动对齐"，否则会不断抹平正常增量进度。
-        EvmScanCursor.objects.create(
-            chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
-            last_scanned_block=12,
-            enabled=True,
-        )
-        get_latest_block_number_mock.side_effect = [100, 110]
-        get_transfer_logs_mock.return_value = []
-
-        first = EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=100)
-        second = EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=100)
-
-        cursor = EvmScanCursor.objects.get(
-            chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
-        )
-        # erc20 replay_blocks = 2, 第一轮 bootstrap 到 100: from = 100+1-2 = 99
-        self.assertEqual(first.from_block, 99)
-        self.assertEqual(first.to_block, 100)
-        # 第二轮: last_scanned=100, from = 100+1-2 = 99
-        self.assertEqual(second.from_block, 99)
-        self.assertEqual(second.to_block, 110)
-        self.assertEqual(cursor.last_scanned_block, 110)
 
     @patch(
         "currencies.models.Crypto.get_decimals",
@@ -627,13 +728,13 @@ class EvmErc20ScannerTests(TestCase):
     )
     @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_block_timestamp")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_transfer_logs")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_chain_uses_chain_token_decimals_without_extra_lookup(
         self,
         get_latest_block_number_mock,
-        get_transfer_logs_mock,
+        get_logs_mock,
         get_block_timestamp_mock,
         _enqueue_processing_mock,
         _mark_pending_confirm_mock,
@@ -644,33 +745,33 @@ class EvmErc20ScannerTests(TestCase):
         self.token_deployment.save(update_fields=["decimals"])
         get_latest_block_number_mock.return_value = 100
         get_block_timestamp_mock.return_value = 1_700_000_000
-        get_transfer_logs_mock.return_value = [
+        get_logs_mock.return_value = [
             self._build_transfer_log(
                 from_address=Web3.to_checksum_address(
                     "0x00000000000000000000000000000000000000cc"
                 ),
-                to_address=self.addr.address,
+                to_address=self.deposit_slot.address,
                 value=10**6,
             )
         ]
 
-        EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=32)
+        EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
         transfer = Transfer.objects.get()
         self.assertEqual(transfer.amount, Decimal("1"))
 
     @patch("chains.service.TransferService.create_observed_transfer")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_transfer_logs")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_chain_ignores_logs_outside_watch_set(
         self,
         get_latest_block_number_mock,
-        get_transfer_logs_mock,
+        get_logs_mock,
         create_observed_transfer_mock,
     ):
         # 非系统地址相关的日志必须在扫描层被过滤，避免把全链事件都送进业务入口。
         get_latest_block_number_mock.return_value = 40
-        get_transfer_logs_mock.return_value = [
+        get_logs_mock.return_value = [
             self._build_transfer_log(
                 from_address=Web3.to_checksum_address(
                     "0x00000000000000000000000000000000000000cc"
@@ -682,60 +783,62 @@ class EvmErc20ScannerTests(TestCase):
             )
         ]
 
-        result = EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=40)
+        result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=40).erc20
 
         self.assertEqual(result.created_transfers, 0)
-        self.assertEqual(result.observed_logs, 1)
+        self.assertEqual(result.observed_logs, 0)
         create_observed_transfer_mock.assert_not_called()
         self.assertEqual(Transfer.objects.count(), 0)
 
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_transfer_logs")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_chain_uses_prefixed_transfer_topic_for_rpc_logs(
         self,
         get_latest_block_number_mock,
-        get_transfer_logs_mock,
+        get_logs_mock,
     ):
         # 部分 RPC（如 NodeReal）要求日志 topic 必须是 0x 前缀 hex；少前缀会直接报 -32602。
         get_latest_block_number_mock.return_value = 100
-        get_transfer_logs_mock.return_value = []
+        get_logs_mock.return_value = []
 
-        EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=32)
+        EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
-        _, kwargs = get_transfer_logs_mock.call_args
-        self.assertEqual(
-            kwargs["topic0"],
+        topic0_values = [
+            call.kwargs["topic0"] for call in get_logs_mock.call_args_list
+        ]
+        self.assertIn(
             Web3.to_hex(Web3.keccak(text="Transfer(address,address,uint256)")),
+            topic0_values,
         )
 
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_transfer_logs")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_chain_advances_cursor_when_no_tokens_configured(
         self,
         get_latest_block_number_mock,
-        get_transfer_logs_mock,
+        get_logs_mock,
     ):
-        # 当链上尚未配置任何 ERC20 合约时，不应长期显示积压；游标可直接追到当前链头。
+        # 即使链上尚未配置 ERC20 合约，统一日志扫描仍会扫描 Xcash 合约事件。
         self.token_deployment.delete()
         get_latest_block_number_mock.return_value = 100
 
-        result = EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=32)
+        result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32).erc20
 
         cursor = EvmScanCursor.objects.get(
             chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
         )
         self.assertEqual(result.created_transfers, 0)
         self.assertEqual(result.observed_logs, 0)
-        self.assertEqual(cursor.last_scanned_block, 100)
-        get_transfer_logs_mock.assert_not_called()
+        self.assertEqual(cursor.last_scanned_block, 32)
+        self.assertEqual(get_logs_mock.call_count, 1)
+        self.assertIsNone(get_logs_mock.call_args.kwargs["addresses"])
 
-    @patch("evm.tasks.InternalEvmTaskCoordinator.reconcile_chain")
+    @patch("evm.tasks.EvmTaskPoller.poll_chain")
     @patch("evm.tasks.EvmChainScannerService.scan_chain")
     def test_scan_evm_chain_task_dispatches_combined_scanner(
         self,
         scan_chain_mock,
-        reconcile_chain_mock,
+        poll_chain_mock,
     ):
         scan_chain_mock.return_value = Mock(
             native=Mock(
@@ -752,59 +855,12 @@ class EvmErc20ScannerTests(TestCase):
             ),
         )
 
-        scan_evm_chain(self.chain.pk)
+        _scan_evm_chain(self.chain.pk)
 
         scan_chain_mock.assert_called_once()
-        reconcile_chain_mock.assert_called_once()
+        poll_chain_mock.assert_called_once()
 
-    @patch("evm.tasks.InternalEvmTaskCoordinator.reconcile_chain")
-    @patch("evm.tasks.EvmChainScannerService.scan_erc20")
-    def test_scan_evm_erc20_chain_task_dispatches_erc20_scanner(
-        self,
-        scan_erc20_mock,
-        reconcile_chain_mock,
-    ):
-        # ERC20 扫描应有独立 Celery 入口，避免被 native full-block 扫描周期绑死。
-        scan_erc20_mock.return_value = EvmErc20ScanResult(
-            from_block=1,
-            to_block=2,
-            latest_block=100,
-            observed_logs=3,
-            created_transfers=1,
-        )
-
-        scan_evm_erc20_chain(self.chain.pk)
-
-        scan_erc20_mock.assert_called_once()
-        reconcile_chain_mock.assert_called_once()
-
-    @patch("evm.tasks.InternalEvmTaskCoordinator.reconcile_chain")
-    @patch(
-        "evm.tasks.EvmChainScannerService.scan_erc20",
-        side_effect=EvmScannerRpcError("erc20 rpc timeout"),
-    )
-    def test_scan_evm_erc20_chain_runs_coordinator_when_rpc_fails(
-        self,
-        scan_erc20_mock,
-        reconcile_chain_mock,
-    ):
-        scan_evm_erc20_chain(self.chain.pk)
-
-        scan_erc20_mock.assert_called_once()
-        reconcile_chain_mock.assert_called_once()
-
-    @patch("evm.tasks.scan_evm_erc20_chain.delay")
-    def test_scan_active_evm_erc20_chains_dispatches_erc20_task(
-        self,
-        delay_mock,
-    ):
-        self._create_scan_dispatch_ignored_chains()
-
-        scan_active_evm_erc20_chains()
-
-        delay_mock.assert_called_once_with(self.chain.pk)
-
-    @patch("evm.tasks.scan_evm_chain.delay")
+    @patch("evm.tasks._scan_evm_chain.delay")
     def test_scan_active_evm_chains_dispatches_combined_task(
         self,
         delay_mock,
@@ -815,16 +871,16 @@ class EvmErc20ScannerTests(TestCase):
 
         delay_mock.assert_called_once_with(self.chain.pk)
 
-    def test_watch_set_includes_system_addresses(self):
-        # 系统地址属于观察集，后续 ERC20 扫描需要能命中这些地址。
+    def test_watch_set_includes_deposit_slots_and_excludes_system_addresses(self):
+        # scanner 只观察 DepositSlot 等入账合约地址，热钱包 Address 不再承接外部入账。
         watch_set = load_watch_set(chain=self.chain)
 
-        self.assertIn(self.addr.address, watch_set.watched_addresses)
+        self.assertIn(self.deposit_slot.address, watch_set.watched_addresses)
+        self.assertNotIn(self.addr.address, watch_set.watched_addresses)
 
     def test_erc20_cursor_advance_never_rewinds_database_value(self):
         cursor = EvmScanCursor.objects.create(
             chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
             last_scanned_block=100,
         )
         stale_cursor = EvmScanCursor.objects.get(pk=cursor.pk)
@@ -832,9 +888,8 @@ class EvmErc20ScannerTests(TestCase):
             last_scanned_block=150,
         )
 
-        EvmErc20TransferScanner._advance_cursor(
+        EvmLogScanner._advance_cursor(
             cursor=stale_cursor,
-            latest_block=120,
             scanned_to_block=120,
         )
 
@@ -842,7 +897,7 @@ class EvmErc20ScannerTests(TestCase):
         self.assertEqual(cursor.last_scanned_block, 150)
 
     @patch(
-        "evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number",
+        "evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number",
         side_effect=EvmScannerRpcError("rpc timeout"),
     )
     def test_erc20_scan_records_cursor_error_when_rpc_fails(
@@ -850,11 +905,10 @@ class EvmErc20ScannerTests(TestCase):
     ):
         # RPC 失败后必须把错误留在游标上，方便后台与运维定位扫描停滞原因。
         with self.assertRaises(EvmScannerRpcError):
-            EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=32)
+            EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
         cursor = EvmScanCursor.objects.get(
             chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
         )
         self.assertEqual(cursor.last_scanned_block, 0)
         self.assertEqual(cursor.last_error, "rpc timeout")
@@ -864,41 +918,43 @@ class EvmErc20ScannerTests(TestCase):
         # RPC 供应商返回的长错误通常包含限制规则和建议查询范围，游标必须完整保留。
         long_error = "rpc limit exceeded: " + "x" * 360
 
-        with patch(
-            "evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number",
-            side_effect=EvmScannerRpcError(long_error),
-        ), self.assertRaises(EvmScannerRpcError):
-            EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=32)
+        with (
+            patch(
+                "evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number",
+                side_effect=EvmScannerRpcError(long_error),
+            ),
+            self.assertRaises(EvmScannerRpcError),
+        ):
+            EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
         cursor = EvmScanCursor.objects.get(
             chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
         )
         self.assertEqual(cursor.last_error, long_error)
 
     @patch("chains.service.TransferService.create_observed_transfer")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_transfer_logs")
-    @patch("evm.scanner.erc20.EvmScannerRpcClient.get_latest_block_number")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_erc20_scan_ignores_zero_value_transfer(
         self,
         get_latest_block_number_mock,
-        get_transfer_logs_mock,
+        get_logs_mock,
         create_observed_transfer_mock,
     ):
         # ERC20 Transfer 事件 value=0 无业务意义（如某些代币的 approve 触发），应在扫描层过滤。
         get_latest_block_number_mock.return_value = 40
-        get_transfer_logs_mock.return_value = [
+        get_logs_mock.return_value = [
             self._build_transfer_log(
                 from_address=Web3.to_checksum_address(
                     "0x00000000000000000000000000000000000000cc"
                 ),
-                to_address=self.addr.address,
+                to_address=self.deposit_slot.address,
                 value=0,
                 block_number=40,
             )
         ]
 
-        result = EvmErc20TransferScanner.scan_chain(chain=self.chain, batch_size=40)
+        result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=40).erc20
 
         self.assertEqual(result.created_transfers, 0)
         create_observed_transfer_mock.assert_not_called()

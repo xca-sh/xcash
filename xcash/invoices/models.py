@@ -10,7 +10,6 @@ from django.db import transaction as db_transaction
 from django.db.models import Max
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from eth_utils import keccak
 
 logger = structlog.get_logger()
 
@@ -21,8 +20,8 @@ from common.fields import SysNoField
 from common.permission_check import filter_saas_allowed_methods
 from currencies.service import CryptoService
 from currencies.service import FiatService
-from evm.contracts_codec import predict_xcash_deposit_slot_address
-from evm.deployments import get_xcash_deposit_deployment
+from evm.models import DepositSlot
+from evm.models import DepositSlotUsage
 from projects.models import Project
 from projects.service import ProjectService
 
@@ -163,7 +162,7 @@ class Invoice(models.Model):
         default=InvoiceProtocol.NATIVE,
         max_length=16,
         db_index=True,
-        verbose_name=_("接入协议"),
+        verbose_name=_("协议"),
     )
     billing_mode = models.CharField(
         choices=InvoiceBillingMode,
@@ -210,7 +209,7 @@ class Invoice(models.Model):
     def available_methods(cls, project: Project) -> dict[str, list[str]]:
         """返回项目当前可用的 crypto→链列表。
 
-        逻辑 = 系统支持的 invoice (crypto, chain) 组合 ∩ 项目已配置收币地址的链 ∩ SaaS 白名单。
+        逻辑 = 系统支持的 invoice (crypto, chain) 组合 ∩ 项目已配置差额账单收款地址的链 ∩ SaaS 白名单。
         """
         receivable_codes = ProjectService.receivable_chain_codes(project)
         allowed = CryptoService.allowed_methods(chain_codes=receivable_codes)
@@ -250,38 +249,90 @@ class Invoice(models.Model):
             raise self.InvoiceAllocationError(detail)
         return pay_address, pay_amount
 
+    def _has_contract_slot_payment_overlap(
+        self,
+        *,
+        slot: DepositSlot,
+        crypto: "Crypto",
+        chain: "Chain",
+        crypto_amount: Decimal,
+    ) -> bool:
+        # 同一个合约收款槽位只在"币种 + 金额 + 支付有效期"同时重合时不可复用；
+        # 不同金额或已过期账单可以复用同一 DepositSlot 地址。
+        return InvoicePaySlot.objects.filter(
+            project=self.project,
+            crypto=crypto,
+            chain=chain,
+            pay_address=slot.address,
+            pay_amount=crypto_amount,
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            status=InvoicePaySlotStatus.ACTIVE,
+            invoice__expires_at__gte=timezone.now(),
+        ).exists()
+
+    def _get_contract_deposit_slot(
+        self,
+        *,
+        crypto: "Crypto",
+        chain: "Chain",
+        crypto_amount: Decimal,
+    ) -> DepositSlot:
+        """返回本次合约账单可使用的 INVOICE DepositSlot。"""
+        vault_address = self.project.vault
+        if not vault_address:
+            raise self.InvoiceAllocationError(
+                f"project={self.project_id} DepositSlot Vault 地址未配置"
+            )
+
+        reusable_slots = DepositSlot.objects.filter(
+            project=self.project,
+            chain=chain,
+            usage=DepositSlotUsage.INVOICE,
+        ).order_by("invoice_index", "pk")
+        for slot in reusable_slots:
+            if not self._has_contract_slot_payment_overlap(
+                slot=slot,
+                crypto=crypto,
+                chain=chain,
+                crypto_amount=crypto_amount,
+            ):
+                db_transaction.on_commit(
+                    lambda slot_pk=slot.pk: DepositSlot.schedule_deploy(slot_pk)
+                )
+                return slot
+
+        latest_index = reusable_slots.aggregate(max_index=Max("invoice_index"))[
+            "max_index"
+        ]
+        invoice_index = 0 if latest_index is None else latest_index + 1
+        try:
+            DepositSlot.get_invoice_address(
+                project=self.project,
+                chain=chain,
+                invoice_index=invoice_index,
+            )
+        except RuntimeError as exc:
+            raise self.InvoiceAllocationError(str(exc)) from exc
+        return DepositSlot.objects.get(
+            project=self.project,
+            chain=chain,
+            usage=DepositSlotUsage.INVOICE,
+            invoice_index=invoice_index,
+        )
+
     def _allocate_contract_slot(
         self,
         crypto: "Crypto",
         chain: "Chain",
         crypto_amount: Decimal,
     ) -> tuple[str, str, Decimal]:
-        """合约账单：按 XcashDepositFactory 预测 DepositSlot 地址。"""
-        from chains.models import AddressUsage  # noqa: PLC0415
-        from chains.models import ChainType  # noqa: PLC0415
-
-        deployment = get_xcash_deposit_deployment(chain.code)
-        vault = self.project.wallet.get_address(
-            chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+        """合约账单：按 XcashDepositFactory 获取本次账单使用的 DepositSlot。"""
+        slot = self._get_contract_deposit_slot(
+            crypto=crypto,
+            chain=chain,
+            crypto_amount=crypto_amount,
         )
-        salt = keccak(
-            b"xcash:deposit-slot:invoice:"
-            + str(self.project_id).encode()
-            + b":"
-            + self.sys_no.encode()
-            + b":"
-            + chain.code.encode()
-            + b":"
-            + crypto.symbol.encode()
-        )
-        pay_address = predict_xcash_deposit_slot_address(
-            factory=deployment.deposit_factory,
-            deposit_template=deployment.deposit_template,
-            vault=vault.address,
-            salt=salt,
-        )
-        return pay_address, vault.address, crypto_amount
+        return slot.address, slot.vault_address, crypto_amount
 
     @db_transaction.atomic
     def select_method(self, crypto: "Crypto", chain: "Chain"):

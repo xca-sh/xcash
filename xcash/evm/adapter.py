@@ -34,7 +34,6 @@ class EvmAdapter(AdapterInterface):
     def is_address(cls, chain: Chain, address: AddressStr) -> bool:
         if not cls.validate_address(address):
             return False
-        # 无合约代码的地址为 EOA（外部账户）
         return cls._is_contract_code_empty(chain, address)
 
     @classmethod
@@ -124,7 +123,7 @@ class EvmAdapter(AdapterInterface):
 
     @classmethod
     def _is_contract_code_empty(cls, chain: Chain, address: AddressStr) -> bool:
-        """判断地址是否为 EOA（无合约代码）。"""
+        """判断地址是否无合约代码。"""
         checksum_address = cls._to_checksum(address)
         code: HexBytes = chain.w3.eth.get_code(checksum_address)  # noqa: SLF001
         return code in (b"", HexBytes(b""))

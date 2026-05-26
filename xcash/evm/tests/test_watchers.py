@@ -12,7 +12,6 @@ from currencies.models import ChainToken
 from currencies.models import Crypto
 from evm.models import DepositSlot
 from evm.scanner.watchers import clear_evm_watch_set_cache
-from evm.scanner.watchers import load_evm_system_addresses
 from evm.scanner.watchers import load_watch_set
 from invoices.models import Invoice
 from invoices.models import InvoiceBillingMode
@@ -68,7 +67,7 @@ class EvmWatchSetCacheTests(TestCase):
         self.address = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -94,44 +93,42 @@ class EvmWatchSetCacheTests(TestCase):
         clear_evm_watch_set_cache()
         cache.clear()
 
-    def test_load_watch_set_reuses_cache_until_refresh_requested(self):
+    def test_load_watch_set_refreshes_when_deposit_slot_is_deleted(self):
         initial_watch_set = load_watch_set(chain=self.chain, refresh=True)
         self.assertIn(self.deposit_slot.address, initial_watch_set.watched_addresses)
 
         DepositSlot.objects.filter(pk=self.deposit_slot.pk).delete()
 
-        cached_watch_set = load_watch_set(chain=self.chain)
-        self.assertIn(self.deposit_slot.address, cached_watch_set.watched_addresses)
+        watch_set = load_watch_set(chain=self.chain)
+        self.assertNotIn(self.deposit_slot.address, watch_set.watched_addresses)
 
-        refreshed_watch_set = load_watch_set(chain=self.chain, refresh=True)
-        self.assertNotIn(
-            self.deposit_slot.address, refreshed_watch_set.watched_addresses
-        )
+    def test_load_watch_set_excludes_system_hot_wallet_addresses(self):
+        watch_set = load_watch_set(chain=self.chain, refresh=True)
 
-    def test_load_evm_system_addresses_excludes_recipient_addresses(self):
-        system_addresses = load_evm_system_addresses(refresh=True)
+        self.assertNotIn(self.address.address, watch_set.watched_addresses)
+        self.assertIn(self.deposit_slot.address, watch_set.watched_addresses)
 
-        self.assertIn(self.address.address, system_addresses)
-        self.assertNotIn(self.deposit_slot.address, system_addresses)
-
-    def test_address_save_refreshes_cached_watch_set_after_commit(self):
+    def test_deposit_slot_save_refreshes_cached_watch_set_after_commit(self):
         load_watch_set(chain=self.chain, refresh=True)
-        new_address = Web3.to_checksum_address(
-            "0x00000000000000000000000000000000000000cc"
+        new_slot_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000d01"
+        )
+        new_customer = Customer.objects.create(
+            project=self.project,
+            uid="watcher-customer-new-slot",
         )
 
         with self.captureOnCommitCallbacks(execute=True):
-            Address.objects.create(
-                wallet=self.wallet,
-                chain_type=ChainType.EVM,
-                usage=AddressUsage.Vault,
-                bip44_account=0,
-                address_index=1,
-                address=new_address,
+            DepositSlot.objects.create(
+                customer=new_customer,
+                chain=self.chain,
+                address=new_slot_address,
+                vault_address=self.address.address,
+                salt=b"\x02" * 32,
             )
 
-        system_addresses = load_evm_system_addresses()
-        self.assertIn(new_address, system_addresses)
+        watch_set = load_watch_set(chain=self.chain)
+        self.assertIn(new_slot_address, watch_set.watched_addresses)
 
     def test_load_watch_set_includes_active_contract_invoice_pay_slot_addresses(self):
         project = self._create_project()

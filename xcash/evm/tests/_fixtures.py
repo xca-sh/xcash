@@ -9,7 +9,6 @@ from web3 import Web3
 from chains.models import Address
 from chains.models import AddressUsage
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from chains.models import TxTaskType
 from chains.models import Chain
@@ -74,7 +73,7 @@ def make_evm_system_address(
     *,
     wallet: Wallet | None = None,
     suffix: str = "01",
-    usage: AddressUsage = AddressUsage.Vault,
+    usage: AddressUsage = AddressUsage.HotWallet,
     bip44_account: int = 0,
     address_index: int = 0,
 ) -> Address:
@@ -104,7 +103,7 @@ def make_tx_task(
     recipient_suffix: str = "ff",
     tx_hash_suffix: str = "01",
     stage: TxTaskStage = TxTaskStage.PENDING_CHAIN,
-    result: TxTaskResult = TxTaskResult.UNKNOWN,
+    success: bool | None = None,
 ) -> TxTask:
     return TxTask.objects.create(
         chain=chain,
@@ -112,5 +111,5 @@ def make_tx_task(
         tx_type=tx_type,
         tx_hash=make_tx_hash(tx_hash_suffix),
         stage=stage,
-        result=result,
+        success=success,
     )

@@ -28,7 +28,7 @@ class TelegramAlertService:
         self._bot_token = settings.ALERTS_TELEGRAM_BOT_TOKEN.strip()
         self._api_base = settings.ALERTS_TELEGRAM_API_BASE.rstrip("/")
         self._timeout = settings.ALERTS_TELEGRAM_TIMEOUT
-        # 平台参数中心允许超管在运行期调整重复告警节流窗口，避免只能靠发版改 settings。
+        # 系统参数中心允许超管在运行期调整重复告警节流窗口，避免只能靠发版改 settings。
         self._repeat_interval = timedelta(minutes=get_alerts_repeat_interval_minutes())
 
     @property

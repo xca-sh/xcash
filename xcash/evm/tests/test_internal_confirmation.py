@@ -12,7 +12,6 @@ from web3 import Web3
 from chains.models import Address
 from chains.models import AddressUsage
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from chains.models import Chain
 from chains.models import ChainType
@@ -61,7 +60,7 @@ class EvmInternalTaskConfirmationTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -97,7 +96,7 @@ class EvmInternalTaskConfirmationTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         # 协调器通过 TxHash 历史记录查链上 receipt，必须有至少一条记录。
         TxHash.objects.create(
@@ -145,12 +144,12 @@ class EvmInternalTaskConfirmationTests(TestCase):
 
     @patch("withdrawals.service.WebhookService.create_event")
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_coordinator_fails_internal_withdrawal_when_receipt_status_zero(
+    def test_poller_fails_internal_withdrawal_when_receipt_status_zero(
         self,
         chain_w3_mock,
         webhook_mock,
     ):
-        from evm.coordinator import InternalEvmTaskCoordinator
+        from evm.poller import EvmTaskPoller
 
         withdrawal, base_task, evm_task = self._create_withdrawal_with_pending_evm_task(
             tx_hash="0x" + "7" * 64
@@ -163,27 +162,27 @@ class EvmInternalTaskConfirmationTests(TestCase):
         )
 
         with self.captureOnCommitCallbacks(execute=True):
-            InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+            EvmTaskPoller.poll_chain(chain=self.chain)
 
         withdrawal.refresh_from_db()
         base_task.refresh_from_db()
         evm_task.refresh_from_db()
         self.assertEqual(withdrawal.status, "failed")
         self.assertEqual(base_task.stage, TxTaskStage.FINALIZED)
-        self.assertEqual(base_task.result, TxTaskResult.FAILED)
+        self.assertIs(base_task.success, False)
         self.assertEqual(Transfer.objects.count(), 0)
         # 当前契约：FAILED 不发 webhook（与 withdrawals.tests 一致）。
         webhook_mock.assert_not_called()
 
     @patch("withdrawals.service.WebhookService.create_event")
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_coordinator_skips_when_within_timeout(
+    def test_poller_skips_when_within_timeout(
         self,
         chain_w3_mock,
         webhook_mock,
     ):
         """未超时的 PENDING_CHAIN 任务不做任何处理，等待 scanner 自然闭环。"""
-        from evm.coordinator import InternalEvmTaskCoordinator
+        from evm.poller import EvmTaskPoller
         from withdrawals.models import WithdrawalStatus
 
         withdrawal, base_task, evm_task = self._create_withdrawal_with_pending_evm_task(
@@ -195,23 +194,23 @@ class EvmInternalTaskConfirmationTests(TestCase):
                 get_transaction_receipt=Mock(return_value={"status": 1}),
             )
         )
-        InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+        EvmTaskPoller.poll_chain(chain=self.chain)
 
         withdrawal.refresh_from_db()
         base_task.refresh_from_db()
         evm_task.refresh_from_db()
         self.assertEqual(withdrawal.status, WithdrawalStatus.PENDING)
         self.assertEqual(base_task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(base_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(base_task.success)
         webhook_mock.assert_not_called()
 
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_coordinator_calls_observe_when_receipt_found_and_overdue(
+    def test_poller_calls_observe_when_receipt_found_and_overdue(
         self,
         chain_w3_mock,
     ):
         """超时后查到 receipt status=1，协调器调用 _observe_confirmed_transaction 喂回扫描器管线。"""
-        from evm.coordinator import InternalEvmTaskCoordinator
+        from evm.poller import EvmTaskPoller
 
         tx_hash = "0x" + "b" * 64
         receipt = {"status": 1, "blockNumber": 100}
@@ -226,24 +225,24 @@ class EvmInternalTaskConfirmationTests(TestCase):
         )
 
         with patch.object(
-            InternalEvmTaskCoordinator,
+            EvmTaskPoller,
             "_observe_confirmed_transaction",
         ) as observe_mock:
-            InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+            EvmTaskPoller.poll_chain(chain=self.chain)
             observe_mock.assert_called_once()
             call_kwargs = observe_mock.call_args.kwargs
             self.assertEqual(call_kwargs["tx_hash"], tx_hash)
             self.assertEqual(call_kwargs["receipt"], dict(receipt))
 
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_coordinator_rebroadcasts_when_all_hashes_not_found_and_overdue(
+    def test_poller_rebroadcasts_when_all_hashes_not_found_and_overdue(
         self,
         chain_w3_mock,
     ):
         """超时后所有历史 hash 均无 receipt，触发重新广播。"""
         from web3.exceptions import TransactionNotFound
 
-        from evm.coordinator import InternalEvmTaskCoordinator
+        from evm.poller import EvmTaskPoller
 
         _, base_task, evm_task = self._create_withdrawal_with_pending_evm_task(
             tx_hash="0x" + "9" * 64
@@ -264,7 +263,7 @@ class EvmInternalTaskConfirmationTests(TestCase):
             )
         )
 
-        InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+        EvmTaskPoller.poll_chain(chain=self.chain)
 
         evm_task.refresh_from_db()
         base_task.refresh_from_db()
@@ -273,14 +272,14 @@ class EvmInternalTaskConfirmationTests(TestCase):
         send_raw_mock.assert_called_once()
 
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_coordinator_finds_receipt_via_historical_hash(
+    def test_poller_finds_receipt_via_historical_hash(
         self,
         chain_w3_mock,
     ):
         """当前 tx_hash 无 receipt 但历史 hash 有 receipt 时，通过历史 hash 喂回扫描器管线。"""
         from web3.exceptions import TransactionNotFound
 
-        from evm.coordinator import InternalEvmTaskCoordinator
+        from evm.poller import EvmTaskPoller
 
         current_hash = "0x" + "c" * 64
         old_hash = "0x" + "d" * 64
@@ -310,24 +309,24 @@ class EvmInternalTaskConfirmationTests(TestCase):
         )
 
         with patch.object(
-            InternalEvmTaskCoordinator,
+            EvmTaskPoller,
             "_observe_confirmed_transaction",
         ) as observe_mock:
-            InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+            EvmTaskPoller.poll_chain(chain=self.chain)
             observe_mock.assert_called_once()
             call_kwargs = observe_mock.call_args.kwargs
             self.assertEqual(call_kwargs["tx_hash"], old_hash)
             self.assertEqual(call_kwargs["receipt"], dict(old_receipt))
 
     @patch.object(Chain, "w3", new_callable=PropertyMock)
-    def test_coordinator_continues_when_rebroadcast_raises(
+    def test_poller_continues_when_rebroadcast_raises(
         self,
         chain_w3_mock,
     ):
-        """重新广播时 broadcast() 抛异常不会中断 reconcile 循环。"""
+        """重新广播时 broadcast() 抛异常不会中断 poll 循环。"""
         from web3.exceptions import TransactionNotFound
 
-        from evm.coordinator import InternalEvmTaskCoordinator
+        from evm.poller import EvmTaskPoller
 
         _, base_task, evm_task = self._create_withdrawal_with_pending_evm_task(
             tx_hash="0x" + "e" * 64
@@ -347,7 +346,7 @@ class EvmInternalTaskConfirmationTests(TestCase):
         )
 
         # 不应抛异常
-        InternalEvmTaskCoordinator.reconcile_chain(chain=self.chain)
+        EvmTaskPoller.poll_chain(chain=self.chain)
 
         evm_task.refresh_from_db()
         self.assertEqual(base_task.stage, TxTaskStage.PENDING_CHAIN)

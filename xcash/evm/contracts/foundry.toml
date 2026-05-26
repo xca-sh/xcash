@@ -6,9 +6,15 @@ test = "test"
 script = "scripts"
 solc_version = "0.8.35"
 optimizer = true
-optimizer_runs = 1
+# DepositSlot 每次充币都 DELEGATECALL 进 template 热路径，runs 拉高换 runtime gas。
+optimizer_runs = 1_000_000
 via_ir = true
-evm_version = "cancun"
+# 合约未使用 cancun 特有 opcode；锁 paris 以兼容部分尚未升级的 L2 / 侧链。
+evm_version = "paris"
+# 关闭 bytecode 末尾的 solc 元数据 hash，避免改注释 / 重命名变量 / 换路径
+# 导致 CREATE2 init_code 漂移、地址漂移。
+bytecode_hash = "none"
+cbor_metadata = false
 fs_permissions = [
     { access = "read", path = "./artifacts" },
     { access = "write", path = "../tests/fixtures" },

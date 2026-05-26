@@ -46,7 +46,7 @@ class EvmNonceConcurrencyTests(TransactionTestCase):
         self.address = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -125,7 +125,7 @@ class EvmNonceConcurrencyTests(TransactionTestCase):
             addr = Address.objects.create(
                 wallet=self.wallet,
                 chain_type=ChainType.EVM,
-                usage=AddressUsage.Vault,
+                usage=AddressUsage.HotWallet,
                 bip44_account=1,
                 address_index=100 + i,
                 address=Web3.to_checksum_address(

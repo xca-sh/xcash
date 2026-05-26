@@ -6,6 +6,9 @@ from eth_utils import keccak
 from eth_utils import to_canonical_address
 from eth_utils import to_checksum_address
 
+from evm.constants import XCASH_DEPOSIT_FACTORY_ADDRESS
+from evm.constants import XCASH_DEPOSIT_TEMPLATE_ADDRESS
+
 ZERO_ADDRESS: bytes = b"\x00" * 20
 OZ_CONTRACTS_VERSION = "v5.6.1"
 _OZ_CLONE_IMMUTABLE_ARGS_MAX_LENGTH = 0x5FD3
@@ -43,10 +46,10 @@ def build_xcash_deposit_slot_init_code(
 
 def predict_xcash_deposit_slot_address(
     *,
-    factory: str,
-    deposit_template: str,
     vault: str,
     salt: bytes,
+    factory: str = XCASH_DEPOSIT_FACTORY_ADDRESS,
+    deposit_template: str = XCASH_DEPOSIT_TEMPLATE_ADDRESS,
 ) -> str:
     """预测 XcashDepositFactory.deployDepositSlot(vault, salt) 的 slot 地址。"""
     if len(salt) != 32:

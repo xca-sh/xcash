@@ -1,15 +1,11 @@
 [
   {
-    "type": "fallback",
-    "stateMutability": "payable"
-  },
-  {
     "type": "receive",
     "stateMutability": "payable"
   },
   {
     "type": "function",
-    "name": "collectERC20",
+    "name": "collect",
     "inputs": [
       {
         "name": "token",
@@ -17,13 +13,7 @@
         "internalType": "address"
       }
     ],
-    "outputs": [
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
+    "outputs": [],
     "stateMutability": "nonpayable"
   },
   {
@@ -41,7 +31,7 @@
   },
   {
     "type": "event",
-    "name": "ERC20Collected",
+    "name": "XcashCollected",
     "inputs": [
       {
         "name": "token",
@@ -60,7 +50,7 @@
   },
   {
     "type": "event",
-    "name": "NativeDeposited",
+    "name": "XcashNativeDeposited",
     "inputs": [
       {
         "name": "payer",

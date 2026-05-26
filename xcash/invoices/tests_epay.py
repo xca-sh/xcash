@@ -29,8 +29,8 @@ from invoices.models import EpayOrder
 from invoices.models import Invoice
 from invoices.models import InvoiceProtocol
 from invoices.models import InvoiceStatus
+from projects.models import DifferRecipientAddress
 from projects.models import Project
-from projects.models import RecipientAddress
 
 
 class EpaySignatureTests(TestCase):
@@ -384,7 +384,7 @@ class EpaySubmitServiceTests(TestCase):
             ),
         )
         Fiat.objects.get_or_create(code="CNY")
-        RecipientAddress.objects.create(
+        DifferRecipientAddress.objects.create(
             name="EPay Submit Recipient",
             project=self.project,
             chain_type=ChainType.EVM,
@@ -708,7 +708,7 @@ class EpaySubmitServiceTests(TestCase):
     @patch("invoices.epay_service.check_saas_permission")
     def test_submit_rejects_when_project_has_no_payment_methods(self, mock_check):
         # EPay 建单若项目没有任何可用收款方式，必须拒绝而不是创建不可支付账单并占用商户单号。
-        RecipientAddress.objects.filter(project=self.project).delete()
+        DifferRecipientAddress.objects.filter(project=self.project).delete()
 
         params = self._signed_params(out_trade_no="EPAY-NO-METHODS-1001")
 

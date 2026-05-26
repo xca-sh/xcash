@@ -121,7 +121,7 @@ class CreateWithdrawalSerializer(Serializer):
         # 5. 余额校验（RPC，最重量级，放最后）
         vault_address = project.wallet.get_address(
             chain_type=chain.type,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
         )
         if not WithdrawalService.has_sufficient_balance(
             project=project,

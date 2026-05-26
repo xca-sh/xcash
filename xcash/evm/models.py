@@ -16,7 +16,6 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import TxHash
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from chains.models import TxTaskType
 from chains.signer import get_signer_backend
@@ -24,10 +23,12 @@ from chains.types import AddressStr
 from common.fields import AddressField
 from common.fields import EvmAddressField
 from common.models import UndeletableModel
+from core.models import SystemWallet
+from evm.adapter import EvmAdapter
 from evm.choices import TxKind
 from evm.constants import EVM_PIPELINE_DEPTH
+from evm.constants import XCASH_DEPOSIT_FACTORY_ADDRESS
 from evm.contracts_codec import predict_xcash_deposit_slot_address
-from evm.deployments import get_xcash_deposit_deployment
 from evm.intents import build_deposit_slot_collect_intent
 from evm.intents import build_deposit_slot_deploy_intent
 from evm.intents import get_preflight_buffer_multiplier
@@ -37,16 +38,50 @@ if TYPE_CHECKING:
     from evm.intents import EvmTxIntent
 
 
+class DepositSlotUsage(models.TextChoices):
+    DEPOSIT = "deposit", _("用户充币")
+    INVOICE = "invoice", _("账单收款")
+
+
 class DepositSlot(models.Model):
-    """客户在指定 EVM 链上的 XcashDeposit DepositSlot。"""
+    """项目在指定 EVM 链上的 XcashDeposit DepositSlot。"""
 
     customer = models.ForeignKey(
-        Customer, on_delete=models.CASCADE, verbose_name=_("客户")
+        Customer,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        verbose_name=_("客户"),
+    )
+    project = models.ForeignKey(
+        "projects.Project",
+        on_delete=models.CASCADE,
+        verbose_name=_("项目"),
     )
     chain = models.ForeignKey(Chain, on_delete=models.CASCADE, verbose_name=_("链"))
-    address = AddressField(_("DepositSlot 地址"), unique=True)
+    usage = models.CharField(
+        _("用途"),
+        choices=DepositSlotUsage,
+        default=DepositSlotUsage.DEPOSIT,
+        max_length=16,
+        db_index=True,
+    )
+    invoice_index = models.PositiveIntegerField(
+        _("账单槽位序号"),
+        null=True,
+        blank=True,
+    )
+    address = AddressField(_("DepositSlot 地址"))
     vault_address = AddressField(_("Vault 地址"))
     salt = models.BinaryField(_("CREATE2 Salt"), max_length=32)
+    deploy_tx_task = models.OneToOneField(
+        "evm.EvmTxTask",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deployed_deposit_slot",
+        verbose_name=_("部署交易任务"),
+    )
     created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
 
     class Meta:
@@ -55,6 +90,29 @@ class DepositSlot(models.Model):
                 fields=("customer", "chain"),
                 name="uniq_evm_deposit_slot_customer_chain",
             ),
+            models.UniqueConstraint(
+                fields=("project", "usage", "chain", "invoice_index"),
+                name="uniq_evm_deposit_slot_project_usage_chain_invoice_index",
+            ),
+            models.UniqueConstraint(
+                fields=("chain", "address"),
+                name="uniq_evm_deposit_slot_chain_address",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        usage=DepositSlotUsage.DEPOSIT,
+                        customer__isnull=False,
+                        invoice_index__isnull=True,
+                    )
+                    | models.Q(
+                        usage=DepositSlotUsage.INVOICE,
+                        customer__isnull=True,
+                        invoice_index__isnull=False,
+                    )
+                ),
+                name="ck_evm_deposit_slot_usage_customer",
+            ),
         ]
         verbose_name = _("DepositSlot")
         verbose_name_plural = verbose_name
@@ -62,24 +120,83 @@ class DepositSlot(models.Model):
     def __str__(self):
         return self.address
 
-    @staticmethod
-    def build_customer_salt(*, customer: Customer, chain: Chain) -> bytes:
-        return keccak(
-            b"xcash:deposit-slot:customer:"
-            + str(customer.project_id).encode()
-            + b":"
-            + customer.uid.encode()
-            + b":"
-            + chain.code.encode()
+    def save(self, *args, **kwargs):
+        if self.usage == DepositSlotUsage.DEPOSIT:
+            if self.customer_id is None:
+                raise ValueError("DepositSlot customer is required for deposit usage")
+            if self.project_id is None:
+                self.project_id = self.customer.project_id
+            if self.invoice_index is not None:
+                raise ValueError(
+                    "DepositSlot invoice_index must be empty for deposit usage"
+                )
+        elif self.usage == DepositSlotUsage.INVOICE:
+            if self.customer_id is not None:
+                raise ValueError("DepositSlot customer must be empty for invoice usage")
+            if self.invoice_index is None:
+                raise ValueError(
+                    "DepositSlot invoice_index is required for invoice usage"
+                )
+        return super().save(*args, **kwargs)
+
+    @property
+    def is_deployed(self) -> bool:
+        if self.deploy_tx_task_id is None:
+            return False
+        return (
+            self.deploy_tx_task.base_task.stage == TxTaskStage.FINALIZED
+            and self.deploy_tx_task.base_task.success is True
         )
 
     @staticmethod
-    def get_address(chain: Chain, customer: Customer) -> AddressStr:
+    def _is_deployed_on_chain(*, chain: Chain, address: AddressStr) -> bool:
+        return EvmAdapter.is_contract(chain, address)
+
+    @staticmethod
+    def build_salt(
+        *,
+        usage: DepositSlotUsage,
+        customer: Customer | None = None,
+        project_id: int | None = None,
+        invoice_index: int | None = None,
+    ) -> bytes:
+        if usage == DepositSlotUsage.DEPOSIT:
+            if customer is None:
+                raise ValueError("customer is required for deposit salt")
+            # 不掺 chain.code：configure deterministic deployer 后所有 EVM 链的
+            # factory / template / vault 地址都一致，再用同一 salt 即可让客户在所有 EVM 链
+            # 拿到同一个 DepositSlot 地址。
+            return keccak(
+                b"xcash:deposit-slot:deposit:"
+                + str(customer.project_id).encode()
+                + b":"
+                + customer.uid.encode()
+            )
+
+        if usage == DepositSlotUsage.INVOICE:
+            if project_id is None or invoice_index is None:
+                raise ValueError(
+                    "project_id and invoice_index are required for invoice salt"
+                )
+            return keccak(
+                b"xcash:deposit-slot:invoice:"
+                + str(project_id).encode()
+                + b":"
+                + str(invoice_index).encode()
+            )
+
+        raise ValueError(f"unsupported DepositSlot usage: {usage}")
+
+    @staticmethod
+    def get_deposit_address(chain: Chain, customer: Customer) -> AddressStr:
         if chain.type != ChainType.EVM:
             raise ValueError("DepositSlot 仅支持 EVM 链")
 
+        project = customer.project
         existing = DepositSlot.objects.filter(
             chain=chain,
+            project=project,
+            usage=DepositSlotUsage.DEPOSIT,
             customer=customer,
         ).first()
         if existing is not None:
@@ -88,31 +205,39 @@ class DepositSlot(models.Model):
             )
             return existing.address
 
-        deployment = get_xcash_deposit_deployment(chain.code)
-        vault = customer.project.wallet.get_address(
-            chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+        vault_address = project.vault
+        if not vault_address:
+            raise RuntimeError(
+                f"Project {customer.project_id} DepositSlot Vault 地址未配置"
+            )
+        salt = DepositSlot.build_salt(
+            usage=DepositSlotUsage.DEPOSIT,
+            customer=customer,
         )
-        salt = DepositSlot.build_customer_salt(customer=customer, chain=chain)
         slot_address = predict_xcash_deposit_slot_address(
-            factory=deployment.deposit_factory,
-            deposit_template=deployment.deposit_template,
-            vault=vault.address,
+            vault=vault_address,
             salt=salt,
         )
         try:
             slot, created = DepositSlot.objects.get_or_create(
                 chain=chain,
+                project=project,
+                usage=DepositSlotUsage.DEPOSIT,
                 customer=customer,
                 defaults={
                     "address": slot_address,
-                    "vault_address": vault.address,
+                    "vault_address": vault_address,
                     "salt": salt,
                 },
             )
         except IntegrityError as exc:
             try:
-                slot = DepositSlot.objects.get(chain=chain, customer=customer)
+                slot = DepositSlot.objects.get(
+                    chain=chain,
+                    project=project,
+                    usage=DepositSlotUsage.DEPOSIT,
+                    customer=customer,
+                )
             except DepositSlot.DoesNotExist as not_exist_exc:
                 raise exc from not_exist_exc
         else:
@@ -123,16 +248,92 @@ class DepositSlot(models.Model):
         return slot.address
 
     @staticmethod
-    def schedule_deploy(slot_pk: int) -> EvmTxTask:
+    def get_invoice_address(*, project, chain: Chain, invoice_index: int) -> AddressStr:
+        if chain.type != ChainType.EVM:
+            raise ValueError("DepositSlot 仅支持 EVM 链")
+
+        existing = DepositSlot.objects.filter(
+            chain=chain,
+            project=project,
+            usage=DepositSlotUsage.INVOICE,
+            invoice_index=invoice_index,
+        ).first()
+        if existing is not None:
+            db_transaction.on_commit(
+                lambda slot_pk=existing.pk: DepositSlot.schedule_deploy(slot_pk)
+            )
+            return existing.address
+
+        vault_address = project.vault
+        if not vault_address:
+            raise RuntimeError(f"Project {project.pk} DepositSlot Vault 地址未配置")
+        salt = DepositSlot.build_salt(
+            usage=DepositSlotUsage.INVOICE,
+            project_id=project.pk,
+            invoice_index=invoice_index,
+        )
+        slot_address = predict_xcash_deposit_slot_address(
+            vault=vault_address,
+            salt=salt,
+        )
+        try:
+            slot, created = DepositSlot.objects.get_or_create(
+                chain=chain,
+                project=project,
+                usage=DepositSlotUsage.INVOICE,
+                invoice_index=invoice_index,
+                defaults={
+                    "address": slot_address,
+                    "vault_address": vault_address,
+                    "salt": salt,
+                },
+            )
+        except IntegrityError as exc:
+            try:
+                slot = DepositSlot.objects.get(
+                    chain=chain,
+                    project=project,
+                    usage=DepositSlotUsage.INVOICE,
+                    invoice_index=invoice_index,
+                )
+            except DepositSlot.DoesNotExist as not_exist_exc:
+                raise exc from not_exist_exc
+        else:
+            if created:
+                db_transaction.on_commit(
+                    lambda slot_pk=slot.pk: DepositSlot.schedule_deploy(slot_pk)
+                )
+        return slot.address
+
+    @staticmethod
+    def schedule_deploy(slot_pk: int) -> EvmTxTask | None:
         slot = DepositSlot.objects.select_related(
             "chain",
-            "customer__project__wallet",
+            "project",
+            "deploy_tx_task__base_task",
         ).get(pk=slot_pk)
-        vault = slot.customer.project.wallet.get_address(
+        if DepositSlot._is_deployed_on_chain(chain=slot.chain, address=slot.address):
+            return None
+
+        if slot.deploy_tx_task_id is not None:
+            base_task = slot.deploy_tx_task.base_task
+            if base_task.success is None or (
+                base_task.stage == TxTaskStage.FINALIZED
+                and base_task.success is True
+            ):
+                return slot.deploy_tx_task
+
+        system_wallet = SystemWallet.get_current()
+        sender = system_wallet.wallet.get_address(
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
         )
-        current_vault_address = Web3.to_checksum_address(vault.address)
+        configured_vault_address = slot.project.vault
+        if not configured_vault_address:
+            raise RuntimeError(
+                f"Project {slot.project_id} DepositSlot Vault 地址未配置"
+            )
+        current_vault_address = Web3.to_checksum_address(configured_vault_address)
         slot_vault_address = Web3.to_checksum_address(slot.vault_address)
         if current_vault_address != slot_vault_address:
             raise RuntimeError(
@@ -141,30 +342,36 @@ class DepositSlot(models.Model):
                 f"actual={current_vault_address}"
             )
 
-        deployment = get_xcash_deposit_deployment(slot.chain.code)
         intent = build_deposit_slot_deploy_intent(
-            address=vault,
+            address=sender,
             chain=slot.chain,
-            factory_address=deployment.deposit_factory,
+            factory_address=XCASH_DEPOSIT_FACTORY_ADDRESS,
             vault_address=slot_vault_address,
             salt=bytes(slot.salt),
         )
         existing_task = (
             EvmTxTask.objects.filter(
-                address=vault,
+                address=sender,
                 chain=slot.chain,
                 to=intent.to,
                 data=intent.data,
                 base_task__tx_type=TxTaskType.DepositSlotDeploy,
-                base_task__result=TxTaskResult.UNKNOWN,
+                base_task__success__isnull=True,
             )
             .exclude(base_task__stage=TxTaskStage.FINALIZED)
             .first()
         )
         if existing_task is not None:
+            if slot.deploy_tx_task_id != existing_task.pk:
+                DepositSlot.objects.filter(pk=slot.pk).update(
+                    deploy_tx_task=existing_task
+                )
             return existing_task
 
-        return EvmTxTask.schedule(intent)
+        task = EvmTxTask.schedule(intent)
+        if isinstance(task, EvmTxTask):
+            DepositSlot.objects.filter(pk=slot.pk).update(deploy_tx_task=task)
+        return task
 
     @staticmethod
     def schedule_collect_for_deposit(deposit_pk: int) -> EvmTxTask | None:
@@ -186,6 +393,7 @@ class DepositSlot(models.Model):
             slot = DepositSlot.objects.get(
                 chain=chain,
                 customer=deposit.customer,
+                usage=DepositSlotUsage.DEPOSIT,
                 address=transfer.to_address,
             )
         except DepositSlot.DoesNotExist as exc:
@@ -195,11 +403,16 @@ class DepositSlot(models.Model):
                 f"customer_id={deposit.customer_id} address={transfer.to_address}"
             ) from exc
 
-        vault = deposit.customer.project.wallet.get_address(
+        sender = deposit.customer.project.wallet.get_address(
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
         )
-        current_vault_address = Web3.to_checksum_address(vault.address)
+        configured_vault_address = deposit.customer.project.vault
+        if not configured_vault_address:
+            raise RuntimeError(
+                f"Project {deposit.customer.project_id} DepositSlot Vault 地址未配置"
+            )
+        current_vault_address = Web3.to_checksum_address(configured_vault_address)
         slot_vault_address = Web3.to_checksum_address(slot.vault_address)
         if current_vault_address != slot_vault_address:
             raise RuntimeError(
@@ -214,19 +427,100 @@ class DepositSlot(models.Model):
             )
 
         intent = build_deposit_slot_collect_intent(
-            address=vault,
+            address=sender,
             chain=chain,
             deposit_slot_address=slot.address,
             token_address=token_address,
         )
         existing_task = (
             EvmTxTask.objects.filter(
-                address=vault,
+                address=sender,
                 chain=chain,
                 to=intent.to,
                 data=intent.data,
                 base_task__tx_type=TxTaskType.DepositSlotCollect,
-                base_task__result=TxTaskResult.UNKNOWN,
+                base_task__success__isnull=True,
+            )
+            .exclude(base_task__stage=TxTaskStage.FINALIZED)
+            .first()
+        )
+        if existing_task is not None:
+            return existing_task
+
+        return EvmTxTask.schedule(intent)
+
+    @staticmethod
+    def schedule_collect_for_invoice(invoice_pk: int) -> EvmTxTask | None:
+        from invoices.models import Invoice
+        from invoices.models import InvoiceBillingMode
+
+        invoice = Invoice.objects.select_related(
+            "project__wallet",
+            "chain",
+            "crypto",
+        ).get(pk=invoice_pk)
+
+        if invoice.billing_mode != InvoiceBillingMode.CONTRACT:
+            return None
+        if invoice.chain_id is None or invoice.crypto_id is None or not invoice.pay_address:
+            return None
+
+        chain = invoice.chain
+        crypto = invoice.crypto
+        if crypto.pk == chain.native_coin_id:
+            return None
+
+        try:
+            slot = DepositSlot.objects.get(
+                chain=chain,
+                project=invoice.project,
+                usage=DepositSlotUsage.INVOICE,
+                address=invoice.pay_address,
+            )
+        except DepositSlot.DoesNotExist as exc:
+            raise RuntimeError(
+                "Invoice DepositSlot 不存在："
+                f"invoice_id={invoice.pk} chain={chain.code} "
+                f"project_id={invoice.project_id} address={invoice.pay_address}"
+            ) from exc
+
+        sender = invoice.project.wallet.get_address(
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.HotWallet,
+        )
+        configured_vault_address = invoice.project.vault
+        if not configured_vault_address:
+            raise RuntimeError(
+                f"Project {invoice.project_id} DepositSlot Vault 地址未配置"
+            )
+        current_vault_address = Web3.to_checksum_address(configured_vault_address)
+        slot_vault_address = Web3.to_checksum_address(slot.vault_address)
+        if current_vault_address != slot_vault_address:
+            raise RuntimeError(
+                "DepositSlot Vault 地址不一致："
+                f"slot_id={slot.pk} expected={slot_vault_address} actual={current_vault_address}"
+            )
+
+        token_address = crypto.address(chain)
+        if not token_address:
+            raise RuntimeError(
+                f"Crypto {crypto.symbol} 未部署在链 {chain.code}，无法调度 Invoice DepositSlot 归集"
+            )
+
+        intent = build_deposit_slot_collect_intent(
+            address=sender,
+            chain=chain,
+            deposit_slot_address=slot.address,
+            token_address=token_address,
+        )
+        existing_task = (
+            EvmTxTask.objects.filter(
+                address=sender,
+                chain=chain,
+                to=intent.to,
+                data=intent.data,
+                base_task__tx_type=TxTaskType.DepositSlotCollect,
+                base_task__success__isnull=True,
             )
             .exclude(base_task__stage=TxTaskStage.FINALIZED)
             .first()
@@ -237,19 +531,12 @@ class DepositSlot(models.Model):
         return EvmTxTask.schedule(intent)
 
 
-class EvmScanCursorType(models.TextChoices):
-    """定义 EVM 自扫描器的游标类型。"""
-
-    NATIVE_DEPOSIT = "native_deposit", _("原生币充值")
-    ERC20_TRANSFER = "erc20_transfer", _("ERC20 转账")
-
-
 class EvmScanCursor(models.Model):
-    """记录某条 EVM 链上某类扫描器的推进位置与最近错误。
+    """记录某条 EVM 链上日志扫描器的推进位置与最近错误。
 
     设计原则：
-    - 游标按"链 + 扫描器类型"维度维护，不按 token 维度膨胀。
-    - last_scanned_block 记录主扫描面已经推进到的最高块高。
+    - 每条 EVM 链只维护一个日志扫描游标。
+    - last_scanned_block 记录 EVM 日志扫描已经推进到的最高块高。
     """
 
     chain = models.ForeignKey(
@@ -257,11 +544,6 @@ class EvmScanCursor(models.Model):
         on_delete=models.CASCADE,
         related_name="evm_scan_cursors",
         verbose_name=_("链"),
-    )
-    scanner_type = models.CharField(
-        _("扫描器类型"),
-        max_length=32,
-        choices=EvmScanCursorType,
     )
     last_scanned_block = models.PositiveIntegerField(_("已扫描到的区块"), default=0)
     enabled = models.BooleanField(_("启用"), default=True)
@@ -273,16 +555,16 @@ class EvmScanCursor(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=("chain", "scanner_type"),
-                name="uniq_evm_scan_cursor_chain_scanner_type",
+                fields=("chain",),
+                name="uniq_evm_scan_cursor_chain",
             ),
         ]
-        ordering = ("chain_id", "scanner_type")
+        ordering = ("chain_id",)
         verbose_name = _("EVM 扫描游标")
         verbose_name_plural = verbose_name
 
     def __str__(self) -> str:
-        return f"{self.chain.code}:{self.scanner_type}"
+        return self.chain.code
 
 
 class EvmTxTask(UndeletableModel):
@@ -384,7 +666,9 @@ class EvmTxTask(UndeletableModel):
         # 已经确定的 gas limit，避免原生转账和合约调用都套用 ERC-20 上限。
         if self.gas_price is None:
             raise ValueError("EVM 任务尚未签名，gas_price 不可为空")
-        current_native_balance = self.chain.w3.eth.get_balance(self.address.address)  # noqa: SLF001
+        current_native_balance = self.chain.w3.eth.get_balance(
+            self.address.address
+        )  # noqa: SLF001
         signed_gas_price = int(self.gas_price)
         multiplier = get_preflight_buffer_multiplier(TxKind(self.tx_kind))
         buffer_required = int(self.value) + multiplier * self.gas * signed_gas_price
@@ -436,7 +720,9 @@ class EvmTxTask(UndeletableModel):
 
         for tx_hash in self._known_tx_hashes():
             try:
-                receipt = self.chain.w3.eth.get_transaction_receipt(tx_hash)  # noqa: SLF001
+                receipt = self.chain.w3.eth.get_transaction_receipt(
+                    tx_hash
+                )  # noqa: SLF001
             except TransactionNotFound:
                 continue
             except AttributeError:
@@ -451,14 +737,14 @@ class EvmTxTask(UndeletableModel):
 
         send_raw_transaction 可能已被节点接受，但 worker 在 _mark_pending_chain 前
         中断。再次执行时不能盲目重发或让 nonce too low 卡住队列，应先用历史
-        hash 观察链上事实，再回到统一 coordinator/业务管线。
+        hash 观察链上事实，再回到统一 poller/业务管线。
         """
-        base_task = TxTask.objects.only("stage", "result", "tx_hash").get(
+        base_task = TxTask.objects.only("stage", "success", "tx_hash").get(
             pk=self.base_task_id
         )
         if (
             base_task.stage != TxTaskStage.QUEUED
-            or base_task.result != TxTaskResult.UNKNOWN
+            or base_task.success is not None
         ):
             return False
 
@@ -466,12 +752,12 @@ class EvmTxTask(UndeletableModel):
         if receipt is None or tx_hash is None:
             return False
 
-        from evm.coordinator import InternalEvmTaskCoordinator  # noqa: PLC0415
+        from evm.poller import EvmTaskPoller  # noqa: PLC0415
 
         status = receipt.get("status")
         if status == 1:
             self._mark_pending_chain()
-            InternalEvmTaskCoordinator._observe_confirmed_transaction(
+            EvmTaskPoller._observe_confirmed_transaction(
                 evm_task=self,
                 tx_hash=tx_hash,
                 receipt=receipt,
@@ -479,7 +765,7 @@ class EvmTxTask(UndeletableModel):
             return True
         if status == 0:
             self._mark_pending_chain()
-            InternalEvmTaskCoordinator._finalize_failed_task(evm_task=self)
+            EvmTaskPoller._finalize_failed_task(evm_task=self)
             return True
         raise RuntimeError("EVM receipt status missing or invalid")
 
@@ -487,8 +773,8 @@ class EvmTxTask(UndeletableModel):
         self, *, allow_pending_chain_rebroadcast: bool
     ) -> bool:
         """校验当前父任务阶段是否允许进入真实广播副作用。"""
-        base_task = TxTask.objects.only("stage", "result").get(pk=self.base_task_id)
-        if base_task.result != TxTaskResult.UNKNOWN:
+        base_task = TxTask.objects.only("stage", "success").get(pk=self.base_task_id)
+        if base_task.success is not None:
             return False
         if base_task.stage == TxTaskStage.PENDING_CHAIN:
             return allow_pending_chain_rebroadcast
@@ -550,7 +836,7 @@ class EvmTxTask(UndeletableModel):
         TxTask.objects.filter(
             pk=self.base_task_id,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success__isnull=True,
         ).update(
             stage=TxTaskStage.PENDING_CHAIN,
             updated_at=timezone.now(),
@@ -567,7 +853,7 @@ class EvmTxTask(UndeletableModel):
             chain=self.chain,
             nonce__lt=self.nonce,
             base_task__stage=TxTaskStage.QUEUED,
-            base_task__result=TxTaskResult.UNKNOWN,
+            base_task__success__isnull=True,
         ).exists()
 
     def is_pipeline_full(self) -> bool:
@@ -577,7 +863,7 @@ class EvmTxTask(UndeletableModel):
                 address=self.address,
                 chain=self.chain,
                 base_task__stage=TxTaskStage.PENDING_CHAIN,
-                base_task__result=TxTaskResult.UNKNOWN,
+                base_task__success__isnull=True,
             ).count()
             >= EVM_PIPELINE_DEPTH
         )
@@ -635,7 +921,7 @@ class EvmTxTask(UndeletableModel):
                 address=intent.address,
                 tx_type=intent.tx_type,
                 stage=TxTaskStage.QUEUED,
-                result=TxTaskResult.UNKNOWN,
+                success=None,
             )
 
             return EvmTxTask.objects.create(

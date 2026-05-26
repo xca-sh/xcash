@@ -120,7 +120,7 @@ def get_pending_admin_next_path(request) -> str:
 
 
 def get_admin_sensitive_action_otp_max_age_seconds() -> int:
-    # OTP 新鲜度默认仍由 settings 提供，但平台参数中心可在运行期覆盖该阈值。
+    # OTP 新鲜度默认仍由 settings 提供，但系统参数中心可在运行期覆盖该阈值。
     return get_runtime_admin_otp_max_age_seconds()
 
 

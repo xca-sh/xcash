@@ -7,10 +7,11 @@ import {XcashDepositFactory} from "../src/XcashDepositFactory.sol";
 import {MockERC20} from "./helpers/MockERC20.sol";
 
 contract XcashDepositFactoryTest is Test {
-    event XcashDepositSlotDeployed(
-        address indexed deposit, address indexed vault, bytes32 indexed salt
-    );
     event XcashNativeDeposited(address indexed payer, uint256 amount);
+    event XcashCollected(address indexed token, uint256 amount);
+    event XcashDepositSlotDeployed(
+        address indexed depositSlot, address indexed vault, bytes32 indexed salt
+    );
 
     address payable internal vault = payable(address(0xBEEF));
     address payable internal secondVault = payable(address(0xCAFE));
@@ -23,13 +24,20 @@ contract XcashDepositFactoryTest is Test {
     }
 
     function test_reverts_when_depositTemplate_is_zero() public {
-        vm.expectRevert(XcashDepositFactory.ZeroDepositTemplate.selector);
+        vm.expectRevert(XcashDepositFactory.InvalidDepositTemplate.selector);
         new XcashDepositFactory(address(0));
     }
 
     function test_reverts_when_depositTemplate_has_no_code() public {
         vm.expectRevert(XcashDepositFactory.InvalidDepositTemplate.selector);
         new XcashDepositFactory(address(0x1234));
+    }
+
+    function test_reverts_when_depositTemplate_has_unexpected_codehash() public {
+        MockERC20 wrongTemplate = new MockERC20();
+
+        vm.expectRevert(XcashDepositFactory.InvalidDepositTemplate.selector);
+        new XcashDepositFactory(address(wrongTemplate));
     }
 
     function test_factory_exposes_single_predict_deposit_slot_selector() public pure {
@@ -76,6 +84,9 @@ contract XcashDepositFactoryTest is Test {
         MockERC20 token = new MockERC20();
         token.mint(predicted, 1000e18);
         address deployed = factory.deployDepositSlot(vault, salt);
+
+        vm.expectEmit(true, true, true, true, deployed);
+        emit XcashCollected(address(token), 1000e18);
 
         XcashDepositTemplate(payable(deployed)).collect(address(token));
 

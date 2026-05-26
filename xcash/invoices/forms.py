@@ -292,7 +292,7 @@ class ManualInvoiceAdminForm(forms.ModelForm):
         available_methods = Invoice.available_methods(project)
         if not available_methods:
             raise forms.ValidationError(
-                _("当前项目暂无可用支付方式。请确保已设置支付地址。")
+                _("当前项目暂无可用支付方式。请确保已设置差额账单收款地址。")
             )
 
         if CryptoService.exists(currency):

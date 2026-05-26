@@ -52,13 +52,13 @@ def _short_circuit_chain_rpc_probe(django_db_setup):
 
 
 @pytest.fixture(autouse=True)
-def _reset_platform_settings_cache():
-    # PlatformSettings 单例走 Redis 缓存 timeout=None；TestCase 事务回滚后缓存里仍残留旧对象，
+def _reset_system_settings_cache():
+    # SystemSettings 单例走 Redis 缓存 timeout=None；TestCase 事务回滚后缓存里仍残留旧对象，
     # 会让下一个用例读到上一个测试创建的运行时开关，造成跨用例污染。
     from django.core.cache import cache  # noqa: PLC0415
 
-    from core.models import PLATFORM_SETTINGS_CACHE_KEY  # noqa: PLC0415
+    from core.models import SYSTEM_SETTINGS_CACHE_KEY  # noqa: PLC0415
 
-    cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+    cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
     yield
-    cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+    cache.delete(SYSTEM_SETTINGS_CACHE_KEY)

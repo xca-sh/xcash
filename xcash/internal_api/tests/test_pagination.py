@@ -12,8 +12,10 @@ common.pagination.PageNumberSizePagination 真的作用于内网 API 列表端�
 
 import pytest
 from internal_api.viewsets.deposits import InternalDepositViewSet
-from internal_api.viewsets.operations import VaultFundingViewSet
-from internal_api.viewsets.recipient_addresses import RecipientAddressViewSet
+from internal_api.viewsets.differ_recipient_addresses import (
+    DifferRecipientAddressViewSet,
+)
+from internal_api.viewsets.operations import HotWalletFundingViewSet
 from internal_api.viewsets.withdrawals import InternalWithdrawalViewSet
 
 from chains.models import Wallet
@@ -147,8 +149,8 @@ class TestListViewSetsHaveStableOrdering:
         [
             InternalDepositViewSet,
             InternalWithdrawalViewSet,
-            VaultFundingViewSet,
-            RecipientAddressViewSet,
+            HotWalletFundingViewSet,
+            DifferRecipientAddressViewSet,
         ],
     )
     def test_queryset_is_ordered(self, viewset_cls):

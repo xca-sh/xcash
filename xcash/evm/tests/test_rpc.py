@@ -17,7 +17,7 @@ from evm.scanner.rpc import EvmScannerRpcError
 
 @patch.object(rpc_module, "_EVM_RPC_RETRY_BACKOFF_SECONDS", (0, 0))
 class EvmScannerRpcErrorMessageTests(SimpleTestCase):
-    def test_get_transfer_logs_error_includes_rpc_method_and_raw_reason(self):
+    def test_get_logs_error_includes_rpc_method_and_raw_reason(self):
         # 游标 last_error 直接使用此异常文本；必须带上具体 RPC 方法和节点原始报错，
         # 否则后台只能看到失败区块范围，无法判断是套餐限流、超时还是节点内部错误。
         chain = SimpleNamespace(
@@ -35,19 +35,20 @@ class EvmScannerRpcErrorMessageTests(SimpleTestCase):
         )
 
         with self.assertRaises(EvmScannerRpcError) as caught:
-            EvmScannerRpcClient(chain=chain).get_transfer_logs(
+            EvmScannerRpcClient(chain=chain).get_logs(
                 from_block=100,
                 to_block=109,
-                token_addresses=[
+                addresses=[
                     Web3.to_checksum_address(
                         "0x00000000000000000000000000000000000000aa"
                     )
                 ],
                 topic0=Web3.to_hex(Web3.keccak(text="Transfer(address,address,uint256)")),
+                summary="获取 EVM 日志失败",
             )
 
         message = str(caught.exception)
-        self.assertIn("获取 ERC20 日志失败", message)
+        self.assertIn("获取 EVM 日志失败", message)
         self.assertIn("rpc=eth_getLogs", message)
         self.assertIn("limit exceeded: 5000 results", message)
         self.assertLess(message.index("rpc=eth_getLogs"), message.index("from=100"))
@@ -76,7 +77,7 @@ class EvmScannerRpcErrorMessageTests(SimpleTestCase):
         )
         self.assertIn("rpc=eth_getBlockByNumber", message[:60])
 
-    def test_get_transfer_logs_error_preserves_full_raw_reason(self):
+    def test_get_logs_error_preserves_full_raw_reason(self):
         # 节点错误文本会直接进入扫描游标；长错误不能被提前截断，否则后台无法看到
         # 供应商返回的完整限制参数、建议区间或请求上下文。
         raw_reason = "limit exceeded: " + "x" * 360
@@ -98,15 +99,16 @@ class EvmScannerRpcErrorMessageTests(SimpleTestCase):
         )
 
         with self.assertRaises(EvmScannerRpcError) as caught:
-            EvmScannerRpcClient(chain=chain).get_transfer_logs(
+            EvmScannerRpcClient(chain=chain).get_logs(
                 from_block=45_996_974,
                 to_block=45_996_983,
-                token_addresses=[
+                addresses=[
                     Web3.to_checksum_address(
                         "0x00000000000000000000000000000000000000aa"
                     )
                 ],
                 topic0=Web3.to_hex(Web3.keccak(text="Transfer(address,address,uint256)")),
+                summary="获取 EVM 日志失败",
             )
 
         message = str(caught.exception)
@@ -131,7 +133,7 @@ class EvmScannerRpcClientTests(TestCase):
             active=True,
         )
 
-    def test_get_transfer_logs_splits_request_by_chain_max_block_range(self):
+    def test_get_logs_splits_request_by_chain_max_block_range(self):
         # RPC 供应商限制 eth_getLogs 区块跨度时，应按链配置切片并聚合结果。
         Chain.objects.filter(pk=self.chain.pk).update(evm_log_max_block_range=10)
         self.chain.refresh_from_db()
@@ -153,10 +155,10 @@ class EvmScannerRpcClientTests(TestCase):
             eth=SimpleNamespace(get_logs=Mock(side_effect=fake_get_logs))
         )
 
-        logs = EvmScannerRpcClient(chain=self.chain).get_transfer_logs(
+        logs = EvmScannerRpcClient(chain=self.chain).get_logs(
             from_block=100,
             to_block=124,
-            token_addresses=[
+            addresses=[
                 Web3.to_checksum_address("0x00000000000000000000000000000000000000aa")
             ],
             topic0=Web3.to_hex(Web3.keccak(text="Transfer(address,address,uint256)")),
@@ -164,6 +166,54 @@ class EvmScannerRpcClientTests(TestCase):
 
         self.assertEqual(requested_ranges, [(100, 109), (110, 119), (120, 124)])
         self.assertEqual(len(logs), 3)
+
+    def test_get_logs_accepts_multiple_topic0_values(self):
+        # native deposit + ERC20 Transfer 统一扫描时，topic0 第一位需要用 OR 查询。
+        captured_filters: list[dict] = []
+
+        def fake_get_logs(filter_params: dict) -> list[dict]:
+            captured_filters.append(filter_params)
+            return []
+
+        self.chain.__dict__["w3"] = SimpleNamespace(
+            eth=SimpleNamespace(get_logs=Mock(side_effect=fake_get_logs))
+        )
+        topics = [
+            Web3.to_hex(Web3.keccak(text="XcashNativeDeposited(address,uint256)")),
+            Web3.to_hex(Web3.keccak(text="Transfer(address,address,uint256)")),
+        ]
+
+        EvmScannerRpcClient(chain=self.chain).get_logs(
+            from_block=100,
+            to_block=100,
+            addresses=[
+                Web3.to_checksum_address("0x00000000000000000000000000000000000000aa")
+            ],
+            topic0=topics,
+        )
+
+        self.assertEqual(captured_filters[0]["topics"], [topics])
+
+    def test_get_logs_omits_address_filter_when_addresses_is_none(self):
+        # DepositSlot 自定义事件按 topic 全链查询，不能把海量 slot 地址塞进 address 条件。
+        captured_filters: list[dict] = []
+
+        def fake_get_logs(filter_params: dict) -> list[dict]:
+            captured_filters.append(filter_params)
+            return []
+
+        self.chain.__dict__["w3"] = SimpleNamespace(
+            eth=SimpleNamespace(get_logs=Mock(side_effect=fake_get_logs))
+        )
+
+        EvmScannerRpcClient(chain=self.chain).get_logs(
+            from_block=100,
+            to_block=100,
+            addresses=None,
+            topic0=Web3.to_hex(Web3.keccak(text="XcashNativeDeposited(address,uint256)")),
+        )
+
+        self.assertNotIn("address", captured_filters[0])
 
     @patch("evm.scanner.rpc.EvmScannerRpcClient._build_poa_retry_w3")
     def test_get_block_timestamp_retries_with_poa_when_extradata_is_too_long(
@@ -229,7 +279,7 @@ class EvmScannerRpcClientTests(TestCase):
         self.assertEqual(get_block_mock.call_count, 3)
 
     def test_get_latest_block_number_caches_result_within_single_client(self):
-        # 单 tick 内 native + erc20 共用同一 client 时，eth_blockNumber 只应打一次。
+        # 单 tick 内统一日志扫描和兜底复扫复用同一 client 时，eth_blockNumber 只应打一次。
         chain = SimpleNamespace(
             code="bsc-mainnet",
             get_latest_block_number=99,

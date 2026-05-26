@@ -22,8 +22,8 @@ from core.dashboard import dashboard_callback
 from core.dashboard import environment_callback
 from core.dashboard import signer_overview_view
 from core.dashboard_metrics import build_dashboard_metrics
-from core.models import PLATFORM_SETTINGS_CACHE_KEY
-from core.models import PlatformSettings
+from core.models import SYSTEM_SETTINGS_CACHE_KEY
+from core.models import SystemSettings
 from core.monitoring import OperationalRiskService
 from core.tasks import scan_operational_risks
 from currencies.models import Crypto
@@ -38,7 +38,7 @@ from withdrawals.models import WithdrawalStatus
 
 class OperationalRiskServiceTests(TestCase):
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
     def setUp(self):
@@ -113,8 +113,8 @@ class OperationalRiskServiceTests(TestCase):
         self.assertEqual(len(summary["recent_stalled_webhook_events"]), 1)
 
     def test_build_summary_uses_platform_timeout_override(self):
-        # 平台参数中心调低巡检阈值后，后台摘要必须立即采用新阈值，而不是继续使用硬编码分钟数。
-        PlatformSettings.objects.create(
+        # 系统参数中心调低巡检阈值后，后台摘要必须立即采用新阈值，而不是继续使用硬编码分钟数。
+        SystemSettings.objects.create(
             reviewing_withdrawal_timeout_minutes=5,
             pending_withdrawal_timeout_minutes=5,
             confirming_withdrawal_timeout_minutes=5,

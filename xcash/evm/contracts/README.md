@@ -27,7 +27,8 @@ deposit_slot = keccak256(0xff || factory || salt || keccak256(slot_init_code))[-
 其中 `slot_init_code` 由 OpenZeppelin `Clones` immutable args 规则构造。
 Python 侧对应实现为 `xcash/evm/contracts_codec.py` 的
 `build_xcash_deposit_slot_init_code(deposit_template, vault)` 和
-`predict_xcash_deposit_slot_address(factory, deposit_template, vault, salt)`。
+`predict_xcash_deposit_slot_address(vault, salt)`；如需校验非默认部署地址，
+也可显式传入 `factory` 和 `deposit_template`。
 
 ## Fixtures
 

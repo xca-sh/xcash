@@ -21,8 +21,8 @@ from common.consts import SIGNATURE_HEADER
 from common.consts import TIMESTAMP_HEADER
 from invoices.models import Invoice
 from invoices.models import InvoiceBillingMode
+from projects.models import DifferRecipientAddress
 from projects.models import Project
-from projects.models import RecipientAddress
 
 from .models import DepositStressCase
 from .models import InvoiceStressCase
@@ -59,7 +59,7 @@ class StressService:
             _ensure_stress_crypto_prices()
             _cleanup_orphan_stress_project(stress)
             project = _create_stress_project(stress)
-            _setup_recipient_addresses(project)
+            _setup_differ_recipient_addresses(project)
             cases = _build_stress_cases(stress)
             has_contract_invoice = any(
                 case.billing_mode == InvoiceBillingMode.CONTRACT for case in cases
@@ -347,8 +347,8 @@ _ANVIL_RECIPIENT_ADDRESSES = [
 ]
 
 
-def _setup_recipient_addresses(project: Project) -> None:
-    """为 Stress Project 配置收币地址。
+def _setup_differ_recipient_addresses(project: Project) -> None:
+    """为 Stress Project 配置差额账单收款地址。
 
     压测链路固定跑本地测试链，不再依赖"系统里已有其他项目模板地址"。
     - EVM: 直接使用 Anvil 预置账户地址
@@ -361,7 +361,7 @@ def _setup_recipient_addresses(project: Project) -> None:
         chain_type: str,
         address: str,
     ) -> None:
-        RecipientAddress.objects.update_or_create(
+        DifferRecipientAddress.objects.update_or_create(
             chain_type=chain_type,
             address=address,
             defaults={
@@ -448,7 +448,7 @@ def _setup_wallet_for_withdrawal(project: Project) -> None:
     project.save(update_fields=["wallet"])
 
     # 预派生 EVM Vault 地址
-    wallet.get_address(chain_type=ChainType.EVM, usage=AddressUsage.Vault)
+    wallet.get_address(chain_type=ChainType.EVM, usage=AddressUsage.HotWallet)
 
 
 def _pick_billing_mode() -> str:
@@ -676,7 +676,7 @@ def _fund_evm_vault(project: Project) -> None:
 
     vault_address = project.wallet.get_address(
         chain_type=ChainType.EVM,
-        usage=AddressUsage.Vault,
+        usage=AddressUsage.HotWallet,
     ).address
 
     w3 = _get_w3()

@@ -12,7 +12,6 @@ from web3.exceptions import TransactionNotFound
 from chains.models import Address
 from chains.models import AddressUsage
 from chains.models import TxTask
-from chains.models import TxTaskResult
 from chains.models import TxTaskStage
 from chains.models import Chain
 from chains.models import ChainType
@@ -44,7 +43,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address="0x0000000000000000000000000000000000000C01",
@@ -54,7 +53,7 @@ class EvmTxTaskTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
 
         with self.assertRaises(IntegrityError), transaction.atomic():
@@ -90,7 +89,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address="0x0000000000000000000000000000000000000F01",
@@ -150,7 +149,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address="0x0000000000000000000000000000000000000001",
@@ -160,7 +159,7 @@ class EvmTxTaskTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -180,7 +179,7 @@ class EvmTxTaskTests(TestCase):
         tx_task.refresh_from_db()
         self.assertIsNotNone(tx_task.last_attempt_at)
 
-    def test_broadcast_preflight_threshold_skips_gas_recharge_for_withdrawal(self):
+    def test_broadcast_preflight_skips_send_when_withdrawal_balance_insufficient(self):
         native = Crypto.objects.create(
             name="Ethereum Vault Reraise",
             symbol="ETHVR",
@@ -200,7 +199,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -226,7 +225,7 @@ class EvmTxTaskTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "d" * 64,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -246,7 +245,7 @@ class EvmTxTaskTests(TestCase):
         base_task.refresh_from_db()
         tx_task.refresh_from_db()
         self.assertEqual(base_task.stage, TxTaskStage.QUEUED)
-        self.assertEqual(base_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(base_task.success)
         estimate_gas_mock.assert_not_called()
         send_raw_mock.assert_not_called()
         self.assertIsNotNone(tx_task.last_attempt_at)
@@ -269,7 +268,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=Web3.to_checksum_address("0x" + "75" * 20),
@@ -289,7 +288,7 @@ class EvmTxTaskTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -331,7 +330,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -357,7 +356,7 @@ class EvmTxTaskTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -377,7 +376,7 @@ class EvmTxTaskTests(TestCase):
         base_task.refresh_from_db()
         tx_task.refresh_from_db()
         self.assertEqual(base_task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(base_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(base_task.success)
         estimate_gas_mock.assert_not_called()
         send_raw_mock.assert_called_once()
         self.assertIsNotNone(tx_task.last_attempt_at)
@@ -404,7 +403,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -433,7 +432,7 @@ class EvmTxTaskTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -474,7 +473,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -501,7 +500,7 @@ class EvmTxTaskTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -540,7 +539,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=Web3.to_checksum_address("0x" + "a1" * 20),
@@ -558,7 +557,7 @@ class EvmTxTaskTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -601,7 +600,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -625,7 +624,7 @@ class EvmTxTaskTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -663,7 +662,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=0,
             address_index=0,
             address=Web3.to_checksum_address("0x" + "a3" * 20),
@@ -687,7 +686,7 @@ class EvmTxTaskTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "a5" * 32,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -726,7 +725,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -752,7 +751,7 @@ class EvmTxTaskTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "2" * 64,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -776,7 +775,7 @@ class EvmTxTaskTests(TestCase):
         base_task.refresh_from_db()
         tx_task.refresh_from_db()
         self.assertEqual(base_task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(base_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(base_task.success)
 
     def test_broadcast_reraises_nonce_too_low_without_marking_pending(self):
         native = Crypto.objects.create(
@@ -796,7 +795,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -820,7 +819,7 @@ class EvmTxTaskTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "3" * 64,
             stage=TxTaskStage.PENDING_CHAIN,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -841,7 +840,7 @@ class EvmTxTaskTests(TestCase):
         base_task.refresh_from_db()
         tx_task.refresh_from_db()
         self.assertEqual(base_task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(base_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(base_task.success)
 
     def test_broadcast_blocks_higher_nonce_until_lower_nonce_settles(self):
         native = Crypto.objects.create(
@@ -861,7 +860,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -883,7 +882,7 @@ class EvmTxTaskTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         EvmTxTask.objects.create(
             base_task=lower_base_task,
@@ -905,7 +904,7 @@ class EvmTxTaskTests(TestCase):
             address=addr,
             tx_type=TxTaskType.Withdrawal,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -925,7 +924,7 @@ class EvmTxTaskTests(TestCase):
         send_raw_transaction_mock.assert_not_called()
         base_task.refresh_from_db()
         self.assertEqual(base_task.stage, TxTaskStage.QUEUED)
-        self.assertEqual(base_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(base_task.success)
         self.assertIsNone(tx_task.last_attempt_at)
 
     def test_broadcast_treats_already_known_as_idempotent_success(self):
@@ -946,7 +945,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -970,7 +969,7 @@ class EvmTxTaskTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash="0x" + "4" * 64,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         tx_task = EvmTxTask.objects.create(
             base_task=base_task,
@@ -990,7 +989,7 @@ class EvmTxTaskTests(TestCase):
         base_task.refresh_from_db()
         tx_task.refresh_from_db()
         self.assertEqual(base_task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(base_task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(base_task.success)
 
     def test_queued_task_with_existing_hash_recovers_from_confirmed_receipt(self):
         """首播已被节点接受但阶段仍是 QUEUED 时，应先查 receipt 自愈而不是重发。"""
@@ -1011,7 +1010,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -1039,7 +1038,7 @@ class EvmTxTaskTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         TxHash.objects.create(
             tx_task=base_task,
@@ -1061,7 +1060,7 @@ class EvmTxTaskTests(TestCase):
         )
 
         with patch(
-            "evm.coordinator.InternalEvmTaskCoordinator._observe_confirmed_transaction"
+            "evm.poller.EvmTaskPoller._observe_confirmed_transaction"
         ) as observe_mock:
             tx_task.broadcast()
 
@@ -1089,7 +1088,7 @@ class EvmTxTaskTests(TestCase):
         addr = Address.objects.create(
             wallet=Wallet.objects.create(),
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -1120,7 +1119,7 @@ class EvmTxTaskTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=TxTaskStage.QUEUED,
-            result=TxTaskResult.UNKNOWN,
+            success=None,
         )
         TxHash.objects.create(
             tx_task=base_task,
@@ -1142,7 +1141,7 @@ class EvmTxTaskTests(TestCase):
         )
 
         with patch(
-            "evm.coordinator.InternalEvmTaskCoordinator._observe_confirmed_transaction"
+            "evm.poller.EvmTaskPoller._observe_confirmed_transaction"
         ) as observe_mock:
             tx_task.broadcast()
 

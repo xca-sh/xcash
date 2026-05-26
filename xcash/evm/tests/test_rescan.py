@@ -14,27 +14,26 @@ from web3.exceptions import TransactionNotFound
 
 from chains.models import Address
 from chains.models import AddressUsage
-from chains.models import TxTask
-from chains.models import TxTaskResult
-from chains.models import TxTaskStage
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import TxTaskType
 from chains.models import TxHash
+from chains.models import TxTask
+from chains.models import TxTaskStage
+from chains.models import TxTaskType
 from chains.models import Wallet
-from core.models import PLATFORM_SETTINGS_CACHE_KEY
+from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from evm.models import EvmScanCursor
-from evm.models import EvmScanCursorType
+from evm.scanner.logs import EvmLogRangeResult
 
 
 @override_settings(DEBUG=False)
-class EvmReconcilePendingChainTests(TestCase):
-    """兜底任务 reconcile_stale_pending_chain_evm 的关键行为测试。
+class EvmRescanPendingChainTests(TestCase):
+    """重扫任务 _rescan_pending_evm_chain 的关键行为测试。
 
     覆盖点：
-    - 阈值内不兜底（避免抖动误触发）；
+    - 阈值内不重扫（避免抖动误触发）；
     - 所有历史 tx_hash 都要查 receipt；
-    - receipt 命中时，按块号交给 scan_blocks_for_reconcile 复扫；
+    - receipt 命中时，按块号交给 rescan_blocks 重扫；
     - 未命中时不调用扫描器，且不改动任务状态。
     """
 
@@ -54,7 +53,7 @@ class EvmReconcilePendingChainTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -78,7 +77,7 @@ class EvmReconcilePendingChainTests(TestCase):
         *,
         tx_hash: str,
         stage: str = TxTaskStage.PENDING_CHAIN,
-        result: str = TxTaskResult.UNKNOWN,
+        success: bool | None = None,
         aged_seconds: int = 0,
     ) -> TxTask:
         task = TxTask.objects.create(
@@ -87,7 +86,7 @@ class EvmReconcilePendingChainTests(TestCase):
             tx_type=TxTaskType.Withdrawal,
             tx_hash=tx_hash,
             stage=stage,
-            result=result,
+            success=success,
         )
         if aged_seconds:
             # TxTask.updated_at 是 auto_now，手动回写确保落到阈值之外/内。
@@ -122,26 +121,26 @@ class EvmReconcilePendingChainTests(TestCase):
         return get_receipt_mock
 
     @patch(
-        "evm.tasks.EvmChainScannerService.scan_blocks_for_reconcile",
+        "evm.tasks.EvmChainScannerService.rescan_blocks",
     )
     @patch(
-        "evm.tasks._compute_reconcile_threshold_seconds",
+        "evm.tasks._compute_rescan_threshold_seconds",
         return_value=(120, 12.0),
     )
-    def test_reconcile_skips_task_still_within_threshold(
+    def test_rescan_skips_task_still_within_threshold(
         self,
         _compute_threshold_mock,
         scan_blocks_mock,
     ):
         # 阈值内的任务属于正常确认窗口，兜底不应介入，以免不断扫未必要的块。
-        from evm.tasks import reconcile_stale_pending_chain_evm
+        from evm.tasks import _rescan_pending_evm_chain
 
         self._make_task(tx_hash="0x" + "b1" * 32, aged_seconds=30)
 
         # 不会真正调 w3，但仍预置一个空 mock 避免万一被调导致解释性差的失败。
         self._install_w3_receipt({})
 
-        reconcile_stale_pending_chain_evm.run(self.chain.pk)
+        _rescan_pending_evm_chain.run(self.chain.pk)
 
         scan_blocks_mock.assert_not_called()
 
@@ -167,19 +166,19 @@ class EvmReconcilePendingChainTests(TestCase):
         self.chain.get_block_with_poa_retry.assert_any_call(80)
 
     @patch(
-        "evm.tasks.EvmChainScannerService.scan_blocks_for_reconcile",
+        "evm.tasks.EvmChainScannerService.rescan_blocks",
     )
     @patch(
-        "evm.tasks._compute_reconcile_threshold_seconds",
+        "evm.tasks._compute_rescan_threshold_seconds",
         return_value=(60, 12.0),
     )
-    def test_reconcile_dispatches_block_scan_when_receipt_found(
+    def test_rescan_dispatches_block_scan_when_receipt_found(
         self,
         _compute_threshold_mock,
         scan_blocks_mock,
     ):
         # 超阈值任务命中 receipt 时，应把对应块号交给扫描器复扫，兜底才能触发业务推进。
-        from evm.tasks import reconcile_stale_pending_chain_evm
+        from evm.tasks import _rescan_pending_evm_chain
 
         tx_hash = "0x" + "b2" * 32
         self._make_task(tx_hash=tx_hash, aged_seconds=300)
@@ -188,11 +187,10 @@ class EvmReconcilePendingChainTests(TestCase):
         # 防御：把 cursor 写入一个固定值，断言扫描器没有偷偷改动它。
         cursor = EvmScanCursor.objects.create(
             chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
             last_scanned_block=99,
         )
 
-        reconcile_stale_pending_chain_evm.run(self.chain.pk)
+        _rescan_pending_evm_chain.run(self.chain.pk)
 
         scan_blocks_mock.assert_called_once()
         kwargs = scan_blocks_mock.call_args.kwargs
@@ -203,19 +201,19 @@ class EvmReconcilePendingChainTests(TestCase):
         self.assertEqual(cursor.last_scanned_block, 99)
 
     @patch(
-        "evm.tasks.EvmChainScannerService.scan_blocks_for_reconcile",
+        "evm.tasks.EvmChainScannerService.rescan_blocks",
     )
     @patch(
-        "evm.tasks._compute_reconcile_threshold_seconds",
+        "evm.tasks._compute_rescan_threshold_seconds",
         return_value=(60, 12.0),
     )
-    def test_reconcile_tries_all_historical_tx_hashes(
+    def test_rescan_tries_all_historical_tx_hashes(
         self,
         _compute_threshold_mock,
         scan_blocks_mock,
     ):
         # gas 重签会产生多条 TxHash；兜底必须把所有历史 hash 都问一遍，命中任一即可复扫。
-        from evm.tasks import reconcile_stale_pending_chain_evm
+        from evm.tasks import _rescan_pending_evm_chain
 
         first_hash = "0x" + "c1" * 32
         second_hash = "0x" + "c2" * 32
@@ -248,7 +246,7 @@ class EvmReconcilePendingChainTests(TestCase):
             }
         )
 
-        reconcile_stale_pending_chain_evm.run(self.chain.pk)
+        _rescan_pending_evm_chain.run(self.chain.pk)
 
         scan_blocks_mock.assert_called_once()
         self.assertEqual(scan_blocks_mock.call_args.kwargs["block_numbers"], {99})
@@ -258,20 +256,20 @@ class EvmReconcilePendingChainTests(TestCase):
         self.assertEqual(queried, {first_hash, second_hash, third_hash})
 
     @patch(
-        "evm.tasks.EvmChainScannerService.scan_blocks_for_reconcile",
+        "evm.tasks.EvmChainScannerService.rescan_blocks",
     )
     @patch(
-        "evm.tasks._compute_reconcile_threshold_seconds",
+        "evm.tasks._compute_rescan_threshold_seconds",
         return_value=(60, 12.0),
     )
-    def test_reconcile_skips_when_no_receipt_for_any_hash(
+    def test_rescan_skips_when_no_receipt_for_any_hash(
         self,
         _compute_threshold_mock,
         scan_blocks_mock,
     ):
         # 所有历史 hash 均未上链时，兜底不应调用扫描器，也不得改动任务状态；
         # 任务可以在下一轮 beat 再被检查，避免把 pending 状态错误地强制推进。
-        from evm.tasks import reconcile_stale_pending_chain_evm
+        from evm.tasks import _rescan_pending_evm_chain
 
         stable_hash = "0x" + "d1" * 32
         task = self._make_task(tx_hash=stable_hash, aged_seconds=600)
@@ -289,20 +287,20 @@ class EvmReconcilePendingChainTests(TestCase):
         )
 
         # 任务兜底不得抛异常，否则会拖垮 beat 调度。
-        reconcile_stale_pending_chain_evm.run(self.chain.pk)
+        _rescan_pending_evm_chain.run(self.chain.pk)
 
         scan_blocks_mock.assert_not_called()
         task.refresh_from_db()
         self.assertEqual(task.stage, TxTaskStage.PENDING_CHAIN)
-        self.assertEqual(task.result, TxTaskResult.UNKNOWN)
+        self.assertIsNone(task.success)
 
 
 @override_settings(DEBUG=False)
-class EvmScanBlocksForReconcileTests(TestCase):
-    """scan_blocks_for_reconcile 必须能复用主扫描的产出通路且不污染 cursor。"""
+class EvmRescanBlocksTests(TestCase):
+    """rescan_blocks 必须能复用主扫描的产出通路且不污染 cursor。"""
 
     def setUp(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         self.native = crypto_create("Ether Recon Scan", "ETHRS", "ethereum-recon-scan")
         self.chain = Chain.objects.create(
             code="eth-recon-scan",
@@ -319,7 +317,7 @@ class EvmScanBlocksForReconcileTests(TestCase):
         self.addr = Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
-            usage=AddressUsage.Vault,
+            usage=AddressUsage.HotWallet,
             bip44_account=1,
             address_index=0,
             address=Web3.to_checksum_address(
@@ -329,18 +327,17 @@ class EvmScanBlocksForReconcileTests(TestCase):
         # 固定 cursor，断言复扫前后不发生推进。
         self.cursor = EvmScanCursor.objects.create(
             chain=self.chain,
-            scanner_type=EvmScanCursorType.ERC20_TRANSFER,
             last_scanned_block=100,
         )
 
     def tearDown(self):
-        cache.delete(PLATFORM_SETTINGS_CACHE_KEY)
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
     @patch(
-        "evm.scanner.service.EvmErc20TransferScanner.scan_range_without_cursor",
+        "evm.scanner.service.EvmLogScanner.scan_range_without_cursor",
     )
-    def test_reconcile_sparse_blocks_scans_contiguous_segments(
+    def test_rescan_sparse_blocks_scans_contiguous_segments(
         self,
         erc20_scan_mock,
     ):
@@ -349,12 +346,12 @@ class EvmScanBlocksForReconcileTests(TestCase):
         from evm.scanner.service import EvmChainScannerService
 
         erc20_scan_mock.side_effect = [
-            ([object(), object()], 1),
-            ([object(), object()], 1),
-            ([object()], 1),
+            EvmLogRangeResult([object(), object()], 0, 2, 0, 1),
+            EvmLogRangeResult([object(), object()], 0, 2, 0, 1),
+            EvmLogRangeResult([object()], 0, 1, 0, 1),
         ]
 
-        result = EvmChainScannerService.scan_blocks_for_reconcile(
+        result = EvmChainScannerService.rescan_blocks(
             chain=self.chain,
             block_numbers={10, 11, 500, 501, 900},
         )
@@ -370,9 +367,9 @@ class EvmScanBlocksForReconcileTests(TestCase):
         self.assertEqual(result.created_erc20, 3)
 
     @patch(
-        "evm.scanner.service.EvmErc20TransferScanner.scan_range_without_cursor",
+        "evm.scanner.service.EvmLogScanner.scan_range_without_cursor",
     )
-    def test_reconcile_skips_erc20_scan_when_cursor_disabled(
+    def test_rescan_skips_erc20_scan_when_cursor_disabled(
         self,
         erc20_scan_mock,
     ):
@@ -380,9 +377,9 @@ class EvmScanBlocksForReconcileTests(TestCase):
 
         self.cursor.enabled = False
         self.cursor.save(update_fields=["enabled"])
-        erc20_scan_mock.return_value = ([object()], 1)
+        erc20_scan_mock.return_value = EvmLogRangeResult([object()], 0, 1, 0, 1)
 
-        result = EvmChainScannerService.scan_blocks_for_reconcile(
+        result = EvmChainScannerService.rescan_blocks(
             chain=self.chain,
             block_numbers={10},
         )
