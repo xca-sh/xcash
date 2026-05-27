@@ -51,8 +51,6 @@ class Chain(models.Model):
         _("类型"),
         max_length=16,
         editable=False,
-        blank=True,
-        default="",
         help_text=_("由 chain 常量自动决定，不可手动修改。"),
     )
     latest_block_number = models.PositiveIntegerField(
