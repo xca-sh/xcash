@@ -24,35 +24,42 @@ class ChainAdminForm(forms.ModelForm):
 @admin.register(Chain)
 class ChainAdmin(ModelAdmin):
     form = ChainAdminForm
+    # 字段瘦身后，type / native_coin / confirm_block_count 已转为 property，
+    # 通过 display 方法暴露到列表页，方便运维一眼看清链配置。
     list_display = (
-        "name",
-        "code",
-        "type",
-        "native_coin",
+        "chain",
+        "type_display",
+        "native_coin_display",
         "active",
-        "confirm_block_count",
+        "confirm_block_count_display",
         "latest_block_number",
         "evm_log_max_block_range",
     )
     list_editable = (
         "active",
-        "confirm_block_count",
         "evm_log_max_block_range",
     )
-    list_filter = ("active", "type")
-    list_select_related = ("native_coin",)
-    search_fields = ("name", "code")
+    list_filter = ("active",)
+    search_fields = ("chain",)
+
+    @display(description=_("类型"))
+    def type_display(self, obj: Chain) -> str:
+        return obj.type
+
+    @display(description=_("原生币"))
+    def native_coin_display(self, obj: Chain) -> str:
+        return obj.spec.native_coin_symbol
+
+    @display(description=_("区块确认数"))
+    def confirm_block_count_display(self, obj: Chain) -> int:
+        return obj.confirm_block_count
 
     base_fieldsets = (
         (
             _("基本信息"),
             {
                 "fields": (
-                    "name",
-                    "code",
-                    "type",
-                    "native_coin",
-                    "confirm_block_count",
+                    "chain",
                     "active",
                 )
             },
@@ -64,7 +71,6 @@ class ChainAdmin(ModelAdmin):
             {
                 "fields": (
                     "rpc",
-                    "chain_id",
                     "evm_log_max_block_range",
                 )
             },
@@ -76,8 +82,6 @@ class ChainAdmin(ModelAdmin):
             {"fields": ("tron_api_key",)},
         ),
     )
-
-    readonly_fields = ("chain_id",)
 
     def get_fieldsets(self, request, obj=None):
         if obj is None:
