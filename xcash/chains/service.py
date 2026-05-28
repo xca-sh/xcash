@@ -140,6 +140,30 @@ class TransferService:
         }
 
     @staticmethod
+    def _refresh_confirmed_quick_observation(
+        *,
+        transfer: Transfer,
+        observed: ObservedTransferPayload,
+    ) -> list[str]:
+        updates: dict[str, object] = {}
+        if transfer.block != observed.block:
+            updates["block"] = observed.block
+        if transfer.block_hash != observed.block_hash:
+            updates["block_hash"] = observed.block_hash
+        if transfer.timestamp != observed.timestamp:
+            updates["timestamp"] = observed.timestamp
+        if transfer.datetime != observed.occurred_at:
+            updates["datetime"] = observed.occurred_at
+
+        if not updates:
+            return []
+
+        Transfer.objects.filter(pk=transfer.pk).update(**updates)
+        for field, value in updates.items():
+            setattr(transfer, field, value)
+        return list(updates)
+
+    @staticmethod
     def create_observed_transfer(
         *,
         observed: ObservedTransferPayload,
@@ -162,12 +186,19 @@ class TransferService:
                     existing.confirm_mode == ConfirmMode.QUICK
                     and existing.status == TransferStatus.CONFIRMED
                 ):
+                    updated_fields = (
+                        TransferService._refresh_confirmed_quick_observation(
+                            transfer=existing,
+                            observed=observed,
+                        )
+                    )
                     logger.debug(
-                        "Observed QUICK confirmed transfer tx replay ignored",
+                        "Observed QUICK confirmed transfer tx replay refreshed",
                         source=observed.source,
                         chain=chain.code,
                         tx_hash=observed.tx_hash,
                         transfer_id=existing.pk,
+                        updated_fields=updated_fields,
                     )
                     return ObservedTransferCreateResult(
                         transfer=existing,

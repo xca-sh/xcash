@@ -7,6 +7,7 @@ from typing import Any
 
 import eth_abi
 from eth_abi.exceptions import DecodingError
+from eth_typing import HexStr
 from web3 import Web3
 
 from chains.models import Chain
@@ -15,9 +16,9 @@ from chains.models import TransferType
 from chains.models import TxTask
 from currencies.models import ChainToken
 from currencies.models import Crypto
+from evm.internal_tx.facts import MatchedTransferFact
 from evm.internal_tx.log_utils import matches_transfer_log
 from evm.internal_tx.log_utils import normalize_log_index
-from evm.internal_tx.routing import MatchedTransferFact
 from evm.models import VaultSlot
 
 _COLLECT_SELECTOR = "0x06ec16f8"
@@ -44,7 +45,7 @@ def _decode_collect_token(data: str) -> str | None:
     try:
         (token,) = eth_abi.decode(
             ["address"],
-            Web3.to_bytes(hexstr=f"0x{raw[10:]}"),
+            Web3.to_bytes(hexstr=HexStr(f"0x{raw[10:]}")),
         )
     except (ValueError, binascii.Error, DecodingError):
         return None
@@ -110,6 +111,7 @@ def vault_slot_collect_matcher(
     chain: Chain,
     tx_task: TxTask,
     receipt: dict,
+    tx: dict | None = None,
 ) -> MatchedTransferFact | None:
     """从 VaultSlot collect(receipt) 提取归集到 vault 的资产移动事实。"""
     try:

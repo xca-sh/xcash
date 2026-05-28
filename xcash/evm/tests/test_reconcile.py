@@ -66,7 +66,7 @@ class EvmReconcileBlocksTests(TestCase):
         # 不能扩成 [min..max] 巨大区间拖垮 RPC。
         from evm.scanner.service import EvmScannerService
 
-        erc20_scan_mock.side_effect = [1, 1, 1]
+        erc20_scan_mock.side_effect = [None, None, None]
 
         result = EvmScannerService.reconcile_blocks(
             chain=self.chain,
@@ -80,7 +80,6 @@ class EvmReconcileBlocksTests(TestCase):
         self.assertEqual(erc20_ranges, [(10, 11), (500, 501), (900, 900)])
         self.assertEqual(result.from_block, 10)
         self.assertEqual(result.to_block, 900)
-        self.assertEqual(result.created_transfers, 3)
 
     @patch(
         "evm.scanner.service.EvmLogScanner.scan_range",
@@ -93,7 +92,7 @@ class EvmReconcileBlocksTests(TestCase):
 
         self.cursor.enabled = False
         self.cursor.save(update_fields=["enabled"])
-        erc20_scan_mock.return_value = 1
+        erc20_scan_mock.return_value = None
 
         result = EvmScannerService.reconcile_blocks(
             chain=self.chain,
@@ -101,7 +100,6 @@ class EvmReconcileBlocksTests(TestCase):
         )
 
         erc20_scan_mock.assert_not_called()
-        self.assertEqual(result.created_transfers, 0)
 
 
 def crypto_create(name: str, symbol: str, coingecko_id: str):

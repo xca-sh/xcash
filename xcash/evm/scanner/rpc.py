@@ -132,17 +132,16 @@ class EvmScannerRpcClient:
         return self._normalize_receipt_hash(block["hash"])
 
     def get_full_block(self, *, block_number: int) -> dict[str, Any]:
-        return dict(
-            self._call_with_retry(
-                fn=lambda: self._get_block_with_poa_retry(
-                    block_number=block_number,
-                    full_transactions=True,
-                ),
-                summary="获取完整区块失败",
-                method="eth_getBlockByNumber",
-                context=f"block={block_number}",
-            )
+        raw_block: dict[str, Any] = self._call_with_retry(
+            fn=lambda: self._get_block_with_poa_retry(
+                block_number=block_number,
+                full_transactions=True,
+            ),
+            summary="获取完整区块失败",
+            method="eth_getBlockByNumber",
+            context=f"block={block_number}",
         )
+        return dict(raw_block)
 
     def get_block_receipts_status(
         self,
@@ -246,7 +245,7 @@ class EvmScannerRpcClient:
         return status_map
 
     @staticmethod
-    def _normalize_receipt_hash(value: object) -> str:
+    def _normalize_receipt_hash(value: Any) -> str:
         if value is None:
             return ""
         if hasattr(value, "hex"):
@@ -274,7 +273,7 @@ class EvmScannerRpcClient:
         return int(status) if status in (0, 1) else None
 
     def get_transaction(self, *, tx_hash: str) -> dict[str, Any] | None:
-        tx = self._call_with_retry(
+        tx: dict[str, Any] | None = self._call_with_retry(
             fn=lambda: self.chain.w3.eth.get_transaction(tx_hash),  # noqa: SLF001
             summary="获取交易详情失败",
             method="eth_getTransactionByHash",
@@ -283,7 +282,7 @@ class EvmScannerRpcClient:
         return dict(tx) if tx is not None else None
 
     def get_transaction_receipt(self, *, tx_hash: str) -> dict[str, Any] | None:
-        receipt = self._call_with_retry(
+        receipt: dict[str, Any] | None = self._call_with_retry(
             fn=lambda: self.chain.w3.eth.get_transaction_receipt(
                 tx_hash
             ),  # noqa: SLF001
@@ -309,7 +308,6 @@ class EvmScannerRpcClient:
         通过 non_retriable_predicate 立即上抛，由调用方负责语义化处理，
         避免在已知"必败"的错误上浪费 1s 的等待开销。
         """
-        last_exc: Exception | None = None
         max_attempts = len(_EVM_RPC_RETRY_BACKOFF_SECONDS) + 1
         for attempt in range(max_attempts):
             try:
@@ -317,9 +315,17 @@ class EvmScannerRpcClient:
             except Exception as exc:  # noqa: BLE001
                 if non_retriable_predicate is not None and non_retriable_predicate(exc):
                     raise
-                last_exc = exc
+                # 最后一次尝试仍失败：此分支 exc 必为已捕获异常，直接包装上抛，
+                # 省去 Exception | None 的可空中间变量，类型与控制流都更清晰。
                 if attempt == max_attempts - 1:
-                    break
+                    raise EvmScannerRpcError(
+                        self._format_rpc_error(
+                            summary,
+                            method=method,
+                            exc=exc,
+                            context=context,
+                        )
+                    ) from exc
                 backoff_seconds = _EVM_RPC_RETRY_BACKOFF_SECONDS[attempt]
                 logger.warning(
                     "EVM RPC 调用失败，准备重试",
@@ -330,15 +336,7 @@ class EvmScannerRpcClient:
                     error=str(exc),
                 )
                 time.sleep(backoff_seconds)
-
-        raise EvmScannerRpcError(
-            self._format_rpc_error(
-                summary,
-                method=method,
-                exc=last_exc,
-                context=context,
-            )
-        ) from last_exc
+        return None
 
     def _get_block_with_poa_retry(
         self,

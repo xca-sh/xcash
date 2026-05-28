@@ -28,7 +28,6 @@ class ParsedEvmTransferLog:
     block_number: int
     block_hash: str
     tx_hash: str
-    emit_from: str
     from_address: str
     to_address: str
     crypto: Any
@@ -37,7 +36,7 @@ class ParsedEvmTransferLog:
 
 
 class EvmObservedTransferProcessor:
-    """处理 scanner 已解析出的外部入账事实：过滤、幂等落库与计数。"""
+    """处理 scanner 已解析出的外部入账事实：过滤与幂等落库。"""
 
     @classmethod
     def process(
@@ -47,7 +46,7 @@ class EvmObservedTransferProcessor:
         rpc_client: EvmScannerRpcClient,
         raw_logs: list[dict[str, Any]],
         watch_set: EvmWatchSet,
-    ) -> int:
+    ) -> None:
         """解析外部入账日志并幂等落库。"""
         candidate_logs = [
             parsed
@@ -68,7 +67,7 @@ class EvmObservedTransferProcessor:
         parsed_logs = [
             log for log in candidate_logs if log.tx_hash not in internal_tx_hashes
         ]
-        return cls._persist_logs(
+        cls._persist_logs(
             chain=chain,
             logs=parsed_logs,
             rpc_client=rpc_client,
@@ -148,7 +147,6 @@ class EvmObservedTransferProcessor:
             block_number=block_number,
             block_hash=block_hash,
             tx_hash=tx_hash,
-            emit_from=slot_address,
             from_address=payer,
             to_address=slot_address,
             crypto=chain.native_coin,
@@ -209,7 +207,6 @@ class EvmObservedTransferProcessor:
             block_number=block_number,
             block_hash=block_hash,
             tx_hash=tx_hash,
-            emit_from=token_address,
             from_address=from_address,
             to_address=to_address,
             crypto=token.crypto,
@@ -224,31 +221,22 @@ class EvmObservedTransferProcessor:
         chain: Chain,
         logs: list[ParsedEvmTransferLog],
         rpc_client: EvmScannerRpcClient,
-    ) -> int:
-        """按 tx_hash 收敛外部入账事实，返回新建 Transfer 数量。"""
+    ) -> None:
+        """按 tx_hash 收敛外部入账事实并幂等落库。"""
         timestamp_cache: dict[int, int] = {}
-        created_transfers = 0
 
         for tx_hash, tx_logs in cls._group_logs_by_tx_hash(logs=logs).items():
-            direct_logs = cls._filter_direct_payment_logs(
-                chain=chain,
-                tx_hash=tx_hash,
-                logs=tx_logs,
-                rpc_client=rpc_client,
-            )
-            if not direct_logs:
-                continue
-            if len(direct_logs) > 1:
-                logger.warning(
-                    "EVM scanner skipped tx with multiple observed inbound events",
-                    chain=chain.code,
-                    tx_hash=tx_hash,
-                    direct_log_count=len(direct_logs),
-                    emit_from_list=[log.emit_from for log in direct_logs],
-                )
+            if len(tx_logs) != 1:
+                if len(tx_logs) > 1:
+                    logger.warning(
+                        "EVM scanner skipped tx with multiple observed inbound events",
+                        chain=chain.code,
+                        tx_hash=tx_hash,
+                        log_count=len(tx_logs),
+                    )
                 continue
 
-            log = direct_logs[0]
+            log = tx_logs[0]
             timestamp = timestamp_cache.get(log.block_number)
             if timestamp is None:
                 timestamp = rpc_client.get_block_timestamp(
@@ -256,7 +244,7 @@ class EvmObservedTransferProcessor:
                 )
                 timestamp_cache[log.block_number] = timestamp
 
-            result = TransferService.create_observed_transfer(
+            TransferService.create_observed_transfer(
                 observed=ObservedTransferPayload(
                     chain=chain,
                     block=log.block_number,
@@ -275,10 +263,6 @@ class EvmObservedTransferProcessor:
                     source="evm-scan",
                 )
             )
-            if result.created:
-                created_transfers += 1
-
-        return created_transfers
 
     @staticmethod
     def _group_logs_by_tx_hash(
@@ -290,30 +274,8 @@ class EvmObservedTransferProcessor:
             grouped_logs.setdefault(log.tx_hash, []).append(log)
         return grouped_logs
 
-    @classmethod
-    def _filter_direct_payment_logs(
-        cls,
-        *,
-        chain: Chain,
-        tx_hash: str,
-        logs: list[ParsedEvmTransferLog],
-        rpc_client: EvmScannerRpcClient,
-    ) -> list[ParsedEvmTransferLog]:
-        """只承认用户直接调用收款入口产生的一条入账事件。"""
-        tx = rpc_client.get_transaction(tx_hash=tx_hash)
-        tx_to = cls._normalize_address(tx.get("to")) if tx else None
-        if tx_to is None:
-            logger.warning(
-                "EVM scanner skipped observed inbound tx without transaction.to",
-                chain=chain.code,
-                tx_hash=tx_hash,
-            )
-            return []
-
-        return [log for log in logs if log.emit_from == tx_to]
-
     @staticmethod
-    def _to_hex(value: object) -> str:
+    def _to_hex(value: Any) -> str:
         """提取原始十六进制字面（无 0x 前缀），兼容 bytes 与 str。"""
         if hasattr(value, "hex"):
             hex_value = value.hex()
@@ -338,7 +300,7 @@ class EvmObservedTransferProcessor:
         return normalized
 
     @staticmethod
-    def _parse_int(raw_value: object) -> int:
+    def _parse_int(raw_value: Any) -> int:
         """兼容十进制 / 0x 十六进制 / int 的整数解析。"""
         if isinstance(raw_value, int):
             return raw_value
@@ -348,7 +310,7 @@ class EvmObservedTransferProcessor:
         return int(value) if value else 0
 
     @staticmethod
-    def _normalize_address(value: object | None) -> str | None:
+    def _normalize_address(value: Any) -> str | None:
         if value is None:
             return None
         try:

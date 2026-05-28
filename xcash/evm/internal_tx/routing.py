@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from decimal import Decimal
 from typing import Protocol
 
 from chains.models import Chain
 from chains.models import Transfer
 from chains.models import TxTask
 from chains.models import TxTaskType
-from currencies.models import Crypto
+from evm.internal_tx.facts import MatchedTransferFact
 
 
 class UnknownInternalBroadcastError(RuntimeError):
@@ -22,17 +20,6 @@ class UnknownInternalBroadcastError(RuntimeError):
         self.chain_code = chain_code
         self.tx_hash = tx_hash
         self.from_address = from_address
-
-
-@dataclass(frozen=True)
-class MatchedTransferFact:
-    """receipt 中提取的真实资产移动事实，由 matcher 返回。"""
-
-    from_address: str
-    to_address: str
-    crypto: Crypto
-    value: Decimal
-    amount: Decimal
 
 
 class ReceiptMatcher(Protocol):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 
 from chains.models import Chain
@@ -15,11 +16,10 @@ RECONCILE_MAX_BLOCK_SPAN = 64
 
 @dataclass(frozen=True)
 class EvmReconcileResult:
-    """汇总一次对账重扫的产出，供调用方观测命中情况。"""
+    """汇总一次对账重扫的产出。"""
 
     from_block: int
     to_block: int
-    created_transfers: int
 
 
 class EvmScannerService:
@@ -62,23 +62,16 @@ class EvmScannerService:
         return True if enabled is None else bool(enabled)
 
     @staticmethod
-    def _empty_result() -> int:
-        """生成一次空扫描结果，用于扫描被跳过或失败时的占位返回。"""
-        return 0
-
-    @staticmethod
-    def scan_chain(*, chain: Chain) -> int:
-        """按链触发一次正向扫描，并吞掉 RPC 异常返回空结果。"""
+    def scan_chain(*, chain: Chain) -> None:
+        """按链触发一次正向扫描，并吞掉 RPC 异常。"""
         if chain.type != ChainType.EVM:
             raise ValueError(f"仅支持扫描 EVM 链，当前链为 {chain.name}")
 
-        try:
-            return EvmLogScanner.scan_chain(
+        with contextlib.suppress(EvmScannerRpcError):
+            EvmLogScanner.scan_chain(
                 chain=chain,
                 rpc_client=EvmScannerRpcClient(chain=chain),
             )
-        except EvmScannerRpcError:
-            return EvmScannerService._empty_result()
 
     @classmethod
     def reconcile_blocks(
@@ -98,7 +91,6 @@ class EvmScannerService:
             return EvmReconcileResult(
                 from_block=0,
                 to_block=-1,
-                created_transfers=0,
             )
 
         from_block = min(block_numbers)
@@ -107,18 +99,15 @@ class EvmScannerService:
             return EvmReconcileResult(
                 from_block=from_block,
                 to_block=to_block,
-                created_transfers=0,
             )
 
         rpc_client = EvmScannerRpcClient(chain=chain)
         watch_set = load_watch_set(chain=chain)
 
-        created_transfers = 0
-
         for range_from_block, range_to_block in cls._iter_reconcile_block_ranges(
             block_numbers
         ):
-            created_transfers += EvmLogScanner.scan_range(
+            EvmLogScanner.scan_range(
                 chain=chain,
                 rpc_client=rpc_client,
                 watch_set=watch_set,
@@ -129,5 +118,4 @@ class EvmScannerService:
         return EvmReconcileResult(
             from_block=from_block,
             to_block=to_block,
-            created_transfers=created_transfers,
         )

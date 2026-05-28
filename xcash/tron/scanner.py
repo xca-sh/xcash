@@ -34,7 +34,6 @@ class TronScanSummary:
     filter_addresses: int
     blocks_scanned: int
     events_seen: int
-    created_transfers: int
 
 
 @dataclass(frozen=True)
@@ -68,7 +67,6 @@ class TronUsdtPaymentScanner:
         )
         client = TronHttpClient(chain=chain)
         previous_latest_block = chain.latest_block_number
-        created_transfers = 0
         events_seen = 0
         blocks_scanned = 0
 
@@ -104,11 +102,9 @@ class TronUsdtPaymentScanner:
                     )
                     events_seen += len(parsed_events)
                     for event in parsed_events:
-                        result = TransferService.create_observed_transfer(
+                        TransferService.create_observed_transfer(
                             observed=event.observed
                         )
-                        if result.created:
-                            created_transfers += 1
                     blocks_scanned += 1
                     last_successfully_scanned = block_number
         except TronClientError as exc:
@@ -147,7 +143,6 @@ class TronUsdtPaymentScanner:
             filter_addresses=len(filter_addresses),
             blocks_scanned=blocks_scanned,
             events_seen=events_seen,
-            created_transfers=created_transfers,
         )
 
     @classmethod

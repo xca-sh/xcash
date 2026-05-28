@@ -182,21 +182,13 @@ def _scan_evm_chain(chain_pk: int) -> None:
     """按链执行一次 EVM VaultSlot 充值日志统一扫描。"""
     chain = Chain.objects.get(pk=chain_pk)
 
-    created_transfers = None
     try:
-        created_transfers = EvmScannerService.scan_chain(chain=chain)
+        EvmScannerService.scan_chain(chain=chain)
     except EvmScannerRpcError:
         logger.warning("EVM 自扫描 RPC 失败", chain=chain.name)
 
     EvmTaskPoller.poll_chain(chain=chain)
-    if created_transfers is None:
-        return
-
-    logger.info(
-        "EVM 自扫描完成",
-        chain=chain.name,
-        created_transfers=created_transfers,
-    )
+    logger.info("EVM 自扫描完成", chain=chain.name)
 
 
 @shared_task(ignore_result=True)

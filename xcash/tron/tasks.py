@@ -32,7 +32,6 @@ def scan_tron_chain(chain_pk: int) -> None:
         filter_addresses=summary.filter_addresses,
         blocks_scanned=summary.blocks_scanned,
         events_seen=summary.events_seen,
-        created_transfers=summary.created_transfers,
     )
 
 

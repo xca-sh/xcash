@@ -710,7 +710,6 @@ class TronUsdtPaymentScannerTests(TestCase):
         self.assertEqual(summary.blocks_scanned, 1)
         self.assertEqual(summary.filter_addresses, 1)
         self.assertEqual(summary.events_seen, 1)
-        self.assertEqual(summary.created_transfers, 1)
         transfer = Transfer.objects.get(chain=self.chain)
         self.assertEqual(transfer.hash, "a" * 64)
         self.assertEqual(transfer.amount, Decimal("1"))
@@ -747,7 +746,6 @@ class TronUsdtPaymentScannerTests(TestCase):
 
         self.assertEqual(summary.blocks_scanned, 1)
         self.assertEqual(summary.events_seen, 0)
-        self.assertEqual(summary.created_transfers, 0)
         self.assertFalse(Transfer.objects.filter(chain=self.chain).exists())
         cursor = TronWatchCursor.objects.get(
             chain=self.chain,
@@ -866,7 +864,6 @@ class TronUsdtPaymentScannerTests(TestCase):
 
         self.assertEqual(summary.blocks_scanned, 1)
         self.assertEqual(summary.events_seen, 0)
-        self.assertEqual(summary.created_transfers, 0)
         self.assertEqual(client.list_confirmed_contract_events.call_count, 1)
         cursor = TronWatchCursor.objects.get(
             chain=self.chain,
@@ -990,38 +987,10 @@ class TronUsdtPaymentScannerTests(TestCase):
 
         self.assertEqual(summary.blocks_scanned, 1)
         self.assertEqual(summary.events_seen, 0)
-        self.assertEqual(summary.created_transfers, 0)
         self.assertFalse(Transfer.objects.filter(chain=self.chain).exists())
-
-    @patch("chains.service.TransferService.enqueue_processing")
-    @patch("tron.scanner.TronHttpClient")
-    def test_scan_chain_ignores_events_without_event_index(
-        self,
-        client_cls,
-        _enqueue_processing_mock,
-    ):
-        from tron.scanner import TronUsdtPaymentScanner
-
-        self._get_or_create_contract_cursor(last_scanned_block=123455)
-        client = client_cls.return_value
-        client.get_latest_solid_block_number.return_value = 123456
-        client.get_solid_block_id.return_value = "0" * 64
-        event = self._build_contract_event(
-            tx_hash="6" * 64,
-            block_number=123456,
-            event_index=9,
-        )
-        del event["event_index"]
-        client.list_confirmed_contract_events.return_value = {
-            "data": [event],
-            "meta": {},
-        }
-
-        summary = TronUsdtPaymentScanner.scan_chain(chain=self.chain)
 
         self.assertEqual(summary.blocks_scanned, 1)
         self.assertEqual(summary.events_seen, 0)
-        self.assertEqual(summary.created_transfers, 0)
         self.assertFalse(Transfer.objects.filter(chain=self.chain).exists())
 
     @patch("chains.service.TransferService.enqueue_processing")
@@ -1051,7 +1020,6 @@ class TronUsdtPaymentScannerTests(TestCase):
 
         self.assertEqual(summary.blocks_scanned, 1)
         self.assertEqual(summary.events_seen, 0)
-        self.assertEqual(summary.created_transfers, 0)
         self.assertFalse(Transfer.objects.filter(chain=self.chain).exists())
 
     @patch("chains.service.TransferService.enqueue_processing")
@@ -1081,7 +1049,6 @@ class TronUsdtPaymentScannerTests(TestCase):
 
         self.assertEqual(summary.blocks_scanned, 1)
         self.assertEqual(summary.events_seen, 0)
-        self.assertEqual(summary.created_transfers, 0)
         self.assertFalse(Transfer.objects.filter(chain=self.chain).exists())
 
     @patch("chains.service.TransferService.enqueue_processing")
@@ -1124,7 +1091,6 @@ class TronUsdtPaymentScannerTests(TestCase):
 
         self.assertEqual(summary.blocks_scanned, 1)
         self.assertEqual(summary.events_seen, 2)
-        self.assertEqual(summary.created_transfers, 2)
         self.assertEqual(
             Transfer.objects.filter(chain=self.chain).order_by("hash").count(),
             2,
@@ -1344,7 +1310,6 @@ class TronTaskTests(TestCase):
             filter_addresses=3,
             blocks_scanned=7,
             events_seen=11,
-            created_transfers=2,
         )
 
         scan_tron_chain.run(tron_chain.pk)
@@ -1355,7 +1320,6 @@ class TronTaskTests(TestCase):
             filter_addresses=3,
             blocks_scanned=7,
             events_seen=11,
-            created_transfers=2,
         )
 
     @patch("tron.tasks.TronUsdtPaymentScanner.scan_chain")

@@ -10,6 +10,7 @@ from web3 import Web3
 
 from chains.models import Chain
 from chains.models import TxTask
+from chains.models import TxTaskType
 from chains.service import ObservedTransferCreateResult
 from chains.service import ObservedTransferPayload
 from chains.service import TransferService
@@ -66,8 +67,8 @@ def _finalize_failed(*, tx_task: TxTask) -> None:
         if not updated:
             return
         try:
-            handler = get_handler(tx_task.tx_type)
-        except KeyError:
+            handler = get_handler(TxTaskType(tx_task.tx_type))
+        except (KeyError, ValueError):
             return
         handler.finalize_failed(tx_task)
 
@@ -101,7 +102,7 @@ def process_internal_transaction(
         TxTask.mark_pending_confirm(chain=chain, tx_hash=tx_hash)
         return None
 
-    matcher = get_matcher(tx_task.tx_type)
+    matcher = get_matcher(TxTaskType(tx_task.tx_type))
     fact = matcher(chain=chain, tx_task=tx_task, receipt=receipt, tx=tx)
     if fact is None:
         logger.warning(

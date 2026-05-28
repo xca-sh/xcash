@@ -162,7 +162,7 @@ class EvmLogScannerTests(TestCase):
         self.assertEqual(EvmScanCursor.objects.filter(chain=self.chain).count(), 1)
         cursor = EvmScanCursor.objects.get(chain=self.chain)
         self.assertEqual(cursor.last_scanned_block, 32)
-        self.assertEqual(result, 2)
+        self.assertIsNone(result)
         self.assertEqual(Transfer.objects.count(), 2)
         log_calls = [call.kwargs for call in get_logs_mock.call_args_list]
         self.assertEqual(len(log_calls), 2)
@@ -203,7 +203,7 @@ class EvmLogScannerTests(TestCase):
 
         cursor = EvmScanCursor.objects.get(chain=self.chain)
         self.assertEqual(cursor.last_scanned_block, 32)
-        self.assertEqual(result, 0)
+        self.assertIsNone(result)
         get_logs_mock.assert_has_calls(
             [
                 call(

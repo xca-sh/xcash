@@ -1482,7 +1482,7 @@ class TransferServiceCreateObservedTests(TestCase):
         enqueue_mock.assert_called_once()
 
     @patch("chains.service.TransferService.enqueue_processing")
-    def test_reorg_ignores_quick_confirmed_transfer(
+    def test_reorg_refreshes_quick_confirmed_transfer_metadata(
         self,
         enqueue_mock,
     ):
@@ -1531,8 +1531,13 @@ class TransferServiceCreateObservedTests(TestCase):
             1,
         )
         old_transfer.refresh_from_db()
-        self.assertEqual(old_transfer.block, 90)
-        self.assertEqual(old_transfer.block_hash, "0x" + "11" * 32)
+        self.assertEqual(old_transfer.block, 100)
+        self.assertEqual(old_transfer.block_hash, "0x" + "22" * 32)
+        self.assertEqual(old_transfer.timestamp, self.payload.timestamp + 1)
+        self.assertEqual(
+            old_transfer.datetime,
+            self.payload.occurred_at + timedelta(seconds=1),
+        )
         enqueue_mock.assert_not_called()
 
     @patch("chains.service.TransferService.enqueue_processing")

@@ -42,7 +42,7 @@ class EvmNativeDepositScanWindowTests(SimpleTestCase):
             batch_size=100,
         )
 
-        self.assertEqual(from_block, 1001)
+        self.assertEqual(from_block, 999)
         self.assertEqual(to_block, 1100)
 
 
@@ -233,8 +233,7 @@ class EvmLogScannerTests(TestCase):
             "EVM scanner skipped tx with multiple observed inbound events",
             chain=self.chain.code,
             tx_hash="0x" + "cd" * 32,
-            direct_log_count=2,
-            emit_from_list=[self.slot.address, self.slot.address],
+            log_count=2,
         )
 
     @patch("chains.service.TransferService.create_observed_transfer")
@@ -323,7 +322,7 @@ class EvmLogScannerTests(TestCase):
         result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
         cursor = EvmScanCursor.objects.get(chain=self.chain)
-        self.assertEqual(result, 0)
+        self.assertIsNone(result)
         self.assertEqual(cursor.last_scanned_block, 32)
         get_logs_mock.assert_called_once()
         self.assertIsNone(get_logs_mock.call_args.kwargs["addresses"])

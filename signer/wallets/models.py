@@ -95,8 +95,7 @@ class SignerWallet(models.Model):
         seed_bytes = Bip39SeedGenerator(self.mnemonic).Generate()
         bip_obj = Bip44.FromSeed(seed_bytes, self.get_bip_coin_of_chain(chain_type))
         return (
-            bip_obj
-            .Purpose()
+            bip_obj.Purpose()
             .Coin()
             .Account(bip44_account)
             .Change(Bip44Changes.CHAIN_EXT)
@@ -151,7 +150,7 @@ class SignerAddress(models.Model):
     )
     chain_type = models.CharField(
         max_length=16,
-        choices=ChainType.choices,
+        choices=ChainType,
         verbose_name="链类型",
     )
     # BIP44 account' 层级，区分用途（0=Deposit, 1=Vault）。
@@ -244,14 +243,14 @@ class SignerRequestAudit(models.Model):
     wallet_id = models.BigIntegerField(blank=True, null=True, db_index=True)
     chain_type = models.CharField(
         max_length=16,
-        choices=ChainType.choices,
+        choices=ChainType,
         blank=True,
         default="",
     )
     bip44_account = models.PositiveIntegerField(blank=True, null=True)
     address_index = models.PositiveIntegerField(blank=True, null=True)
     remote_ip = models.GenericIPAddressField(blank=True, null=True)
-    status = models.CharField(max_length=16, choices=Status.choices)
+    status = models.CharField(max_length=16, choices=Status)
     error_code = models.CharField(max_length=16, blank=True, default="")
     detail = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)

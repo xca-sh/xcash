@@ -12,8 +12,8 @@ from web3 import Web3
 
 from currencies.models import ChainToken
 from evm.choices import TxKind
+from evm.internal_tx.facts import MatchedTransferFact
 from evm.internal_tx.log_utils import matches_transfer_log
-from evm.internal_tx.routing import MatchedTransferFact
 
 if TYPE_CHECKING:
     from chains.models import Chain
@@ -80,9 +80,14 @@ def _native_tx_matches_expected(
     if tx is None or "input" not in tx:
         return False
 
+    raw_from = tx.get("from")
+    raw_to = tx.get("to")
+    if not isinstance(raw_from, (str, bytes)) or not isinstance(raw_to, (str, bytes)):
+        return False
+
     try:
-        actual_from = Web3.to_checksum_address(tx.get("from"))
-        actual_to = Web3.to_checksum_address(tx.get("to"))
+        actual_from = Web3.to_checksum_address(raw_from)
+        actual_to = Web3.to_checksum_address(raw_to)
     except (TypeError, ValueError):
         return False
 
@@ -143,7 +148,7 @@ def decode_direct_transfer_fields(
     try:
         recipient, value_raw = eth_abi.decode(
             ["address", "uint256"],
-            Web3.to_bytes(hexstr=f"0x{data[10:]}"),
+            bytes.fromhex(data[10:]),
         )
     except (ValueError, binascii.Error, DecodingError) as exc:
         raise ValueError("invalid ERC20 transfer calldata") from exc

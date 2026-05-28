@@ -56,7 +56,7 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
             batch_size=100,
         )
 
-        self.assertEqual(from_block, 1001)
+        self.assertEqual(from_block, 999)
         self.assertEqual(to_block, 1100)
 
     def test_erc20_compute_scan_window_caps_to_latest_when_near_chain_head(self):
@@ -67,8 +67,19 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
             batch_size=100,
         )
 
-        self.assertEqual(from_block, 1991)
+        self.assertEqual(from_block, 1989)
         self.assertEqual(to_block, 1999)
+
+    def test_erc20_compute_scan_window_replay_never_goes_below_first_block(self):
+        cursor = EvmScanCursor(last_scanned_block=1)
+        from_block, to_block = EvmLogScanner._compute_scan_window(
+            cursor=cursor,
+            latest_block=10,
+            batch_size=3,
+        )
+
+        self.assertEqual(from_block, 1)
+        self.assertEqual(to_block, 4)
 
     def test_erc20_compute_scan_window_returns_none_when_latest_block_is_zero(self):
         cursor = EvmScanCursor(last_scanned_block=0)
@@ -439,11 +450,7 @@ class EvmErc20ScannerTests(TestCase):
             "EVM scanner skipped tx with multiple observed inbound events",
             chain=self.chain.code,
             tx_hash="0x" + "ab" * 32,
-            direct_log_count=2,
-            emit_from_list=[
-                self.token_deployment.address,
-                self.token_deployment.address,
-            ],
+            log_count=2,
         )
 
     def test_erc20_scanner_does_not_route_known_internal_hash_to_processor(self):
@@ -577,7 +584,7 @@ class EvmErc20ScannerTests(TestCase):
             watch_set=watch_set,
         )
 
-        self.assertEqual(result, 0)
+        self.assertIsNone(result)
         rpc_client.get_transaction.assert_not_called()
         rpc_client.get_transaction_receipt.assert_not_called()
         rpc_client.get_block_timestamp.assert_not_called()
@@ -612,7 +619,7 @@ class EvmErc20ScannerTests(TestCase):
             watch_set=watch_set,
         )
 
-        self.assertEqual(result, 0)
+        self.assertIsNone(result)
         rpc_client.get_transaction.assert_not_called()
         rpc_client.get_transaction_receipt.assert_not_called()
         rpc_client.get_block_timestamp.assert_not_called()
@@ -693,7 +700,7 @@ class EvmErc20ScannerTests(TestCase):
             to_address=self.vault_slot.address,
             block_number=99,
         )
-        get_logs_mock.side_effect = [[], [repeated_log], []]
+        get_logs_mock.side_effect = [[], [repeated_log], [], [repeated_log]]
 
         first = EvmLogScanner.scan_chain(chain=self.chain, batch_size=100)
         second = EvmLogScanner.scan_chain(chain=self.chain, batch_size=100)
@@ -701,8 +708,8 @@ class EvmErc20ScannerTests(TestCase):
         cursor = EvmScanCursor.objects.get(
             chain=self.chain,
         )
-        self.assertEqual(first, 1)
-        self.assertEqual(second, 0)
+        self.assertIsNone(first)
+        self.assertIsNone(second)
         self.assertEqual(Transfer.objects.count(), 1)
         self.assertEqual(cursor.last_scanned_block, 99)
 
@@ -776,7 +783,7 @@ class EvmErc20ScannerTests(TestCase):
 
         result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=40)
 
-        self.assertEqual(result, 0)
+        self.assertIsNone(result)
         create_observed_transfer_mock.assert_not_called()
         self.assertEqual(Transfer.objects.count(), 0)
 
@@ -815,7 +822,7 @@ class EvmErc20ScannerTests(TestCase):
         cursor = EvmScanCursor.objects.get(
             chain=self.chain,
         )
-        self.assertEqual(result, 0)
+        self.assertIsNone(result)
         self.assertEqual(cursor.last_scanned_block, 32)
         self.assertEqual(get_logs_mock.call_count, 1)
         self.assertIsNone(get_logs_mock.call_args.kwargs["addresses"])
@@ -830,7 +837,6 @@ class EvmErc20ScannerTests(TestCase):
         scan_chain_mock.return_value = Mock(
             from_block=1,
             to_block=2,
-            created_transfers=3,
         )
 
         _scan_evm_chain(self.chain.pk)
@@ -937,5 +943,5 @@ class EvmErc20ScannerTests(TestCase):
 
         result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=40)
 
-        self.assertEqual(result, 0)
+        self.assertIsNone(result)
         create_observed_transfer_mock.assert_not_called()

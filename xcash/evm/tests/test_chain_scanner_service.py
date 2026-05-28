@@ -73,12 +73,12 @@ class EvmChainScannerServiceTests(TestCase):
         self,
         scan_chain_mock,
     ):
-        scan_chain_mock.return_value = 3
+        scan_chain_mock.return_value = None
 
         result = EvmScannerService.scan_chain(chain=self.chain)
 
         scan_chain_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
-        self.assertEqual(result, 3)
+        self.assertIsNone(result)
 
     @patch(
         "evm.scanner.service.EvmLogScanner.scan_chain",
@@ -104,7 +104,7 @@ class EvmChainScannerServiceTests(TestCase):
             matched_addresses=frozenset(),
             tokens_by_address={},
         )
-        scan_range_mock.return_value = 3
+        scan_range_mock.return_value = None
 
         result = EvmScannerService.reconcile_blocks(
             chain=self.chain,
@@ -118,7 +118,8 @@ class EvmChainScannerServiceTests(TestCase):
             from_block=10,
             to_block=10,
         )
-        self.assertEqual(result.created_transfers, 3)
+        self.assertEqual(result.from_block, 10)
+        self.assertEqual(result.to_block, 10)
 
     @override_settings(SIGNER_BACKEND="remote")
     def test_broadcast_rejects_local_fallback_when_remote_signer_enabled(self):

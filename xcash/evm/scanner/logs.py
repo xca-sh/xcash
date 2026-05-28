@@ -24,6 +24,8 @@ from evm.scanner.watchers import load_watch_set
 
 logger = structlog.get_logger()
 
+LOG_SCAN_REPLAY_BLOCKS = 2
+
 
 class EvmLogScanner:
     """按链扫描外部入账日志。"""
@@ -35,21 +37,19 @@ class EvmLogScanner:
         chain: Chain,
         batch_size: int = DEFAULT_LOG_SCAN_BATCH_SIZE,
         rpc_client: EvmScannerRpcClient | None = None,
-    ) -> int:
+    ):
         """根据游标推进一次正向日志扫描，成功后更新游标。"""
         if chain.type != ChainType.EVM:
             raise ValueError(f"仅支持 EVM 链扫描，当前链为 {chain.code}")
 
         cursor = cls._get_or_create_cursor(chain=chain)
         if not cursor.enabled:
-            return cls._empty_result()
+            return
         rpc_client = rpc_client or EvmScannerRpcClient(chain=chain)
 
         try:
             latest_block = rpc_client.get_latest_block_number()
-            Chain.objects.filter(pk=chain.pk).update(
-                latest_block_number=Greatest(F("latest_block_number"), latest_block)
-            )
+            Chain.objects.filter(pk=chain.pk).update(latest_block_number=latest_block)
 
             watch_set = load_watch_set(chain=chain)
             scan_window = cls._compute_scan_window(
@@ -59,10 +59,10 @@ class EvmLogScanner:
             )
             if scan_window is None:
                 cls._mark_cursor_idle(cursor=cursor)
-                return cls._empty_result()
+                return
             from_block, to_block = scan_window
 
-            created_transfers = cls.scan_range(
+            cls.scan_range(
                 chain=chain,
                 rpc_client=rpc_client,
                 watch_set=watch_set,
@@ -74,7 +74,6 @@ class EvmLogScanner:
             raise
 
         cls._advance_cursor(cursor=cursor, scanned_to_block=to_block)
-        return created_transfers
 
     @classmethod
     def scan_range(
@@ -85,7 +84,7 @@ class EvmLogScanner:
         watch_set: EvmWatchSet,
         from_block: int,
         to_block: int,
-    ) -> int:
+    ) -> None:
         """对 [from_block, to_block] 区间拉取一次日志并按类型落库。"""
         logs = cls._fetch_logs(
             rpc_client=rpc_client,
@@ -93,7 +92,7 @@ class EvmLogScanner:
             from_block=from_block,
             to_block=to_block,
         )
-        return cls._process_logs(
+        cls._process_logs(
             chain=chain,
             logs=logs,
             rpc_client=rpc_client,
@@ -108,7 +107,7 @@ class EvmLogScanner:
         logs: list[dict[str, Any]],
         rpc_client: EvmScannerRpcClient,
         watch_set: EvmWatchSet,
-    ) -> int:
+    ) -> None:
         """把外部入账日志交给 Transfer 落库。"""
         matched_watch_set = watch_set.with_matched_addresses(
             load_matched_addresses_for_candidates(
@@ -116,7 +115,7 @@ class EvmLogScanner:
                 addresses=cls._watched_address_candidates_from_logs(logs=logs),
             )
         )
-        return EvmObservedTransferProcessor.process(
+        EvmObservedTransferProcessor.process(
             chain=chain,
             rpc_client=rpc_client,
             raw_logs=logs,
@@ -235,15 +234,16 @@ class EvmLogScanner:
             return None
 
         if cursor.last_scanned_block <= 0:
-            from_block = 1
+            base_from_block = 1
         else:
-            from_block = cursor.last_scanned_block + 1
+            base_from_block = cursor.last_scanned_block + 1
 
         forward_batch_size = max(1, batch_size)
         if cursor.last_scanned_block > 0:
             to_block = min(target_block, cursor.last_scanned_block + forward_batch_size)
         else:
-            to_block = min(target_block, from_block + forward_batch_size - 1)
+            to_block = min(target_block, base_from_block + forward_batch_size - 1)
+        from_block = max(1, base_from_block - LOG_SCAN_REPLAY_BLOCKS)
         if from_block > to_block:
             return None
         return from_block, to_block
@@ -280,8 +280,3 @@ class EvmLogScanner:
             last_error_at=timezone.now(),
             updated_at=timezone.now(),
         )
-
-    @staticmethod
-    def _empty_result() -> int:
-        """生成不扫描时使用的空结果占位。"""
-        return 0
