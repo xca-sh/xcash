@@ -140,9 +140,9 @@ class ObservedTransferCreateResult:
     created=True:
         本次首次创建成功
     created=False & conflict=False:
-        幂等重放，已存在且内容一致
+        幂等重放，同一链上事件已存在
     created=False & conflict=True:
-        命中了相同唯一键，但关键内容不一致，需要上层记录异常
+        创建失败且无法定位到同一链上事件，需要上层记录异常
     """
 
     transfer: Transfer | None
@@ -189,22 +189,6 @@ class TransferService:
         }
 
     @staticmethod
-    def _compare_observed_transfer(
-        existing: Transfer,
-        observed: ObservedTransferPayload,
-    ) -> tuple[bool, dict[str, tuple[object, object]]]:
-        compared_values = {
-            "crypto_id": (existing.crypto_id, observed.crypto.id),
-            "from_address": (existing.from_address, observed.from_address),
-            "to_address": (existing.to_address, observed.to_address),
-            "value": (existing.value, observed.value),
-        }
-        differences = {
-            field: vals for field, vals in compared_values.items() if vals[0] != vals[1]
-        }
-        return not differences, differences
-
-    @staticmethod
     def _drop_reorged_observed_transfers(
         *,
         chain: Chain,
@@ -245,29 +229,6 @@ class TransferService:
         if transfer.block != observed.block:
             return True
         return transfer.block_hash != observed.block_hash
-
-    @staticmethod
-    def _log_observed_transfer_conflict(
-        *,
-        existing: Transfer,
-        observed: ObservedTransferPayload,
-        differences: dict[str, tuple[object, object]],
-    ) -> None:
-        logger.error(
-            "Observed transfer conflict",
-            source=observed.source,
-            chain=observed.chain.code,
-            tx_hash=observed.tx_hash,
-            event_id=observed.event_id,
-            existing_transfer_id=existing.pk,
-            differences={
-                field_name: {
-                    "existing": str(existing_value),
-                    "incoming": str(incoming_value),
-                }
-                for field_name, (existing_value, incoming_value) in differences.items()
-            },
-        )
 
     @staticmethod
     def create_observed_transfer(
@@ -325,31 +286,17 @@ class TransferService:
                     tx_hash=observed.tx_hash,
                 )
 
-                is_same_transfer, differences = (
-                    TransferService._compare_observed_transfer(
-                        existing=existing,
-                        observed=observed,
-                    )
+                logger.debug(
+                    "Observed transfer replay ignored",
+                    source=observed.source,
+                    chain=chain.code,
+                    tx_hash=observed.tx_hash,
+                    event_id=observed.event_id,
+                    transfer_id=existing.pk,
                 )
-                if is_same_transfer:
-                    logger.debug(
-                        "Observed transfer replay ignored",
-                        source=observed.source,
-                        chain=chain.code,
-                        tx_hash=observed.tx_hash,
-                        event_id=observed.event_id,
-                        transfer_id=existing.pk,
-                    )
-                else:
-                    TransferService._log_observed_transfer_conflict(
-                        existing=existing,
-                        observed=observed,
-                        differences=differences,
-                    )
                 return ObservedTransferCreateResult(
                     transfer=existing,
                     created=False,
-                    conflict=not is_same_transfer,
                 )
 
     @staticmethod
