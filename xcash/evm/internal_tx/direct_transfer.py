@@ -13,7 +13,6 @@ from web3 import Web3
 from currencies.models import ChainToken
 from evm.choices import TxKind
 from evm.internal_tx._log_utils import matches_transfer_log
-from evm.internal_tx._log_utils import normalize_log_index
 from evm.internal_tx.routing import MatchedTransferFact
 
 if TYPE_CHECKING:
@@ -183,7 +182,6 @@ def match_direct_transfer_fact(
         ):
             return None
         return MatchedTransferFact(
-            event_id="native:tx",
             from_address=from_address,
             to_address=fields.to_address,
             crypto=fields.crypto,
@@ -206,9 +204,7 @@ def match_direct_transfer_fact(
     if len(matches) != 1:
         return None
 
-    log = matches[0]
     return MatchedTransferFact(
-        event_id=f"erc20:{normalize_log_index(log.get('logIndex'))}",
         from_address=from_address,
         to_address=fields.to_address,
         crypto=fields.crypto,

@@ -5,27 +5,27 @@ from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
+from web3 import Web3
 
 from chains.constants import ChainCode
 from chains.constants import ChainType
-from chains.models import Chain
 from chains.models import Address
 from chains.models import AddressUsage
-from chains.models import TransferType
+from chains.models import Chain
 from chains.models import Transfer
 from chains.models import TransferStatus
+from chains.models import TransferType
 from chains.models import Wallet
-from currencies.models import Crypto
 from currencies.models import ChainToken
+from currencies.models import Crypto
 from deposits.exceptions import DepositStatusError
 from deposits.models import Deposit
 from deposits.models import DepositStatus
 from deposits.service import DepositService
-from evm.models import VaultSlot
 from evm.models import EvmTxTask
+from evm.models import VaultSlot
 from projects.models import Project
 from users.models import Customer
-from web3 import Web3
 
 
 class DepositServiceCoreTests(TestCase):
@@ -262,7 +262,6 @@ class DepositNotificationTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash="0x" + "4" * 64,
-            event_id="erc20:4",
             crypto=crypto,
             from_address="0x0000000000000000000000000000000000000002",
             to_address="0x0000000000000000000000000000000000000011",
@@ -343,7 +342,6 @@ def create_deposit_context(*, native: bool = False):
         block=1,
         block_hash="0x" + "aa" * 32,
         hash="0x" + ("1" if native else "2") * 64,
-        event_id="native:1" if native else "erc20:2",
         crypto=crypto,
         from_address="0x0000000000000000000000000000000000000002",
         to_address=Web3.to_checksum_address(

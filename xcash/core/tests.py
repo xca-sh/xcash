@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from datetime import timedelta
 from decimal import Decimal
 from os import environ
 from pathlib import Path
@@ -21,13 +20,13 @@ from web3 import Web3
 from chains.constants import ChainCode
 from chains.constants import ChainType
 from chains.models import AddressUsage
-from chains.models import TxTask
-from chains.models import TxTaskStage
 from chains.models import Chain
-from chains.models import TxTaskType
-from chains.models import TransferType
 from chains.models import Transfer
 from chains.models import TransferStatus
+from chains.models import TransferType
+from chains.models import TxTask
+from chains.models import TxTaskStage
+from chains.models import TxTaskType
 from chains.models import Wallet
 from chains.tasks import confirm_transfer
 from chains.test_signer import build_test_remote_signer_backend
@@ -42,7 +41,6 @@ from core.runtime_settings import get_webhook_delivery_breaker_threshold
 from core.runtime_settings import get_webhook_delivery_max_backoff_seconds
 from core.runtime_settings import get_webhook_delivery_max_retries
 from currencies.models import ChainToken
-from currencies.models import Crypto
 from evm.local_erc20 import LOCAL_EVM_ERC20_ABI
 from evm.local_erc20 import LOCAL_EVM_ERC20_BYTECODE
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
@@ -432,7 +430,6 @@ class LocalEvmScannerIntegrationTests(LocalChainIntegrationMixin, TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash=tx_task.tx_hash,
-            event_id="native:tx",
             crypto=crypto,
             from_address=addr.address,
             to_address=recipient,

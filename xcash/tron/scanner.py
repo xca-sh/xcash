@@ -286,7 +286,7 @@ class TronUsdtPaymentScanner:
         try:
             block_number = int(row.get("block_number") or 0)
             timestamp_ms = int(row.get("block_timestamp") or 0)
-            event_index = int(raw_event_index)
+            int(raw_event_index)
         except (TypeError, ValueError):
             return None
         if not tx_id or not block_number or not timestamp_ms:
@@ -340,7 +340,6 @@ class TronUsdtPaymentScanner:
                 chain=chain,
                 block=block_number,
                 tx_hash=tx_id,
-                event_id=f"trc20:{event_index}",
                 from_address=from_address,
                 to_address=to_address,
                 crypto=usdt_mapping.crypto,

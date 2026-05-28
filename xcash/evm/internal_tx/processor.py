@@ -13,8 +13,8 @@ from chains.models import TxTask
 from chains.service import ObservedTransferCreateResult
 from chains.service import ObservedTransferPayload
 from chains.service import TransferService
-from evm.internal_tx.routing import UnknownInternalBroadcastError
 from evm.internal_tx.routing import NON_TRANSFER_TX_TASK_TYPES
+from evm.internal_tx.routing import UnknownInternalBroadcastError
 from evm.internal_tx.routing import get_handler
 from evm.internal_tx.routing import get_matcher
 
@@ -123,7 +123,6 @@ def process_internal_transaction(
         chain=chain,
         block=block_number,
         tx_hash=tx_hash,
-        event_id=fact.event_id,
         from_address=fact.from_address,
         to_address=fact.to_address,
         crypto=fact.crypto,

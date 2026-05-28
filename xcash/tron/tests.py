@@ -713,7 +713,6 @@ class TronUsdtPaymentScannerTests(TestCase):
         self.assertEqual(summary.created_transfers, 1)
         transfer = Transfer.objects.get(chain=self.chain)
         self.assertEqual(transfer.hash, "a" * 64)
-        self.assertEqual(transfer.event_id, "trc20:0")
         self.assertEqual(transfer.amount, Decimal("1"))
         cursor = TronWatchCursor.objects.get(
             chain=self.chain,

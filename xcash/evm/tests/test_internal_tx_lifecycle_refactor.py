@@ -9,28 +9,28 @@ from django.utils import timezone
 from web3 import Web3
 
 from chains.constants import ChainCode
-from chains.models import Chain
 from chains.models import AddressUsage
+from chains.models import Chain
+from chains.models import Transfer
+from chains.models import TransferType
 from chains.models import TxTask
 from chains.models import TxTaskStage
 from chains.models import TxTaskType
-from chains.models import Transfer
-from chains.models import TransferType
 from evm.choices import TxKind
+from evm.intents import build_vault_slot_collect_intent
 from evm.internal_tx import routing
+from evm.internal_tx.processor import process_internal_transaction
 from evm.internal_tx.routing import INTERNAL_TX_HANDLERS
 from evm.internal_tx.routing import INTERNAL_TX_MATCHERS
 from evm.internal_tx.routing import MatchedTransferFact
-from evm.intents import build_vault_slot_collect_intent
+from evm.models import EvmTxTask
 from evm.models import VaultSlot
 from evm.models import VaultSlotUsage
-from evm.internal_tx.processor import process_internal_transaction
-from evm.models import EvmTxTask
-from evm.tests._fixtures import make_tx_task
 from evm.tests._fixtures import make_erc20_token
 from evm.tests._fixtures import make_evm_chain
 from evm.tests._fixtures import make_evm_system_address
 from evm.tests._fixtures import make_tx_hash
+from evm.tests._fixtures import make_tx_task
 from projects.models import Project
 from withdrawals.models import Withdrawal
 from withdrawals.models import WithdrawalStatus
@@ -446,7 +446,6 @@ class ProcessorTimestampReuseTests(TestCase):
             stage=TxTaskStage.PENDING_CHAIN,
         )
         fact = MatchedTransferFact(
-            event_id="native:tx",
             from_address=address.address,
             to_address="0x00000000000000000000000000000000000000ff",
             crypto=chain.native_coin,

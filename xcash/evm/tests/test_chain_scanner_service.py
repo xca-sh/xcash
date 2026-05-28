@@ -469,7 +469,6 @@ class EvmChainScannerServiceTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             tx_hash="0x" + "2" * 64,
-            event_id="native:0",
             from_address="0x0000000000000000000000000000000000000001",
             to_address="0x0000000000000000000000000000000000000002",
             crypto=crypto,

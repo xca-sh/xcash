@@ -65,9 +65,9 @@ class AddressService:
 
 @dataclass(frozen=True)
 class ObservedTransferPayload:
-    """统一描述"从链上观察到的一条转账事件"。
+    """统一描述"从链上观察到的一笔业务入账交易"。
 
-    不同扫描器或外部观察器看到的本质都是同一类事件。
+    不同扫描器或外部观察器看到的本质都是同一类交易级事实。
     先把输入模型收口，后续新增扫描器时只需负责解析，不再重复定义 Transfer 落库字段。
     """
 
@@ -75,7 +75,6 @@ class ObservedTransferPayload:
     block: int
     block_hash: str
     tx_hash: str
-    event_id: str
     from_address: str
     to_address: str
     crypto: Crypto
@@ -131,7 +130,6 @@ class TransferService:
             "block": observed.block,
             "block_hash": observed.block_hash,
             "hash": observed.tx_hash,
-            "event_id": observed.event_id,
             "from_address": observed.from_address,
             "to_address": observed.to_address,
             "crypto": observed.crypto,
@@ -140,48 +138,6 @@ class TransferService:
             "timestamp": observed.timestamp,
             "datetime": observed.occurred_at,
         }
-
-    @staticmethod
-    def _drop_reorged_observed_transfers(
-        *,
-        chain: Chain,
-        observed: ObservedTransferPayload,
-    ) -> None:
-        transfers = list(
-            Transfer.objects.select_for_update()
-            .filter(chain=chain, hash=observed.tx_hash)
-            .order_by("pk")
-        )
-        if not any(
-            TransferService._is_observed_transfer_reorged(
-                transfer=transfer,
-                observed=observed,
-            )
-            for transfer in transfers
-        ):
-            return
-
-        logger.warning(
-            "Observed transfer tx reorg detected",
-            source=observed.source,
-            chain=chain.code,
-            tx_hash=observed.tx_hash,
-            incoming_block=observed.block,
-            incoming_block_hash=observed.block_hash,
-            dropped_transfer_ids=[transfer.pk for transfer in transfers],
-        )
-        for transfer in transfers:
-            transfer.drop()
-
-    @staticmethod
-    def _is_observed_transfer_reorged(
-        *,
-        transfer: Transfer,
-        observed: ObservedTransferPayload,
-    ) -> bool:
-        if transfer.block != observed.block:
-            return True
-        return transfer.block_hash != observed.block_hash
 
     @staticmethod
     def create_observed_transfer(
@@ -196,10 +152,58 @@ class TransferService:
         """
         with transaction.atomic():
             chain = Chain.objects.select_for_update().get(pk=observed.chain.pk)
-            TransferService._drop_reorged_observed_transfers(
-                chain=chain,
-                observed=observed,
+            existing = (
+                Transfer.objects.select_for_update()
+                .filter(chain=chain, hash=observed.tx_hash)
+                .first()
             )
+            if existing is not None:
+                if (
+                    existing.confirm_mode == ConfirmMode.QUICK
+                    and existing.status == TransferStatus.CONFIRMED
+                ):
+                    logger.debug(
+                        "Observed QUICK confirmed transfer tx replay ignored",
+                        source=observed.source,
+                        chain=chain.code,
+                        tx_hash=observed.tx_hash,
+                        transfer_id=existing.pk,
+                    )
+                    return ObservedTransferCreateResult(
+                        transfer=existing,
+                        created=False,
+                    )
+
+                if (
+                    existing.block == observed.block
+                    and existing.block_hash == observed.block_hash
+                ):
+                    TransferService._mark_tx_task_pending_confirm(
+                        chain=chain,
+                        tx_hash=observed.tx_hash,
+                    )
+                    logger.debug(
+                        "Observed transfer replay ignored",
+                        source=observed.source,
+                        chain=chain.code,
+                        tx_hash=observed.tx_hash,
+                        transfer_id=existing.pk,
+                    )
+                    return ObservedTransferCreateResult(
+                        transfer=existing,
+                        created=False,
+                    )
+
+                logger.warning(
+                    "Observed transfer tx reorg detected",
+                    source=observed.source,
+                    chain=chain.code,
+                    tx_hash=observed.tx_hash,
+                    incoming_block=observed.block,
+                    incoming_block_hash=observed.block_hash,
+                    dropped_transfer_id=existing.pk,
+                )
+                existing.drop()
 
             create_kwargs = TransferService._build_observed_transfer_kwargs(observed)
             create_kwargs["chain"] = chain
@@ -218,7 +222,6 @@ class TransferService:
                 existing = Transfer.objects.filter(
                     chain=chain,
                     hash=observed.tx_hash,
-                    event_id=observed.event_id,
                 ).first()
                 if existing is None:
                     logger.warning(
@@ -226,7 +229,6 @@ class TransferService:
                         source=observed.source,
                         chain=chain.code,
                         tx_hash=observed.tx_hash,
-                        event_id=observed.event_id,
                     )
                     return ObservedTransferCreateResult(
                         transfer=None,
@@ -244,7 +246,6 @@ class TransferService:
                     source=observed.source,
                     chain=chain.code,
                     tx_hash=observed.tx_hash,
-                    event_id=observed.event_id,
                     transfer_id=existing.pk,
                 )
                 return ObservedTransferCreateResult(

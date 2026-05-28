@@ -60,7 +60,6 @@ class ChainTokenRemapTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash="0x" + "1" * 64,
-            event_id="erc20:0",
             crypto=placeholder,
             from_address="0x0000000000000000000000000000000000000002",
             to_address="0x0000000000000000000000000000000000000003",

@@ -29,9 +29,9 @@ from evm.intents import DEFAULT_VAULT_SLOT_COLLECT_GAS
 from evm.intents import DEFAULT_VAULT_SLOT_DEPLOY_GAS
 from evm.intents import build_vault_slot_collect_intent
 from evm.intents import build_vault_slot_deploy_intent
+from evm.models import EvmTxTask
 from evm.models import VaultSlot
 from evm.models import VaultSlotUsage
-from evm.models import EvmTxTask
 from invoices.models import Invoice
 from invoices.models import InvoiceBillingMode
 from invoices.models import InvoiceStatus
@@ -620,7 +620,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ),
             start=1,
         ):
-            deposit = self._create_deposit(slot=slot, event_id=f"erc20:{index}")
+            deposit = self._create_deposit(slot=slot, tx_hash_suffix=str(index))
             with signer_patch:
                 existing = VaultSlot.schedule_collect_for_deposit(deposit.pk)
             existing.base_task.stage = stage
@@ -678,7 +678,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_schedule_collect_for_deposit_skips_native_deposit(self):
         slot = self._create_vault_slot()
-        deposit = self._create_deposit(slot=slot, crypto=self.native, event_id="native:1")
+        deposit = self._create_deposit(slot=slot, crypto=self.native)
 
         task = VaultSlot.schedule_collect_for_deposit(deposit.pk)
 
@@ -710,14 +710,13 @@ class VaultSlotAddressSchedulingTests(TestCase):
         *,
         slot: VaultSlot,
         crypto: Crypto | None = None,
-        event_id: str = "erc20:1",
+        tx_hash_suffix: str = "1",
     ) -> Deposit:
         transfer = Transfer.objects.create(
             chain=self.chain,
             block=1,
             block_hash="0x" + "aa" * 32,
-            hash="0x" + event_id[-1] * 64,
-            event_id=event_id,
+            hash="0x" + tx_hash_suffix * 64,
             crypto=crypto or self.token,
             from_address="0x0000000000000000000000000000000000000002",
             to_address=slot.address,

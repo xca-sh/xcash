@@ -27,23 +27,23 @@ from chains.adapters import TxCheckStatus
 from chains.constants import ChainCode
 from chains.models import Address
 from chains.models import AddressUsage
-from chains.models import TxTask
-from chains.models import TxTaskStage
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import TxTaskType
-from chains.models import TransferType
 from chains.models import Transfer
+from chains.models import TransferType
+from chains.models import TxTask
+from chains.models import TxTaskStage
+from chains.models import TxTaskType
 from chains.models import Wallet
 from currencies.models import ChainToken
 from currencies.models import Crypto
 from evm.choices import TxKind
-from evm.poller import EvmTaskPoller
-from evm.tasks import confirm_non_transfer_tx_tasks
 from evm.internal_tx._log_utils import matches_transfer_log
 from evm.internal_tx._log_utils import normalize_log_index
 from evm.models import EvmTxTask
+from evm.poller import EvmTaskPoller
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
+from evm.tasks import confirm_non_transfer_tx_tasks
 
 # ---------------------------------------------------------------------------
 # 公共测试地址（已通过 Web3.to_checksum_address 转换，满足 EIP-55 checksum 要求）
@@ -780,7 +780,6 @@ class PollerIntegrationTest(TestCase):
             1,
         )
         transfer = Transfer.objects.get(chain=self.chain, hash=tx_hash)
-        self.assertEqual(transfer.event_id, "erc20:3")
         self.assertEqual(transfer.from_address, _VAULT_HEX)
         self.assertEqual(transfer.to_address, _RECEIVER_HEX)
         self.assertEqual(transfer.value, Decimal("100000000"))
@@ -815,7 +814,6 @@ class PollerIntegrationTest(TestCase):
             EvmTaskPoller.poll_chain(chain=self.chain)
 
         transfer = Transfer.objects.get(chain=self.chain, hash=tx_hash)
-        self.assertEqual(transfer.event_id, "collect:2")
         self.assertEqual(transfer.from_address, slot_address)
         self.assertEqual(transfer.to_address, vault_address)
         self.assertEqual(transfer.amount, Decimal("100"))
@@ -912,7 +910,6 @@ class PollerIntegrationTest(TestCase):
             block=100,
             block_hash="0x" + "aa" * 32,
             hash=tx_hash,
-            event_id="erc20:bad",
             crypto=self.token,
             from_address=self.addr.address,
             to_address=_RECEIVER_HEX,
@@ -958,7 +955,6 @@ class PollerIntegrationTest(TestCase):
             EvmTaskPoller.poll_chain(chain=self.chain)
 
         transfer = Transfer.objects.get(chain=self.chain, hash=tx_hash)
-        self.assertEqual(transfer.event_id, "native:tx")
 
         # 手动调用 process()
         transfer.process()
@@ -992,7 +988,6 @@ class PollerIntegrationTest(TestCase):
             block=100,
             block_hash="0x" + "aa" * 32,
             hash=tx_hash,
-            event_id="erc20:3",
             crypto=self.token,
             from_address=_VAULT_HEX,
             to_address=_RECEIVER_HEX,

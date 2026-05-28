@@ -249,7 +249,6 @@ class InvoicePaySlotTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash=f"0x{chain.chain_id:08x}{int(now.timestamp() * 1000000):056x}",
-            event_id=f"{chain.code}-{int(now.timestamp() * 1000)}",
             crypto=self.crypto,
             from_address="0x00000000000000000000000000000000000000B1",
             to_address=pay_address,
@@ -954,7 +953,6 @@ class InvoiceExpiredMatchTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash="0x" + "e1" * 32,
-            event_id="expired-match-event",
             crypto=self.crypto,
             from_address=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000F1"
@@ -1099,7 +1097,6 @@ class CheckExpiredAtomicityTests(TransactionTestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash="0x" + "a7" * 32,
-            event_id="atomic-event",
             crypto=self.crypto,
             from_address=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000B7"
@@ -1876,7 +1873,6 @@ class TryMatchContractInvoiceTest(TestCase, InvoiceTestMixin):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash=f"0x{self.chain.chain_id:08x}{int(now.timestamp() * 1000000):056x}",
-            event_id=f"cm-{str(amount).replace('.', '')}",
             crypto=self.crypto,
             from_address=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000b2"

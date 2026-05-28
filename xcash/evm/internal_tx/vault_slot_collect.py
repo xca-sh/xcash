@@ -157,7 +157,6 @@ def vault_slot_collect_matcher(
             return None
 
     return MatchedTransferFact(
-        event_id=f"collect:{collected_log.log_index}",
         from_address=slot_address,
         to_address=vault_address,
         crypto=crypto,
@@ -178,15 +177,12 @@ class VaultSlotCollectHandler:
 
     def confirm(self, transfer: Transfer) -> None:
         """归集确认不需要额外业务动作。"""
-        return None
 
     def drop(self, transfer: Transfer) -> None:
         """reorg 撤销时无须额外回滚。"""
-        return None
 
     def finalize_failed(self, tx_task: TxTask) -> None:
         """归集失败无须额外业务收尾。"""
-        return None
 
 
 vault_slot_collect_handler = VaultSlotCollectHandler()

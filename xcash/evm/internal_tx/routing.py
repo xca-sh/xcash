@@ -28,7 +28,6 @@ class UnknownInternalBroadcastError(RuntimeError):
 class MatchedTransferFact:
     """receipt 中提取的真实资产移动事实，由 matcher 返回。"""
 
-    event_id: str
     from_address: str
     to_address: str
     crypto: Crypto

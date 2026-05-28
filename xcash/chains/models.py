@@ -220,7 +220,7 @@ class Chain(models.Model):
             )
 
     @property
-    def adapter(self) -> "AdapterInterface":  # noqa: F821
+    def adapter(self) -> AdapterInterface:  # noqa: F821
         from chains.adapters import AdapterFactory  # noqa: PLC0415
 
         return AdapterFactory.get_adapter(chain_type=self.type)
@@ -846,15 +846,7 @@ class Transfer(models.Model):
         verbose_name=_("区块哈希"),
         unique=False,
     )
-    # 修复：真实链上 tx hash 与"同 tx 内事件明细"拆分建模，避免继续依赖 `hash:logIndex` 字符串协议。
     hash = HashField(unique=False, verbose_name=_("哈希"))
-    # EVM 专用
-    event_id = models.CharField(
-        _("事件标识"),
-        max_length=32,
-        blank=True,
-        default="",
-    )
 
     crypto = models.ForeignKey(
         "currencies.Crypto", on_delete=models.CASCADE, verbose_name=_("加密货币")
@@ -896,8 +888,8 @@ class Transfer(models.Model):
         verbose_name_plural = _("转账")
         constraints = [
             models.UniqueConstraint(
-                fields=("chain", "hash", "event_id"),
-                name="uniq_transfer_chain_hash_event",
+                fields=("chain", "hash"),
+                name="uniq_transfer_chain_hash",
             ),
         ]
 
@@ -1050,7 +1042,7 @@ class Transfer(models.Model):
     def drop(self):
         """回退关联业务状态，然后删除 Transfer 记录。
 
-        删除记录以释放唯一约束 (chain, hash, event_id),
+        删除记录以释放唯一约束 (chain, hash),
         使 reorg 后同一笔 tx 被重新打包时, 扫描器可以自然重建 Transfer。
         """
         # 先加行锁，防止并发处理；已删除的 Transfer 直接跳过。

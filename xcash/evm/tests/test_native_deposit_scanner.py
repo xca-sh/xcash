@@ -10,8 +10,8 @@ from web3 import Web3
 
 from chains.models import Transfer
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
-from evm.models import VaultSlot
 from evm.models import EvmScanCursor
+from evm.models import VaultSlot
 from evm.scanner.logs import EvmLogScanner
 from evm.scanner.watchers import EvmWatchSet
 from evm.tests._fixtures import make_crypto
@@ -58,6 +58,7 @@ class EvmLogScannerTests(TestCase):
             chain_id=910101,
             native_coin=self.native,
         )
+        self.native = self.chain.native_coin
         self.slot = make_evm_system_address(suffix="aa")
         self.project = Project.objects.create(
             name="Native Scanner Project",
@@ -123,6 +124,7 @@ class EvmLogScannerTests(TestCase):
             (),
             {
                 "get_logs": lambda *_args, **_kwargs: [self._build_native_log()],
+                "get_transaction": lambda *_args, **_kwargs: {"to": self.slot.address},
                 "get_block_timestamp": lambda *_args, **_kwargs: 1_700_000_000,
             },
         )()
@@ -142,7 +144,6 @@ class EvmLogScannerTests(TestCase):
         self.assertEqual(transfer.to_address, self.slot.address)
         self.assertEqual(transfer.value, Decimal(10**18))
         self.assertEqual(transfer.amount, Decimal("1"))
-        self.assertEqual(transfer.event_id, "native:7")
         self.assertEqual(transfer.hash, "0x" + "cd" * 32)
         self.assertEqual(transfer.block_hash, "0x" + "22" * 32)
 
@@ -161,6 +162,7 @@ class EvmLogScannerTests(TestCase):
             (),
             {
                 "get_logs": lambda *_args, **_kwargs: [self._build_native_log()],
+                "get_transaction": lambda *_args, **_kwargs: {"to": self.slot.address},
                 "get_block_timestamp": lambda *_args, **_kwargs: 1_700_000_000,
             },
         )()
@@ -179,8 +181,61 @@ class EvmLogScannerTests(TestCase):
         self.assertEqual(observed.to_address, self.slot.address)
         self.assertEqual(observed.value, Decimal(10**18))
         self.assertEqual(observed.amount, Decimal("1"))
-        self.assertEqual(observed.event_id, "native:7")
         self.assertEqual(observed.source, "evm-scan")
+
+    def test_native_scanner_skips_indirect_contract_payment(self):
+        log = self._build_native_log()
+        rpc_client = Mock()
+        rpc_client.get_logs.return_value = [log]
+        rpc_client.get_transaction.return_value = {
+            "to": Web3.to_checksum_address("0x" + "cc" * 20)
+        }
+        rpc_client.get_block_timestamp.return_value = 1_700_000_000
+
+        created = EvmLogScanner.scan_range(
+            chain=self.chain,
+            rpc_client=rpc_client,
+            watch_set=self.watch_set,
+            from_block=120,
+            to_block=120,
+        )
+
+        self.assertEqual(created, 0)
+        self.assertEqual(Transfer.objects.count(), 0)
+        rpc_client.get_transaction.assert_called_once_with(tx_hash="0x" + "cd" * 32)
+        rpc_client.get_block_timestamp.assert_not_called()
+
+    @patch("evm.scanner.observed_transfers.logger.warning")
+    def test_native_scanner_skips_tx_with_multiple_system_inbound_logs(
+        self,
+        warning_mock,
+    ):
+        logs = [
+            self._build_native_log(log_index=7),
+            self._build_native_log(log_index=8),
+        ]
+        rpc_client = Mock()
+        rpc_client.get_logs.return_value = logs
+        rpc_client.get_transaction.return_value = {"to": self.slot.address}
+        rpc_client.get_block_timestamp.return_value = 1_700_000_000
+
+        created = EvmLogScanner.scan_range(
+            chain=self.chain,
+            rpc_client=rpc_client,
+            watch_set=self.watch_set,
+            from_block=120,
+            to_block=120,
+        )
+
+        self.assertEqual(created, 0)
+        self.assertEqual(Transfer.objects.count(), 0)
+        warning_mock.assert_called_with(
+            "EVM scanner skipped tx with multiple observed inbound events",
+            chain=self.chain.code,
+            tx_hash="0x" + "cd" * 32,
+            direct_log_count=2,
+            direct_to_addresses=[self.slot.address, self.slot.address],
+        )
 
     @patch("chains.service.TransferService.create_observed_transfer")
     def test_scan_range_skips_malformed_logs_without_blocking_batch(
@@ -194,13 +249,13 @@ class EvmLogScannerTests(TestCase):
                 for key, value in self._build_native_log().items()
                 if key != "transactionHash"
             },
-            {**self._build_native_log(), "logIndex": "not-int"},
         ]
         rpc_client = type(
             "Rpc",
             (),
             {
                 "get_logs": lambda *_args, **_kwargs: logs,
+                "get_transaction": lambda *_args, **_kwargs: {"to": self.slot.address},
                 "get_block_timestamp": lambda *_args, **_kwargs: 1_700_000_000,
             },
         )()
@@ -233,6 +288,7 @@ class EvmLogScannerTests(TestCase):
             (),
             {
                 "get_logs": lambda *_args, **_kwargs: logs,
+                "get_transaction": lambda *_args, **_kwargs: {"to": self.slot.address},
                 "get_block_timestamp": lambda *_args, **_kwargs: 1_700_000_000,
             },
         )()

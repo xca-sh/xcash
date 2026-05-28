@@ -14,8 +14,8 @@ from chains.models import TxTaskStage
 from chains.models import TxTaskType
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from currencies.models import ChainToken
-from evm.models import VaultSlot
 from evm.models import EvmScanCursor
+from evm.models import VaultSlot
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 from evm.scanner.constants import XCASH_NATIVE_RECEIVED_TOPIC0
 from evm.scanner.logs import EvmLogScanner
@@ -136,6 +136,7 @@ class EvmLogScannerTests(TestCase):
 
     @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_transaction")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
@@ -144,11 +145,16 @@ class EvmLogScannerTests(TestCase):
         get_latest_block_number_mock,
         get_logs_mock,
         get_block_timestamp_mock,
+        get_transaction_mock,
         _enqueue_processing_mock,
         _mark_pending_confirm_mock,
     ):
         get_latest_block_number_mock.return_value = 100
         get_block_timestamp_mock.return_value = 1_700_000_000
+        get_transaction_mock.side_effect = lambda *, tx_hash: {
+            "0x" + "12" * 32: {"to": self.slot.address},
+            "0x" + "23" * 32: {"to": self.token_deployment.address},
+        }[tx_hash]
         get_logs_mock.side_effect = [[self._native_log()], [self._erc20_log()]]
 
         result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
@@ -158,10 +164,6 @@ class EvmLogScannerTests(TestCase):
         self.assertEqual(cursor.last_scanned_block, 32)
         self.assertEqual(result, 2)
         self.assertEqual(Transfer.objects.count(), 2)
-        self.assertEqual(
-            set(Transfer.objects.values_list("event_id", flat=True)),
-            {"native:3", "erc20:4"},
-        )
         log_calls = [call.kwargs for call in get_logs_mock.call_args_list]
         self.assertEqual(len(log_calls), 2)
         self.assertIn(
@@ -184,8 +186,8 @@ class EvmLogScannerTests(TestCase):
             },
             log_calls,
         )
-        for call in log_calls:
-            self.assertNotIn(self.slot.address, call["addresses"] or [])
+        for log_call in log_calls:
+            self.assertNotIn(self.slot.address, log_call["addresses"] or [])
 
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")

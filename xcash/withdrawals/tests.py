@@ -14,9 +14,9 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 from rest_framework.test import APIRequestFactory
 from web3 import Web3
 
+from chains.constants import ChainCode
 from chains.models import Address
 from chains.models import AddressUsage
-from chains.constants import ChainCode
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import Transfer
@@ -140,7 +140,6 @@ class WithdrawalTxTaskTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash="0x" + "2" * 64,
-            event_id="native:0",
             crypto=crypto,
             from_address="0x0000000000000000000000000000000000000001",
             to_address="0x0000000000000000000000000000000000000002",
@@ -185,7 +184,6 @@ class WithdrawalTxTaskTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash="0x" + "3" * 64,
-            event_id="native:0",
             crypto=crypto,
             from_address="0x0000000000000000000000000000000000000011",
             to_address="0x0000000000000000000000000000000000000012",
@@ -236,7 +234,6 @@ class WithdrawalTxTaskTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash="0x" + "5" * 64,
-            event_id="native:5",
             crypto=crypto,
             from_address="0x0000000000000000000000000000000000000021",
             to_address="0x0000000000000000000000000000000000000022",
@@ -1560,7 +1557,6 @@ class WithdrawalStateTransitionTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash=tx_hash,
-            event_id=f"native:{out_no}",
             crypto=self.crypto,
             from_address="0x0000000000000000000000000000000000000001",
             to_address="0x0000000000000000000000000000000000000002",
@@ -1688,7 +1684,6 @@ class WithdrawalStateTransitionTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash=tx_hash,
-            event_id="native:drop-task",
             crypto=self.crypto,
             from_address="0x0000000000000000000000000000000000000001",
             to_address="0x0000000000000000000000000000000000000002",
@@ -1889,14 +1884,13 @@ class WithdrawalTryMatchTests(TestCase):
         WithdrawalTryMatchTests._hash_counter += 1
         return "0x" + hex(self._hash_counter)[2:].zfill(64)
 
-    def _make_transfer(self, *, chain=None, tx_hash=None, event_id="native:0"):
+    def _make_transfer(self, *, chain=None, tx_hash=None):
         """创建完整的 Transfer 对象。"""
         return Transfer.objects.create(
             chain=chain or self.chain,
             block=1,
             block_hash="0x" + "aa" * 32,
             hash=tx_hash or self._next_hash(),
-            event_id=event_id,
             crypto=self.crypto,
             from_address=self.addr.address,
             to_address="0x0000000000000000000000000000000000000002",
@@ -1933,7 +1927,7 @@ class WithdrawalTryMatchTests(TestCase):
     def test_match_returns_false_when_no_withdrawal_found(self):
         """链上转账没有对应提币单时应返回 False。"""
         tx_task = self._make_tx_task(tx_hash=self._next_hash())
-        transfer = self._make_transfer(event_id="native:no-match")
+        transfer = self._make_transfer()
         result = WithdrawalService.try_match_withdrawal(transfer, tx_task)
         self.assertFalse(result)
 
@@ -1954,7 +1948,8 @@ class WithdrawalTryMatchTests(TestCase):
         )
         # 链上转账来自另一条链
         transfer = self._make_transfer(
-            chain=self.other_chain, tx_hash=tx_hash, event_id="native:mismatch"
+            chain=self.other_chain,
+            tx_hash=tx_hash,
         )
 
         result = WithdrawalService.try_match_withdrawal(transfer, tx_task)
@@ -1964,7 +1959,7 @@ class WithdrawalTryMatchTests(TestCase):
         """非 PENDING 状态的提币收到重复匹配事件应静默跳过。"""
         tx_hash = self._next_hash()
         tx_task = self._make_tx_task(tx_hash=tx_hash, stage=TxTaskStage.PENDING_CONFIRM)
-        transfer = self._make_transfer(tx_hash=tx_hash, event_id="native:not-pending")
+        transfer = self._make_transfer(tx_hash=tx_hash)
         Withdrawal.objects.create(
             project=self.project,
             out_no="match-not-pending",
@@ -1997,7 +1992,7 @@ class WithdrawalTryMatchTests(TestCase):
             tx_task=tx_task,
             hash=tx_hash,
         )
-        transfer = self._make_transfer(tx_hash=tx_hash, event_id="native:success")
+        transfer = self._make_transfer(tx_hash=tx_hash)
 
         result = WithdrawalService.try_match_withdrawal(transfer, tx_task)
         self.assertTrue(result)
@@ -2028,7 +2023,7 @@ class WithdrawalTryMatchTests(TestCase):
             tx_task=tx_task,
             hash=tx_hash,
         )
-        transfer = self._make_transfer(tx_hash=tx_hash, event_id="native:backfill")
+        transfer = self._make_transfer(tx_hash=tx_hash)
 
         result = WithdrawalService.try_match_withdrawal(transfer, tx_task)
         self.assertTrue(result)
@@ -2053,7 +2048,7 @@ class WithdrawalTryMatchTests(TestCase):
             tx_task=tx_task,
             hash=old_hash,
         )
-        transfer = self._make_transfer(tx_hash=old_hash, event_id="native:old-hash")
+        transfer = self._make_transfer(tx_hash=old_hash)
 
         result = WithdrawalService.try_match_withdrawal(transfer, tx_task)
 

@@ -6,13 +6,14 @@ from decimal import Decimal
 
 from web3 import Web3
 
+from chains.constants import ChainCode
 from chains.models import Address
 from chains.models import AddressUsage
+from chains.models import Chain
+from chains.models import ChainType
 from chains.models import TxTask
 from chains.models import TxTaskStage
 from chains.models import TxTaskType
-from chains.models import Chain
-from chains.models import ChainType
 from chains.models import Wallet
 from currencies.models import Crypto
 
@@ -32,15 +33,11 @@ def make_evm_chain(
     native_coin: Crypto | None = None,
     confirm_block_count: int = 6,
 ) -> Chain:
-    native = native_coin or make_crypto(symbol=f"NAT-{code}")
+    _ = (chain_id, native_coin, confirm_block_count)
+    chain_code = code if code in ChainCode.values else ChainCode.Anvil
     return Chain.objects.create(
-        code=code,
-        name=code.upper(),
-        type=ChainType.EVM,
-        chain_id=chain_id,
-        rpc=f"http://{code}.local",
-        native_coin=native,
-        confirm_block_count=confirm_block_count,
+        code=chain_code,
+        rpc="",
         active=True,
     )
 

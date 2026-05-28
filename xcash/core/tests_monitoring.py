@@ -12,7 +12,6 @@ from django_otp.oath import TOTP
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from chains.constants import ChainCode
-from chains.constants import ChainType
 from chains.models import Chain
 from chains.models import Transfer
 from chains.models import TransferStatus
@@ -69,7 +68,6 @@ class OperationalRiskServiceTests(TestCase):
             block=1,
             block_hash="0x" + "aa" * 32,
             hash="0x" + "1" * 64,
-            event_id="monitor:0",
             crypto=self.crypto,
             from_address="0x0000000000000000000000000000000000000011",
             to_address="0x0000000000000000000000000000000000000012",
