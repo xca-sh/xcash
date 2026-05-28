@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import enum
 from decimal import Decimal
 from functools import cached_property
 from typing import TYPE_CHECKING
@@ -827,12 +826,6 @@ class ConfirmMode(models.TextChoices):
     QUICK = "quick", _("快速")
 
 
-class _EvmSenderClass(enum.Enum):
-    SYSTEM = "system"
-    EXTERNAL = "external"
-    UNKNOWN = "unknown"
-
-
 class Transfer(models.Model):
     if TYPE_CHECKING:
         # Django 反向 OneToOne 描述符在运行时动态挂载；这里显式声明给 IDE 做静态解析。
@@ -910,12 +903,7 @@ class Transfer(models.Model):
         if tx_task is not None:
             if self._match_internal(tx_task):
                 self._mark_processed()
-                if self.confirm_mode == ConfirmMode.QUICK:
-                    from .tasks import confirm_transfer
-
-                    confirm_transfer.delay(self.pk)
                 return
-
             logger.warning(
                 "Transfer 命中 TxTask 但内部 handler 未认领，跳过外部匹配",
                 transfer_id=self.pk,
@@ -925,25 +913,7 @@ class Transfer(models.Model):
             self._mark_processed()
             return
 
-        if self.chain.type == ChainType.EVM:
-            sender_class = self._classify_evm_sender()
-            if sender_class == _EvmSenderClass.SYSTEM:
-                logger.warning(
-                    "EVM Transfer 原交易发送方是系统地址但无 TxTask，跳过外部匹配",
-                    transfer_id=self.pk,
-                    tx_hash=self.hash,
-                )
-                self._mark_processed()
-                return
-            if sender_class == _EvmSenderClass.UNKNOWN:
-                logger.warning(
-                    "无法确认 EVM 交易发送方分类，保留未处理状态等待重试",
-                    transfer_id=self.pk,
-                    tx_hash=self.hash,
-                )
-                return
-
-        # 非内部广播交易，且 EVM tx.from 已确认不是系统地址时，才按外部收款逻辑逐一尝试匹配。
+        # 未命中内部任务的转账统一按外部收款逻辑逐一尝试匹配。
         from deposits.service import DepositService
         from invoices.service import InvoiceService
 
@@ -957,40 +927,6 @@ class Transfer(models.Model):
             from .tasks import confirm_transfer
 
             confirm_transfer.delay(self.pk)
-
-    def _classify_evm_sender(self) -> _EvmSenderClass:
-        """三态判定 EVM 原交易发送方，RPC 失败时 fail closed 并等待重试。"""
-        try:
-            tx = self.chain.w3.eth.get_transaction(self.hash)
-            raw_from = None
-            if isinstance(tx, dict):
-                raw_from = tx.get("from")
-            if raw_from is None:
-                raw_from = getattr(tx, "from_", None) or getattr(
-                    tx, "fromAddress", None
-                )
-            if raw_from is None and hasattr(tx, "__getitem__"):
-                try:
-                    raw_from = tx["from"]
-                except (KeyError, TypeError):
-                    raw_from = None
-            if not raw_from:
-                return _EvmSenderClass.UNKNOWN
-            from_address = Web3.to_checksum_address(str(raw_from))
-        except Exception:
-            logger.exception(
-                "EVM tx.from 解析失败，本轮按 UNKNOWN 处理",
-                transfer_id=self.pk,
-                tx_hash=self.hash,
-            )
-            return _EvmSenderClass.UNKNOWN
-
-        if Address.objects.filter(
-            chain_type=ChainType.EVM,
-            address=from_address,
-        ).exists():
-            return _EvmSenderClass.SYSTEM
-        return _EvmSenderClass.EXTERNAL
 
     def _mark_processed(self) -> None:
         self.processed_at = timezone.now()
