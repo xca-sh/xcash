@@ -38,8 +38,8 @@ from chains.models import Wallet
 from currencies.models import ChainToken
 from currencies.models import Crypto
 from evm.choices import TxKind
-from evm.internal_tx._log_utils import matches_transfer_log
-from evm.internal_tx._log_utils import normalize_log_index
+from evm.internal_tx.log_utils import matches_transfer_log
+from evm.internal_tx.log_utils import normalize_log_index
 from evm.models import EvmTxTask
 from evm.poller import EvmTaskPoller
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
@@ -840,7 +840,9 @@ class PollerIntegrationTest(TestCase):
         base_task.refresh_from_db()
         self.assertEqual(base_task.stage, TxTaskStage.PENDING_CONFIRM)
         self.assertIsNone(base_task.success)
-        self.assertFalse(Transfer.objects.filter(chain=self.chain, hash=tx_hash).exists())
+        self.assertFalse(
+            Transfer.objects.filter(chain=self.chain, hash=tx_hash).exists()
+        )
 
     @patch("evm.tasks.AdapterFactory.get_adapter")
     def test_confirm_non_transfer_tx_tasks_finalizes_after_confirm_window(

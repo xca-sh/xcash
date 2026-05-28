@@ -440,7 +440,7 @@ class EvmErc20ScannerTests(TestCase):
             chain=self.chain.code,
             tx_hash="0x" + "ab" * 32,
             direct_log_count=2,
-            direct_to_addresses=[
+            emit_from_list=[
                 self.token_deployment.address,
                 self.token_deployment.address,
             ],

@@ -28,7 +28,7 @@ class ParsedEvmTransferLog:
     block_number: int
     block_hash: str
     tx_hash: str
-    direct_to_address: str
+    emit_from: str
     from_address: str
     to_address: str
     crypto: Any
@@ -148,7 +148,7 @@ class EvmObservedTransferProcessor:
             block_number=block_number,
             block_hash=block_hash,
             tx_hash=tx_hash,
-            direct_to_address=slot_address,
+            emit_from=slot_address,
             from_address=payer,
             to_address=slot_address,
             crypto=chain.native_coin,
@@ -209,7 +209,7 @@ class EvmObservedTransferProcessor:
             block_number=block_number,
             block_hash=block_hash,
             tx_hash=tx_hash,
-            direct_to_address=token_address,
+            emit_from=token_address,
             from_address=from_address,
             to_address=to_address,
             crypto=token.crypto,
@@ -244,9 +244,7 @@ class EvmObservedTransferProcessor:
                     chain=chain.code,
                     tx_hash=tx_hash,
                     direct_log_count=len(direct_logs),
-                    direct_to_addresses=[
-                        log.direct_to_address for log in direct_logs
-                    ],
+                    emit_from_list=[log.emit_from for log in direct_logs],
                 )
                 continue
 
@@ -312,7 +310,7 @@ class EvmObservedTransferProcessor:
             )
             return []
 
-        return [log for log in logs if log.direct_to_address == tx_to]
+        return [log for log in logs if log.emit_from == tx_to]
 
     @staticmethod
     def _to_hex(value: object) -> str:

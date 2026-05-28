@@ -12,7 +12,7 @@ from web3 import Web3
 
 from currencies.models import ChainToken
 from evm.choices import TxKind
-from evm.internal_tx._log_utils import matches_transfer_log
+from evm.internal_tx.log_utils import matches_transfer_log
 from evm.internal_tx.routing import MatchedTransferFact
 
 if TYPE_CHECKING:

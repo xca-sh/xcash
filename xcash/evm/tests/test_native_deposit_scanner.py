@@ -234,7 +234,7 @@ class EvmLogScannerTests(TestCase):
             chain=self.chain.code,
             tx_hash="0x" + "cd" * 32,
             direct_log_count=2,
-            direct_to_addresses=[self.slot.address, self.slot.address],
+            emit_from_list=[self.slot.address, self.slot.address],
         )
 
     @patch("chains.service.TransferService.create_observed_transfer")
