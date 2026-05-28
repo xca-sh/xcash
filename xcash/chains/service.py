@@ -16,13 +16,10 @@ from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.models import TxTask
-from chains.models import Wallet
 
 if TYPE_CHECKING:
     from datetime import datetime
     from decimal import Decimal
-
-    from django.db.models import QuerySet
 
     from currencies.models import Crypto
 
@@ -33,10 +30,6 @@ class ChainService:
     """Read-only accessors for chain metadata."""
 
     @staticmethod
-    def get_active_chains() -> QuerySet[Chain]:
-        return Chain.objects.filter(active=True)
-
-    @staticmethod
     def get_by_code(code: str, *, active_only: bool = True) -> Chain:
         qs = Chain.objects.filter(code=code)
         if active_only:
@@ -44,36 +37,11 @@ class ChainService:
         return qs.get()
 
     @staticmethod
-    def get_by_id(chain_id: int) -> Chain:
-        return Chain.objects.get(id=chain_id)
-
-    @staticmethod
     def codes_of_types(chain_types: set[str]) -> set[str]:
         return set(
-            Chain.objects.filter(
-                type__in=chain_types, active=True
-            ).values_list("code", flat=True)
-        )
-
-
-class WalletService:
-    """Helpers around wallet and HD address derivation."""
-
-    @staticmethod
-    def generate_wallet() -> Wallet:
-        return Wallet.generate()
-
-    @staticmethod
-    def ensure_address(
-        wallet: Wallet,
-        chain_type: ChainType | str,
-        usage: AddressUsage,
-        address_index: int = 0,
-    ) -> Address:
-        return wallet.get_address(
-            chain_type=chain_type,
-            usage=usage,
-            address_index=address_index,
+            Chain.objects.filter(type__in=chain_types, active=True).values_list(
+                "code", flat=True
+            )
         )
 
 
@@ -94,21 +62,6 @@ class AddressService:
             qs = qs.filter(usage=usage)
         return qs.first()
 
-    @staticmethod
-    def get_by_address(
-        *,
-        address: str,
-        chain_type: ChainType | str | None = None,
-        usage: AddressUsage | str | None = None,
-    ) -> Address:
-        qs = Address.objects.filter(address=address)
-        if chain_type:
-            qs = qs.filter(chain_type=chain_type)
-        if usage:
-            qs = qs.filter(usage=usage)
-        return qs.get()
-
-
 
 @dataclass(frozen=True)
 class ObservedTransferPayload:
@@ -120,6 +73,7 @@ class ObservedTransferPayload:
 
     chain: Chain
     block: int
+    block_hash: str
     tx_hash: str
     event_id: str
     from_address: str
@@ -129,7 +83,6 @@ class ObservedTransferPayload:
     amount: Decimal
     timestamp: int
     occurred_at: datetime
-    block_hash: str
     source: str = "observer"
 
 

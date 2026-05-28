@@ -1,18 +1,22 @@
+[tool.uv]
+package = false
+
 [project]
 name = "xcash-signer"
-version = "0.1.0"
+# signer 不维护独立版本，其版本即 Xcash 主项目版本；此处占位仅为满足 uv 对 [project].version 的解析要求。
+version = "0"
 description = "Standalone signer service for Xcash."
 requires-python = "==3.13.*"
 dependencies = [
     "django==5.2.12",
     "django-environ==0.13.0",
-    "djangorestframework==3.16.1",
+    "djangorestframework==3.17.1",
     "django-redis==6.0.0",
-    "redis==7.2.1",
-    "hiredis==3.3.0",
-    "web3==7.14.1",
-    "bip-utils==2.9.3",
-    "cryptography==46.0.5",
+    "redis==7.4.0",
+    "hiredis==3.3.1",
+    "web3==7.16.0",
+    "bip-utils==2.12.1",
+    "cryptography==48.0.0",
 ]
 
 [dependency-groups]
@@ -23,7 +27,7 @@ dev = [
     "pytest-django==4.11.1",
 ]
 production = [
-    "psycopg[c]==3.3.2",
+    "psycopg[c]==3.3.4",
     "gunicorn==23.0.0",
 ]
 

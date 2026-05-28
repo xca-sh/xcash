@@ -854,7 +854,6 @@ class Transfer(models.Model):
         max_length=32,
         blank=True,
         default="",
-        db_index=True,
     )
 
     crypto = models.ForeignKey(

@@ -3,25 +3,25 @@ package = false
 
 [project]
 name = "xcash"
-version = "0.1.0"
+version = "0.5.1"
 description = "Open-source self-hosted cryptocurrency payment gateway. Accept USDT, ETH. Zero platform fees, 100+ blockchains, Docker deploy, full self-custody."
 requires-python = "==3.13.*"
 dependencies = [
-    "web3==7.14.1",
+    "web3==7.16.0",
     "base58==2.1.1",
-    "bip-utils==2.9.3",
+    "bip-utils==2.12.1",
     "redis==7.4.0",
     "hiredis==3.3.1",
-    "cryptography==46.0.7",
+    "cryptography==48.0.0",
     "ulid-py==1.1.0",
     "argon2-cffi==25.1.0",
     "shortuuid==1.0.13",
     "httpx==0.28.1",
     # Django
-    "django==5.2.12",
+    "django==5.2.14",
     "django-environ==0.13.0",
     "django-model-utils==5.0.0",
-    "django-unfold==0.92.0",
+    "django-unfold==0.94.0",
     "django-sequences==3.0",
     "djangorestframework==3.17.1",
     "drf-extensions==0.8.0",
@@ -69,6 +69,7 @@ dev = [
     "django-debug-toolbar==6.2.0",
     "django-coverage-plugin==3.2.0",
     "pytest-django==4.12.0",
+    "vulture>=2.16",
 ]
 production = [
     "psycopg[c]==3.3.4",
