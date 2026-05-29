@@ -41,12 +41,11 @@ class Withdrawal(models.Model):
         on_delete=models.CASCADE,
         verbose_name=_("项目"),
     )
+    # 提币创建时必须指定目标链（API 入口强制传入），链信息不再允许缺省。
     chain = models.ForeignKey(
         "chains.Chain",
         on_delete=models.PROTECT,
         verbose_name=_("链"),
-        blank=True,
-        null=True,
     )
     out_no = models.CharField(_("商户单号"), max_length=128)
     to = AddressField(verbose_name=_("收币地址"))

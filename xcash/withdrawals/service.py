@@ -53,7 +53,7 @@ class WithdrawalService:
         data = {
             "sys_no": withdrawal.sys_no,
             "out_no": withdrawal.out_no,
-            "chain": withdrawal.chain.code if withdrawal.chain else "",
+            "chain": withdrawal.chain.code,
             "hash": (
                 withdrawal.tx_task.tx_hash if withdrawal.tx_task_id else withdrawal.hash
             ),
@@ -344,8 +344,6 @@ class WithdrawalService:
         chain = withdrawal.chain
         crypto = withdrawal.crypto
         amount = withdrawal.amount
-        if chain is None:
-            raise ValueError(f"提币缺少链信息：withdrawal_id={withdrawal.pk}")
 
         vault_address = project.wallet.get_address(
             chain_type=chain.type,
@@ -438,7 +436,7 @@ class WithdrawalService:
         """每次审核决策都必须落审计日志，便于运营追溯与责任定位。"""
         snapshot = {
             "out_no": withdrawal.out_no,
-            "chain": withdrawal.chain.code if withdrawal.chain_id else "",
+            "chain": withdrawal.chain.code,
             "crypto": withdrawal.crypto.symbol,
             "amount": str(withdrawal.amount),
             "worth": str(withdrawal.worth),
@@ -615,14 +613,10 @@ class WithdrawalService:
         except Withdrawal.DoesNotExist:
             return False
 
-        # 记录需要额外写入的字段（chain 为 None 时才加入）
         update_fields = ["transfer", "updated_at"]
 
-        if withdrawal.chain_id is None:
-            # chain 在广播时已由 viewset 赋值，此处兜底补全
-            withdrawal.chain = transfer.chain
-            update_fields.append("chain")
-        elif withdrawal.chain_id != transfer.chain_id:
+        # 提币 chain 在创建时已强制写入，链不一致即视为错配，直接忽略。
+        if withdrawal.chain_id != transfer.chain_id:
             logger.warning(
                 "链不匹配，忽略提币匹配",
                 withdrawal_id=withdrawal.id,
@@ -632,7 +626,7 @@ class WithdrawalService:
             )
             return False
 
-        expected_chain = withdrawal.chain or transfer.chain
+        expected_chain = withdrawal.chain
         expected_value = raw_amount(
             amount=withdrawal.amount,
             crypto=withdrawal.crypto,

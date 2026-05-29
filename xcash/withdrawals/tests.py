@@ -2051,29 +2051,6 @@ class WithdrawalTryMatchTests(TestCase):
         self.assertEqual(transfer.type, TransferType.Withdrawal)
 
     @patch("chains.tasks.process_transfer.apply_async")
-    def test_match_backfills_chain_when_null(self, _process_mock):
-        """提币单 chain 为 None 时，匹配成功后应从 transfer 回填链信息。"""
-        tx_hash = self._next_hash()
-        tx_task = self._make_tx_task(tx_hash=tx_hash)
-        Withdrawal.objects.create(
-            project=self.project,
-            out_no="match-backfill-chain",
-            chain=None,
-            crypto=self.crypto,
-            amount=Decimal("1"),
-            to="0x0000000000000000000000000000000000000002",
-            tx_task=tx_task,
-            hash=tx_hash,
-        )
-        transfer = self._make_transfer(tx_hash=tx_hash)
-
-        result = WithdrawalService.try_match_withdrawal(transfer, tx_task)
-        self.assertTrue(result)
-
-        withdrawal = Withdrawal.objects.get(out_no="match-backfill-chain")
-        self.assertEqual(withdrawal.chain, self.chain)
-
-    @patch("chains.tasks.process_transfer.apply_async")
     def test_match_success_with_old_tx_hash_history(self, _process_mock):
         old_hash = self._next_hash()
         tx_task = self._make_tx_task(tx_hash=old_hash)
