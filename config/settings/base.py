@@ -31,6 +31,14 @@ REDIS_DB = env.int("REDIS_DB", default=0)
 REDIS_URL = env.str(
     "REDIS_URL", default=f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 )
+# 缓存与 broker 共用同一 Redis 实例但分逻辑库：broker 在 REDIS_DB（默认 0），
+# 缓存独占 REDIS_CACHE_DB（默认 1）。Redis 的 maxmemory 淘汰策略是实例级、无法按库隔离，
+# 实例侧统一配 volatile-lru：只淘汰带 TTL 的临时缓存键，broker 任务键（无 TTL）与
+# timeout=None 的配置型缓存（watch set / runtime settings / 权限）天然豁免，永不被淘汰。
+REDIS_CACHE_DB = env.int("REDIS_CACHE_DB", default=1)
+REDIS_CACHE_URL = env.str(
+    "REDIS_CACHE_URL", default=f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_CACHE_DB}"
+)
 
 # Internal API
 # ------------------------------------------------------------------------------
@@ -321,7 +329,7 @@ MANAGERS = ADMINS
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": REDIS_URL,
+        "LOCATION": REDIS_CACHE_URL,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         },

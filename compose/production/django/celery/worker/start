@@ -9,8 +9,11 @@ eval "$(python /app/config/performance.py shell-env worker)"
 /app/compose/production/django/check-signer-preflight
 
 
+# 默认用 prefork 池：CELERY_WORKER_MAX_MEMORY_PER_CHILD / MAX_TASKS_PER_CHILD
+# 只对 prefork 生效，threads 池是单进程多线程、无 child 可回收，worker 内存只增不减。
+# 扫链/广播任务均为 RPC IO 密集，prefork + concurrency 控制完全够用。
 exec celery -A config.celery worker \
   -l WARNING \
   -Q "${CELERY_WORKER_QUEUES:-celery,scan}" \
-  --pool="${CELERY_WORKER_POOL:-threads}" \
+  --pool="${CELERY_WORKER_POOL:-prefork}" \
   --concurrency="${CELERY_WORKER_CONCURRENCY}"

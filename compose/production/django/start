@@ -15,9 +15,14 @@ python manage.py migrate --check
 
 /app/compose/production/django/check-signer-preflight
 
+# --max-requests + jitter：worker 处理满额请求后优雅重启，周期性回收常驻内存
+# （ORM/模板/三方库缓存累积），避免 gthread worker 长期运行内存只增不减。
+# jitter 打散重启时点，防止所有 worker 同时回收造成瞬时拒服。
 exec gunicorn config.wsgi:application \
   --bind 0.0.0.0:8000 \
   --chdir=/app \
   --worker-class gthread \
   --workers "${GUNICORN_WORKERS}" \
-  --threads "${GUNICORN_THREADS}"
+  --threads "${GUNICORN_THREADS}" \
+  --max-requests 1000 \
+  --max-requests-jitter 200
