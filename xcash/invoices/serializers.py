@@ -7,8 +7,6 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.serializers import Serializer
 
-from chains.models import Chain
-from chains.models import ChainType
 from chains.serializers import TransferSerializer
 from chains.service import ChainService
 from common.consts import APPID_HEADER
@@ -99,22 +97,26 @@ class InvoiceCreateSerializer(Serializer):
             )
         return self._project
 
-    def validate_methods(self, value):  # noqa
-        project = self._get_project()
+    def finalize_methods(self, *, project, billing_mode, requested):
+        """按 billing_mode 生成/收敛最终 methods——账单可付组合的唯一真源。
 
-        available_methods = Invoice.available_methods(project)
-
-        if not available_methods:
+        available_methods(project, billing_mode) 已是该模式下真正可付的 crypto→链集合
+        （合约需 vault 且仅 EVM；差额需对应 chain_type 的收款地址）。
+        - 商户未传 methods → 直接采用全部可用方式（系统按 billing_mode 动态生成）。
+        - 商户传了 methods → 与可用集合逐项求交集校验，任何越界组合直接拒绝。
+        """
+        available = Invoice.available_methods(project, billing_mode)
+        if not available:
             raise APIError(ErrorCode.NO_RECIPIENT_ADDRESS)
 
-        if not value:
-            return available_methods
+        if not requested:
+            return available
 
-        if not isinstance(value, dict):
+        if not isinstance(requested, dict):
             raise APIError(ErrorCode.PARAMETER_ERROR, detail="methods")
 
         sanitized: dict[str, list[str]] = {}
-        for crypto_symbol, chain_codes in value.items():
+        for crypto_symbol, chain_codes in requested.items():
             if not isinstance(chain_codes, (list, tuple)):
                 raise APIError(ErrorCode.PARAMETER_ERROR, detail=crypto_symbol)
 
@@ -123,14 +125,14 @@ class InvoiceCreateSerializer(Serializer):
             except ObjectDoesNotExist as exc:
                 raise APIError(ErrorCode.INVALID_CRYPTO, detail=crypto_symbol) from exc
 
-            available_chains = set(available_methods.get(crypto_symbol, []))
+            available_chains = set(available.get(crypto_symbol, []))
             if not available_chains:
                 raise APIError(ErrorCode.NO_RECIPIENT_ADDRESS, detail=crypto_symbol)
 
             normalized_codes: list[str] = []
             for chain_code in chain_codes:
                 if not isinstance(chain_code, str):
-                    raise APIError(ErrorCode.PARAMETER_ERROR, detail=f"{crypto_symbol}")
+                    raise APIError(ErrorCode.PARAMETER_ERROR, detail=crypto_symbol)
 
                 try:
                     ChainService.get_by_code(chain_code)
@@ -173,64 +175,23 @@ class InvoiceCreateSerializer(Serializer):
         ):
             raise APIError(ErrorCode.TOO_MANY_WAITING)
 
+        # billing_mode 决定可付组合：合约（EVM+vault）与差额（对应 chain_type 收款地址）
+        # 各自的可用方式不同，最终 methods 由 finalize_methods 按模式动态生成/收敛。
+        attrs["methods"] = self.finalize_methods(
+            project=project,
+            billing_mode=attrs.get("billing_mode", InvoiceBillingMode.DIFFER),
+            requested=attrs.get("methods") or {},
+        )
+
+        # 计价货币为加密货币时，账单只为该币种收款，methods 收敛到单一币种。
         if CryptoService.exists(attrs["currency"]):
             currency = attrs["currency"]
-            methods = attrs["methods"].get(currency, [])
-            if not methods:
+            chains = attrs["methods"].get(currency, [])
+            if not chains:
                 raise APIError(ErrorCode.NO_AVAILABLE_METHOD)
-            attrs["methods"] = {currency: methods}
-
-        if attrs.get("billing_mode") == InvoiceBillingMode.CONTRACT:
-            self._validate_contract_billing(attrs)
-        elif attrs.get("billing_mode") == InvoiceBillingMode.DIFFER:
-            self._validate_differ_billing(attrs)
+            attrs["methods"] = {currency: chains}
 
         return attrs
-
-    def _validate_contract_billing(self, attrs):
-        methods = attrs.get("methods") or {}
-
-        chain_codes = {
-            chain_code for chain_codes in methods.values() for chain_code in chain_codes
-        }
-        chains = list(Chain.objects.filter(code__in=chain_codes, active=True))
-        if not chains:
-            raise APIError(ErrorCode.CONTRACT_BILLING_EVM_ONLY)
-
-        chains_by_chain = {chain.code: chain for chain in chains}
-        if any(
-            chain_code not in chains_by_chain
-            or chains_by_chain[chain_code].type != ChainType.EVM
-            for chain_code in chain_codes
-        ):
-            raise APIError(ErrorCode.CONTRACT_BILLING_EVM_ONLY)
-
-        for crypto_symbol, chain_codes in methods.items():
-            crypto = CryptoService.get_by_symbol(crypto_symbol)
-            for chain_code in chain_codes:
-                chain = chains_by_chain[chain_code]
-                if not crypto.support_this_chain(chain):
-                    raise APIError(ErrorCode.CHAIN_CRYPTO_NOT_SUPPORT)
-
-    def _validate_differ_billing(self, attrs):
-        # 差额账单依赖商户配置的差额账单收款地址；新架构下 EVM 一律走 VaultSlot，
-        # 差额模式只对 Tron 这类没有合约收款方案的链有意义。
-        methods = attrs.get("methods") or {}
-
-        chain_codes = {
-            chain_code for chain_codes in methods.values() for chain_code in chain_codes
-        }
-        chains = list(Chain.objects.filter(code__in=chain_codes, active=True))
-        if not chains:
-            raise APIError(ErrorCode.DIFFER_BILLING_TRON_ONLY)
-
-        chains_by_chain = {chain.code: chain for chain in chains}
-        if any(
-            chain_code not in chains_by_chain
-            or chains_by_chain[chain_code].type != ChainType.TRON
-            for chain_code in chain_codes
-        ):
-            raise APIError(ErrorCode.DIFFER_BILLING_TRON_ONLY)
 
 
 class InvoicePublicSerializer(serializers.ModelSerializer):

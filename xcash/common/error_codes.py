@@ -70,12 +70,6 @@ class ErrorCode(Enum):
     NO_AVAILABLE_METHOD = ErrorInfo("5010", _("无效的支付方式"), 400)
     INVOICE_NOT_EXIST = ErrorInfo("5011", _("账单不存在"), 400)
     INVOICE_EXPIRED = ErrorInfo("5012", _("账单已过期"), 400)
-    CONTRACT_BILLING_EVM_ONLY = ErrorInfo(
-        "5014", _("合约账单仅支持 EVM 链"), 400
-    )
-    DIFFER_BILLING_TRON_ONLY = ErrorInfo(
-        "5016", _("差额账单仅支持 Tron 链"), 400
-    )
 
     # Internal API
     INVALID_INTERNAL_TOKEN = ErrorInfo("6000", _("内部API令牌无效"), 401)

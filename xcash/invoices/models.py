@@ -189,18 +189,33 @@ class Invoice(models.Model):
         return CryptoService.exists(self.currency)
 
     @classmethod
-    def available_methods(cls, project: Project) -> dict[str, list[str]]:
-        """返回项目当前可用的 crypto→链列表。
+    def available_methods(
+        cls,
+        project: Project,
+        billing_mode: str = InvoiceBillingMode.DIFFER,
+    ) -> dict[str, list[str]]:
+        """返回项目在指定 billing_mode 下可用的 crypto→链列表，是「最终 methods」的唯一生成器。
 
-        逻辑 = 系统支持的 invoice (crypto, chain) 组合 ∩ 项目已配置差额账单收款地址的链 ∩ SaaS 白名单。
+        买家在 select_method 时只校验 (crypto, chain) 是否在 invoice.methods 内、不再按
+        billing_mode 复检（select_method 直接按 billing_mode 分配），故这里产出的组合必须是
+        该 billing_mode 下真正可付的——否则买家会选中一个无法分配的组合。
+
+        逻辑 = 系统支持的 invoice (crypto, chain) 组合 ∩ 该 billing_mode 下项目可收款的链
+              ∩ SaaS 白名单。
+        - CONTRACT：仅 EVM 链，且项目已设 vault（见 contract_receivable_chain_codes）。
+        - DIFFER：项目已配 DifferRecipientAddress 的 chain_type 对应的链（EVM/Tron 通用）。
         """
-        receivable_codes = ProjectService.receivable_chain_codes(project)
+        if billing_mode == InvoiceBillingMode.CONTRACT:
+            receivable_codes = ProjectService.contract_receivable_chain_codes(project)
+        else:
+            receivable_codes = ProjectService.differ_receivable_chain_codes(project)
+
+        # allowed_methods 已按 chain_codes=receivable_codes 收敛查询，返回的每个 symbol 的
+        # 链集合必为 receivable_codes 子集且非空——故此处无需再做交集或空集过滤。
         allowed = CryptoService.allowed_methods(chain_codes=receivable_codes)
 
         methods = {
-            symbol: sorted(allowed[symbol] & receivable_codes)
-            for symbol in allowed
-            if allowed[symbol] & receivable_codes
+            symbol: sorted(chain_codes) for symbol, chain_codes in allowed.items()
         }
 
         return filter_saas_allowed_methods(

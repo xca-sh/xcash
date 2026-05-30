@@ -39,6 +39,7 @@ from invoices.models import Invoice
 from invoices.models import InvoiceBillingMode
 from invoices.models import InvoiceProtocol
 from invoices.models import InvoiceStatus
+from invoices.serializers import InvoiceCreateSerializer
 from invoices.service import InvoiceService
 from invoices.tasks import check_expired
 from invoices.tasks import fallback_invoice_expired
@@ -667,6 +668,40 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
         self.assertEqual(methods["USDT"], [tron_chain.code])
         self.assertNotIn("USDC", methods)
 
+    def test_contract_available_methods_exposes_evm_for_vault_project(self):
+        # 合约模式（CONTRACT）：项目设置了 vault 但没有任何差额收款地址。合约收款走
+        # VaultSlot，不依赖 DifferRecipientAddress，故 EVM 链币组合在合约模式下可用。
+        project = Project.objects.create(
+            name="Invoice Contract Only Project",
+            wallet=Wallet.objects.create(),
+            vault="0x0000000000000000000000000000000000008801",
+        )
+        usdt = Crypto.objects.create(
+            name="Tether USD EVM",
+            symbol="USDTEVMCO",
+            coingecko_id="tether-evm-contract-only",
+        )
+        eth_chain = Chain.objects.create(
+            code=ChainCode.Ethereum,
+            rpc="",
+            active=True,
+        )
+        ChainToken.objects.create(
+            crypto=usdt,
+            chain=eth_chain,
+            address="0x0000000000000000000000000000000000008802",
+            decimals=6,
+        )
+
+        contract_methods = Invoice.available_methods(
+            project, InvoiceBillingMode.CONTRACT
+        )
+        differ_methods = Invoice.available_methods(project, InvoiceBillingMode.DIFFER)
+
+        self.assertEqual(contract_methods[usdt.symbol], [eth_chain.code])
+        # 没配差额收款地址 → 差额模式无可用方式。
+        self.assertEqual(differ_methods, {})
+
     @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="xcash-saas-token")
     def test_available_methods_filters_by_cached_saas_chain_crypto_whitelist(self):
         project = Project.objects.create(
@@ -786,6 +821,223 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
         methods = Invoice.available_methods(project)
 
         self.assertEqual(set(methods[usdt.symbol]), {eth_chain.code, bsc_chain.code})
+
+    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="xcash-saas-token")
+    def test_available_methods_saas_chain_whitelist_is_case_insensitive(self):
+        # SaaS 侧返回的链 code 大小写不保证与系统一致；归一后比对，避免组合被静默过滤。
+        project = Project.objects.create(
+            name="Invoice SaaS Case Insensitive Project",
+            wallet=Wallet.objects.create(),
+        )
+        eth_chain = Chain.objects.create(
+            code=ChainCode.Ethereum,
+            rpc="",
+            active=True,
+        )
+        usdt = Crypto.objects.create(
+            name="USDT SaaS Case",
+            symbol="USDTSAASCI",
+            coingecko_id="usdt-saas-case-insensitive",
+        )
+        ChainToken.objects.create(
+            crypto=usdt,
+            chain=eth_chain,
+            address="0x0000000000000000000000000000000000009931",
+            decimals=6,
+        )
+        DifferRecipientAddress.objects.create(
+            name="evm-pay",
+            project=project,
+            chain_type=ChainType.EVM,
+            address="0x0000000000000000000000000000000000009932",
+        )
+        cache.set(
+            f"saas:permission:{project.appid}",
+            {
+                "frozen": False,
+                "enable_deposit_withdrawal": True,
+                "allowed_chain_codes": [eth_chain.code.upper()],
+                "allowed_crypto_symbols": [usdt.symbol],
+            },
+            None,
+        )
+
+        methods = Invoice.available_methods(project)
+
+        self.assertEqual(methods[usdt.symbol], [eth_chain.code])
+
+
+class InvoiceDifferBillingValidationTests(TestCase):
+    """差额账单链类型校验：差额模式可用性取决于项目是否为该 chain_type 配了差额收款地址，
+    而非硬绑 Tron——EVM 同样可以走差额模式。"""
+
+    def setUp(self):
+        cache.clear()
+        self.factory = APIRequestFactory()
+        self.eth_chain = Chain.objects.create(
+            code=ChainCode.Ethereum,
+            rpc="",
+            active=True,
+        )
+        self.usdt = Crypto.objects.create(
+            name="USDT EVM Differ",
+            symbol="USDTEVMD",
+            coingecko_id="usdt-evm-differ-billing",
+        )
+        ChainToken.objects.create(
+            crypto=self.usdt,
+            chain=self.eth_chain,
+            address="0x0000000000000000000000000000000000007701",
+            decimals=6,
+        )
+
+    def build_serializer(self, project):
+        request = self.factory.post(
+            "/invoices",
+            {},
+            format="json",
+            HTTP_XC_APPID=project.appid,
+        )
+        data = {
+            "out_no": "differ-evm-order",
+            "title": "differ evm",
+            "currency": self.usdt.symbol,
+            "amount": "10",
+            "methods": {self.usdt.symbol: [self.eth_chain.code]},
+            "billing_mode": InvoiceBillingMode.DIFFER,
+        }
+        return InvoiceCreateSerializer(data=data, context={"request": request})
+
+    def test_evm_differ_allowed_when_recipient_address_configured(self):
+        # 配了 EVM 差额收款地址 → EVM 链可走差额模式，校验通过。
+        project = Project.objects.create(
+            name="EVM Differ With Recipient",
+            wallet=Wallet.objects.create(),
+        )
+        DifferRecipientAddress.objects.create(
+            name="evm-pay",
+            project=project,
+            chain_type=ChainType.EVM,
+            address="0x0000000000000000000000000000000000007702",
+        )
+
+        serializer = self.build_serializer(project)
+
+        self.assertTrue(serializer.is_valid(raise_exception=True))
+
+    def test_evm_differ_rejected_without_recipient_address(self):
+        # 只设了 vault（合约收款）但没配差额收款地址：available_methods 仍会因合约路径暴露
+        # EVM，但差额模式缺少收款地址无法分配，必须在校验阶段拒绝。
+        project = Project.objects.create(
+            name="EVM Vault Only",
+            wallet=Wallet.objects.create(),
+            vault="0x0000000000000000000000000000000000007703",
+        )
+
+        serializer = self.build_serializer(project)
+
+        with self.assertRaises(APIError) as ctx:
+            serializer.is_valid(raise_exception=True)
+        self.assertEqual(ctx.exception.error_code, ErrorCode.NO_RECIPIENT_ADDRESS)
+
+
+class InvoiceContractBillingValidationTests(TestCase):
+    """合约账单的最终 methods 生成：CONTRACT 模式只暴露 EVM 链，默认 methods 自动过滤掉
+    Tron（而非报错），是「系统按 billing_mode 动态生成最终 methods」的核心行为。"""
+
+    def setUp(self):
+        cache.clear()
+        self.factory = APIRequestFactory()
+        # 同时配了 Tron 差额地址和 vault 的多链商户。
+        self.project = Project.objects.create(
+            name="Invoice Mixed Billing Project",
+            wallet=Wallet.objects.create(),
+            vault="0x0000000000000000000000000000000000007801",
+        )
+        DifferRecipientAddress.objects.create(
+            name="tron-pay",
+            project=self.project,
+            chain_type=ChainType.TRON,
+            address="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+        )
+        # Tron 能力规则（supports_existing_invoice_method）限定 Tron 上只放行 USDT，
+        # 故混合多链场景必须用真实 USDT 符号，Tron 侧才会出现在可用方式里。
+        self.usdt = Crypto.objects.create(
+            name="Tether USD",
+            symbol="USDT",
+            coingecko_id="usdt-mixed-billing",
+        )
+        self.eth_chain = Chain.objects.create(
+            code=ChainCode.Ethereum, rpc="", active=True
+        )
+        self.tron_chain = Chain.objects.create(
+            code=ChainCode.Tron, rpc="http://tron.invalid", active=True
+        )
+        ChainToken.objects.create(
+            crypto=self.usdt,
+            chain=self.eth_chain,
+            address="0x0000000000000000000000000000000000007802",
+            decimals=6,
+        )
+        ChainToken.objects.create(
+            crypto=self.usdt,
+            chain=self.tron_chain,
+            address="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+            decimals=6,
+        )
+
+    def build_serializer(self, *, methods, billing_mode):
+        request = self.factory.post(
+            "/invoices",
+            {},
+            format="json",
+            HTTP_XC_APPID=self.project.appid,
+        )
+        data = {
+            "out_no": "contract-order",
+            "title": "contract",
+            "currency": self.usdt.symbol,
+            "amount": "10",
+            "methods": methods,
+            "billing_mode": billing_mode,
+        }
+        return InvoiceCreateSerializer(data=data, context={"request": request})
+
+    def test_default_methods_contract_filters_out_tron(self):
+        # 不传 methods + CONTRACT：系统应自动生成 EVM-only 的最终 methods，
+        # Tron 被过滤掉而不是抛错（修复并集 + reject 导致的误报）。
+        serializer = self.build_serializer(
+            methods={}, billing_mode=InvoiceBillingMode.CONTRACT
+        )
+
+        self.assertTrue(serializer.is_valid(raise_exception=True))
+        self.assertEqual(
+            serializer.validated_data["methods"],
+            {self.usdt.symbol: [self.eth_chain.code]},
+        )
+
+    def test_default_methods_differ_filters_out_evm(self):
+        # 同一项目走差额：差额收款地址只配了 Tron，故默认 methods 只含 Tron。
+        serializer = self.build_serializer(
+            methods={}, billing_mode=InvoiceBillingMode.DIFFER
+        )
+
+        self.assertTrue(serializer.is_valid(raise_exception=True))
+        self.assertEqual(
+            serializer.validated_data["methods"],
+            {self.usdt.symbol: [self.tron_chain.code]},
+        )
+
+    def test_explicit_tron_under_contract_rejected(self):
+        # 显式要求 Tron 走合约 → 合约模式不支持 Tron，拒绝。
+        serializer = self.build_serializer(
+            methods={self.usdt.symbol: [self.tron_chain.code]},
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+
+        with self.assertRaises(APIError) as ctx:
+            serializer.is_valid(raise_exception=True)
+        self.assertEqual(ctx.exception.error_code, ErrorCode.NO_RECIPIENT_ADDRESS)
 
 
 class InvoiceConfirmDropStatusTests(TestCase):

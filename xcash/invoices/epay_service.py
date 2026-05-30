@@ -22,6 +22,7 @@ from .epay_serializers import EpaySubmitSerializer
 from .models import EpayMerchant
 from .models import EpayOrder
 from .models import Invoice
+from .models import InvoiceBillingMode
 from .models import InvoiceProtocol
 from .models import InvoiceStatus
 from .service import InvoiceService
@@ -146,7 +147,9 @@ class EpaySubmitService:
         raw_request: dict[str, str],
     ) -> Invoice:
         project = merchant.project
-        methods = Invoice.available_methods(project)
+        # EPay V1 账单不传 billing_mode，落库即模型默认 DIFFER；methods 必须按差额模式
+        # 生成，否则会混入仅合约可付的 EVM 链，买家选中后差额分配必失败。
+        methods = Invoice.available_methods(project, InvoiceBillingMode.DIFFER)
         if not methods:
             raise EpaySubmitError("no available payment methods")
 

@@ -165,6 +165,13 @@ def filter_saas_allowed_methods(
         if allowed_crypto_symbols is not None
         else None
     )
+    # 系统 Chain.code 统一小写（ethereum/bsc/tron…）。SaaS 侧白名单大小写不保证一致，
+    # 故归一到小写后再比对，避免大小写差异导致链币组合被静默过滤掉。
+    allowed_chain_set = (
+        {str(code).lower() for code in allowed_chain_codes}
+        if allowed_chain_codes is not None
+        else None
+    )
 
     filtered: dict[str, list[str]] = {}
     for symbol, chain_codes in methods.items():
@@ -173,7 +180,7 @@ def filter_saas_allowed_methods(
         available_chain_codes = [
             code
             for code in chain_codes
-            if allowed_chain_codes is None or code in allowed_chain_codes
+            if allowed_chain_set is None or code.lower() in allowed_chain_set
         ]
         if available_chain_codes:
             filtered[symbol] = available_chain_codes

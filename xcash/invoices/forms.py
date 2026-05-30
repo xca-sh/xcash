@@ -16,6 +16,7 @@ from currencies.service import FiatService
 from projects.models import Project
 
 from .models import Invoice
+from .models import InvoiceBillingMode
 from .widgets import CurrencySelectWidget
 
 DEFAULT_MANUAL_DURATION_MINUTES = 10
@@ -127,7 +128,9 @@ class ManualInvoiceAdminForm(forms.ModelForm):
         return {
             symbol.upper()
             for candidate in project_field.queryset
-            for symbol in Invoice.available_methods(candidate)
+            for symbol in Invoice.available_methods(
+                candidate, InvoiceBillingMode.DIFFER
+            )
         }
 
     def _build_currency_field(
@@ -200,7 +203,12 @@ class ManualInvoiceAdminForm(forms.ModelForm):
 
     @staticmethod
     def _available_symbols(project: Project) -> set[str]:
-        return {symbol.upper() for symbol in Invoice.available_methods(project)}
+        # 手动建单（ManualInvoiceAdminForm）不暴露 billing_mode，落库即模型默认 DIFFER，
+        # 故按差额模式列出可选币种。
+        return {
+            symbol.upper()
+            for symbol in Invoice.available_methods(project, InvoiceBillingMode.DIFFER)
+        }
 
     def _build_choice_group(
         self,
@@ -289,7 +297,8 @@ class ManualInvoiceAdminForm(forms.ModelForm):
         if not project or not currency:
             return cleaned_data
 
-        available_methods = Invoice.available_methods(project)
+        # 手动建单恒为模型默认 DIFFER，methods 按差额模式生成。
+        available_methods = Invoice.available_methods(project, InvoiceBillingMode.DIFFER)
         if not available_methods:
             raise forms.ValidationError(
                 _("当前项目暂无可用支付方式。请确保已设置差额账单收款地址。")
