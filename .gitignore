@@ -11,6 +11,8 @@ __pycache__/
 # 根目录 docker-compose.yml 作为公开自托管入口，需要纳入版本控制。
 scripts/merchant_hmac/
 business-plan/
+# upgrade.sh 生成的升级前数据库备份（含生产数据），绝不可入库。
+backups/
 
 
 # AI tools

@@ -8,9 +8,18 @@ ENV_FILE="${ENV_FILE:-.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 UPGRADE_REF="${1:-${UPGRADE_REF:-main}}"
 SKIP_GIT_PULL="${SKIP_GIT_PULL:-false}"
-# 默认空字符串 → 触发交互确认；显式传 true/false 可覆盖默认。
-STOP_BEFORE_REHEARSAL="${STOP_BEFORE_REHEARSAL:-}"
+# 默认在线 dump（不停机生成演练数据，缩短停机窗口、提升升级体验）：dump 期间
+# django/worker/beat 继续服务，仅在 production migrate 前才停机。
+# 代价：dump 时刻到停机时刻之间的新写入不在备份内，production migrate 失败回滚
+# 会丢这段增量。要求"备份即上线前最后状态、回滚零丢失"时显式设
+# STOP_BEFORE_REHEARSAL=true 走停机 dump（停机更久）。
+STOP_BEFORE_REHEARSAL="${STOP_BEFORE_REHEARSAL:-false}"
 UPGRADE_LOCK_FILE="${UPGRADE_LOCK_FILE:-/tmp/xcash-upgrade.lock}"
+# 升级前数据库备份目录：production migrate 一旦中途失败，这份 dump 是回滚到升级前
+# 状态的唯一依据，必须落在 TMP_DIR 之外、不随脚本退出清理。.gitignore 已忽略 backups/。
+BACKUP_DIR="${BACKUP_DIR:-./backups}"
+# postgres 就绪等待上限（秒）：避免 DB 起不来时在持有升级锁的情况下无限 hang。
+POSTGRES_WAIT_TIMEOUT="${POSTGRES_WAIT_TIMEOUT:-120}"
 
 # cleanup 需要区分失败发生在哪个阶段：
 # - production migrate 前：production 库未被触碰，只恢复本脚本停过的旧容器
@@ -19,8 +28,11 @@ UPGRADE_LOCK_FILE="${UPGRADE_LOCK_FILE:-/tmp/xcash-upgrade.lock}"
 LOCK_ACQUIRED=false
 APP_SERVICES_STOP_REQUESTED=false
 APP_SERVICES_TO_RESTORE=()
+REHEARSAL_IN_PROGRESS=false
 PRODUCTION_MIGRATE_STARTED=false
 PRODUCTION_MIGRATE_COMPLETED=false
+# 升级前备份文件路径，dump 时赋值；cleanup 在 nounset 下引用，故先声明为空。
+MAIN_DUMP=""
 
 COMPOSE=(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}")
 REHEARSAL_COMPOSE=(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile migration-rehearsal)
@@ -57,11 +69,24 @@ cleanup() {
     if [[ "${PRODUCTION_MIGRATE_STARTED}" == "true" && "${PRODUCTION_MIGRATE_COMPLETED}" != "true" ]]; then
       printf '\n[upgrade] WARNING: production migrate was in progress when failure occurred.\n' >&2
       printf '[upgrade] NOT restarting services automatically — DB may be mid-migration.\n' >&2
-      printf '[upgrade] Verify schema manually, then resume with: docker compose up -d\n' >&2
+      if [[ -n "${MAIN_DUMP}" && -f "${MAIN_DUMP}" ]]; then
+        printf '[upgrade] 升级前备份已保留：%s\n' "${MAIN_DUMP}" >&2
+        printf '[upgrade] 回滚方向：停业务服务 → 将 django-db 重置为空库 → 用该 dump 执行 pg_restore。\n' >&2
+        printf '[upgrade] 先看上方迁移报错，判断是修正后前滚（fix-forward）还是回滚到此备份。\n' >&2
+      else
+        printf '[upgrade] WARNING: 未找到升级前备份，回滚需依赖你的外部备份。\n' >&2
+      fi
+      printf '[upgrade] 核对/恢复 schema 后，再用 docker compose up -d 拉起服务。\n' >&2
     elif [[ "${PRODUCTION_MIGRATE_COMPLETED}" == "true" ]]; then
       printf '\n[upgrade] failure after production migrations completed; starting services on migrated schema\n' >&2
       run_cleanup_command "start services on migrated schema" \
         "${COMPOSE[@]}" up -d --remove-orphans
+    elif [[ "${REHEARSAL_IN_PROGRESS}" == "true" ]]; then
+      print_rehearsal_failure_help
+      if [[ "${APP_SERVICES_STOP_REQUESTED}" == "true" ]]; then
+        printf '[upgrade] restoring app services stopped before rehearsal\n' >&2
+        restore_pre_migration_services
+      fi
     elif [[ "${APP_SERVICES_STOP_REQUESTED}" == "true" ]]; then
       printf '\n[upgrade] failure before production migrate; restoring previously stopped app services\n' >&2
       restore_pre_migration_services
@@ -127,8 +152,21 @@ wait_for_postgres() {
   fi
 
   log "wait for ${service}"
-  "${compose[@]}" exec -T "${service}" sh -c \
-    'until pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; do sleep 1; done'
+  # 就绪探测【必须走 TCP（-h 127.0.0.1）】，不能用 pg_isready 默认的 Unix socket：
+  # postgres 官方镜像首次初始化会先起一个【仅监听 socket、不监听 TCP】的临时实例跑
+  # 建库脚本，再停掉它、重启为正式实例。socket 版 pg_isready 会在临时实例阶段就报
+  # 就绪，导致随后经 TCP 连接的 restore/migrate 撞上"临时实例→正式实例"切换窗口而
+  # 偶发失败。临时实例不监听 TCP，故 -h 127.0.0.1 探测只有正式实例起来后才成功，
+  # 天然规避该竞态。叠加超时上限，避免 DB 起不来时在持锁状态下无限 hang。
+  "${compose[@]}" exec -T -e WAIT_TIMEOUT="${POSTGRES_WAIT_TIMEOUT}" "${service}" sh -c '
+    deadline=$(( $(date +%s) + WAIT_TIMEOUT ))
+    until pg_isready -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; do
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        echo "pg_isready timed out after ${WAIT_TIMEOUT}s waiting for TCP readiness" >&2
+        exit 1
+      fi
+      sleep 1
+    done'
 }
 
 dump_main_database() {
@@ -214,43 +252,19 @@ compare_plans() {
   fi
 }
 
-# 默认停机演练：dump 前先停 django/worker/beat/signer，让演练库快照与
-# production migrate 时刻完全一致；用户输入 n/no 才走"在线 dump"模式
-# （停机时长更短，但演练快照与上线时刻数据可能不一致，data migration 风险更高）。
-# 非交互场景（无 TTY 且未显式设 STOP_BEFORE_REHEARSAL）一律默认停机，安全优先。
-resolve_stop_before_rehearsal() {
-  if [[ "${STOP_BEFORE_REHEARSAL}" == "true" ]]; then
-    log "STOP_BEFORE_REHEARSAL=true; will stop app services before rehearsal dump"
-    return
-  fi
-
-  if [[ "${STOP_BEFORE_REHEARSAL}" == "false" ]]; then
-    log "STOP_BEFORE_REHEARSAL=false; keep app services running during rehearsal dump"
-    return
-  fi
-
-  if [[ ! -t 0 ]]; then
-    log "no TTY; defaulting to STOP_BEFORE_REHEARSAL=true (safer rehearsal)"
-    STOP_BEFORE_REHEARSAL=true
-    return
-  fi
-
-  printf '[upgrade] About to dump production for rehearsal.\n' >&2
-  printf '[upgrade] Default: stop app services first (rehearsal == production at migrate time, longer downtime).\n' >&2
-  printf '[upgrade] Choose "n" to keep services running (shorter downtime, rehearsal snapshot may drift).\n' >&2
-  read -r -p "[upgrade] Stop services before dump? [Y/n] " answer
-  answer="${answer:-yes}"
-
-  case "${answer}" in
-    n | N | no | NO)
-      STOP_BEFORE_REHEARSAL=false
-      log "online dump selected; rehearsal data may diverge from production at migrate time"
-      ;;
-    *)
-      STOP_BEFORE_REHEARSAL=true
-      log "quiesced dump selected; will stop app services before dump"
-      ;;
-  esac
+# 演练失败时面向（开源各部署实例）运维的导向性说明：原始报错由 cleanup 回放
+# main-rehearsal-*.log 给出，这里负责把它翻译成"发生了什么 / production 是否安全 /
+# 怎么处理"，避免运维只看到一堆 traceback 不知所措。
+print_rehearsal_failure_help() {
+  printf '\n[upgrade] ============================================================\n' >&2
+  printf '[upgrade] 迁移演练失败 —— production 数据库【未被改动】，升级已安全中止。\n' >&2
+  printf '[upgrade] 含义：本实例的存量数据无法通过新版本的数据库迁移（演练在 production\n' >&2
+  printf '[upgrade]       数据的副本上运行，专为在不触碰 production 的前提下暴露此类问题）。\n' >&2
+  printf '[upgrade] 详情：见上方 replay 的 main-rehearsal-*.log —— 失败的迁移名与抛错操作\n' >&2
+  printf '[upgrade]       （通常是 NOT NULL / UNIQUE / FK / CHECK 等约束撞上违规存量数据）。\n' >&2
+  printf '[upgrade] 处理：按报错定位并清洗/修正违规数据，或前滚一版补数据归一化的迁移，\n' >&2
+  printf '[upgrade]       然后重跑本脚本；全程 production 未受影响，可放心排查。\n' >&2
+  printf '[upgrade] ============================================================\n' >&2
 }
 
 trap cleanup EXIT
@@ -284,9 +298,15 @@ flock -n 9 || die "another upgrade is in progress (lock: ${UPGRADE_LOCK_FILE})"
 LOCK_ACQUIRED=true
 
 TMP_DIR="$(mktemp -d)"
-MAIN_DUMP="${TMP_DIR}/xcash-main.dump"
 MAIN_REHEARSAL_PLAN="${TMP_DIR}/main-rehearsal.plan"
 MAIN_PRODUCTION_PLAN="${TMP_DIR}/main-production.plan"
+
+# 升级前备份落在 TMP_DIR 之外的持久目录，绝不随 cleanup 删除；转绝对路径便于失败时
+# 照搬做回滚。同一份 dump 也用于灌入演练库——在线 dump 时不必为备份在停机窗口内再
+# dump 一次，省停机时间（代价见顶部 STOP_BEFORE_REHEARSAL 注释）。
+mkdir -p "${BACKUP_DIR}"
+BACKUP_DIR="$(cd "${BACKUP_DIR}" && pwd)"
+MAIN_DUMP="${BACKUP_DIR}/xcash-pre-upgrade-$(date +%Y%m%d-%H%M%S).dump"
 
 pull_code
 
@@ -298,13 +318,15 @@ log "ensure database and cache dependencies are running"
 "${COMPOSE[@]}" up -d django-db redis
 wait_for_postgres django-db
 
-resolve_stop_before_rehearsal
-
 if [[ "${STOP_BEFORE_REHEARSAL}" == "true" ]]; then
+  log "quiesced dump: stop app services before dump (backup == production at migrate time)"
   stop_app_services "before rehearsal dump"
+else
+  log "online dump: app services stay up during dump (shorter downtime; backup is the pre-dump snapshot)"
 fi
 
 dump_main_database "${MAIN_DUMP}"
+log "pre-upgrade backup saved: ${MAIN_DUMP}"
 
 log "reset rehearsal database"
 "${REHEARSAL_COMPOSE[@]}" rm -sf migration-rehearsal-db >/dev/null 2>&1 || true
@@ -314,6 +336,9 @@ wait_for_postgres migration-rehearsal-db
 restore_main_database migration-rehearsal-db "${MAIN_DUMP}"
 
 log "run main database migration rehearsal"
+# 演练在 production 数据副本上真实 apply 迁移：失败即代表本实例存量数据迁不过，
+# REHEARSAL_IN_PROGRESS 让 cleanup 给出面向运维的诊断。此刻 production 尚未被触碰。
+REHEARSAL_IN_PROGRESS=true
 # plan 阶段输出短：tee 同时写 plan 文件（用于比对）+ log 文件（用于失败回放），stdout 静默。
 run_main_manage migration-rehearsal-db migrate --plan 2>&1 \
   | tee "${TMP_DIR}/main-rehearsal-plan.log" >"${MAIN_REHEARSAL_PLAN}"
@@ -322,6 +347,7 @@ run_main_manage migration-rehearsal-db migrate --noinput 2>&1 \
   | tee "${TMP_DIR}/main-rehearsal-migrate.log"
 run_main_manage migration-rehearsal-db check --deploy 2>&1 \
   | tee "${TMP_DIR}/main-rehearsal-check.log"
+REHEARSAL_IN_PROGRESS=false
 
 if [[ "${STOP_BEFORE_REHEARSAL}" != "true" ]]; then
   stop_app_services "before production migration"
@@ -349,3 +375,4 @@ log "start application services"
 "${COMPOSE[@]}" up -d --remove-orphans
 
 log "upgrade completed"
+log "pre-upgrade backup kept at ${MAIN_DUMP} (confirm new version is stable, then delete to reclaim space)"
