@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react"
 import BrandHeading from "@/components/BrandHeading"
 import { useI18n } from "@/hooks/useI18n"
 
@@ -5,20 +6,12 @@ function LoadingState() {
   const { t } = useI18n()
 
   return (
-    <div className="min-h-svh bg-[var(--app-bg)] flex flex-col items-center justify-center"
-      style={{
-        backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.035) 1px, transparent 1px)",
-        backgroundSize: "32px 32px",
-      }}
-    >
-      <div className="text-center space-y-8">
+    <div className="min-h-svh bg-background flex flex-col items-center justify-center">
+      <div className="flex flex-col items-center gap-8 text-center">
         <BrandHeading size={48} />
-        <div className="space-y-4">
-          <div className="relative w-10 h-10 mx-auto flex items-center justify-center">
-            <div className="absolute inset-0 rounded-full border-2 border-orange-500/15 animate-ping" />
-            <div className="w-10 h-10 animate-spin rounded-full border-2 border-orange-500/20 border-t-orange-500" />
-          </div>
-          <p className="text-slate-600 text-sm">{t("common.loading")}</p>
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="size-8 animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
         </div>
       </div>
     </div>

@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo } from "react"
+import { Loader2 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
+import { cn } from "@/lib/utils"
 import { useI18n } from "@/hooks/useI18n"
 
 /**
@@ -67,40 +69,33 @@ function WaitingPayment({ invoice, onExpired }) {
     }
   }, [remainingMs, onExpired])
 
-  // 倒计时颜色
+  // 剩余不足一分钟时用 destructive 语义色提示紧迫，其余用常规前景色
   const countdownTone = useMemo(() => {
-    if (remainingMs === null) return "text-amber-400"
-    if (remainingMs <= 0) return "text-red-400"
-    if (remainingMs <= 60_000) return "text-red-400"
-    if (remainingMs <= 5 * 60_000) return "text-amber-400"
-    return "text-emerald-400"
+    if (remainingMs !== null && remainingMs <= 60_000) return "text-destructive"
+    return "text-foreground"
   }, [remainingMs])
 
   const countdownText = useMemo(() => formatRemainingTime(remainingMs, t), [remainingMs, t])
 
   return (
     <Card className="animate-in fade-in-0 slide-in-from-bottom-4 duration-500">
-      <CardContent className="pt-6">
-        <div className="flex flex-col items-center space-y-4">
-          {/* Pulsing orange ring */}
-          <div className="relative w-12 h-12 flex items-center justify-center">
-            <div className="absolute inset-0 rounded-full border-2 border-orange-500/20 animate-ping" />
-            <div className="w-12 h-12 rounded-full border-2 border-orange-500/30 border-t-orange-500 animate-spin" />
-          </div>
+      <CardContent>
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="size-10 animate-spin text-muted-foreground" />
 
           <div className="text-center">
-            <p className="font-medium text-white">{t("waiting.title")}</p>
-            <p className="text-sm text-slate-500 mt-1">{t("waiting.description")}</p>
+            <p className="font-medium">{t("waiting.title")}</p>
+            <p className="text-sm text-muted-foreground mt-1">{t("waiting.description")}</p>
           </div>
 
           {/* Countdown */}
           {invoice?.expires_at && (
-            <div className="w-full bg-white/[0.03] rounded-xl p-3 border border-white/[0.06]">
+            <div className="w-full bg-muted rounded-lg p-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-slate-500">
+                <span className="text-xs font-medium text-muted-foreground">
                   {t("waiting.timeRemaining")}
                 </span>
-                <span className={`font-mono font-bold text-base tabular-nums ${countdownTone}`}>
+                <span className={cn("font-mono font-bold text-base tabular-nums", countdownTone)}>
                   {remainingMs === 0 ? t("waiting.expired") : countdownText}
                 </span>
               </div>

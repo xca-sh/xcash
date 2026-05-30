@@ -1,5 +1,6 @@
 // src/components/PaymentStepper.jsx
 import { useState, useEffect, useMemo, useRef } from "react"
+import { Loader2 } from "lucide-react"
 import SummaryBar from "@/components/SummaryBar"
 import StepIndicator from "@/components/StepIndicator"
 import StepInvoice from "@/components/StepInvoice"
@@ -108,24 +109,10 @@ function PaymentStepper({
   const completedStep = isSingleMethod ? 3 : 4
 
   return (
-    <div className="min-h-svh bg-[var(--app-bg)] relative overflow-hidden">
-      {/* Ambient glows */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-64 -right-64 w-[600px] h-[600px] bg-blue-600/10 rounded-full blur-[120px]" />
-        <div className="absolute -bottom-64 -left-64 w-[600px] h-[600px] bg-orange-500/[0.07] rounded-full blur-[120px]" />
-      </div>
-      {/* Dot grid */}
-      <div
-        className="absolute inset-0 pointer-events-none opacity-40"
-        style={{
-          backgroundImage: `radial-gradient(circle, ${isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.04)'} 1px, transparent 1px)`,
-          backgroundSize: "32px 32px",
-        }}
-      />
-
-      <div className="relative z-10 flex flex-col min-h-svh">
+    <div className="min-h-svh bg-background">
+      <div className="flex flex-col min-h-svh">
         {/* Fixed top: summary + step indicator */}
-        <div className="sticky top-0 z-20 bg-[var(--app-bg)]/95 backdrop-blur-xl border-b border-black/[0.07] dark:border-white/[0.05]">
+        <div className="sticky top-0 z-20 bg-background/95 backdrop-blur border-b">
           <SummaryBar invoice={invoice} isDark={isDark} toggleTheme={toggleTheme} />
           <StepIndicator
             activeStep={activeStep}
@@ -167,11 +154,8 @@ function PaymentStepper({
             {activeStep === sendStep && (
               <div className="space-y-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
                 {isSelecting ? (
-                  <div className="text-center py-16">
-                    <div className="relative w-10 h-10 mx-auto mb-4">
-                      <div className="absolute inset-0 rounded-full border-2 border-orange-500/15 animate-ping" />
-                      <div className="w-10 h-10 animate-spin rounded-full border-2 border-orange-500/20 border-t-orange-500" />
-                    </div>
+                  <div className="flex flex-col items-center gap-4 py-16">
+                    <Loader2 className="size-10 animate-spin text-muted-foreground" />
                     <p className="text-sm text-muted-foreground">{t("payment.gettingPaymentInfo")}</p>
                   </div>
                 ) : (
@@ -200,14 +184,14 @@ function PaymentStepper({
         </div>
 
         {/* Footer */}
-        <div className="bg-[var(--app-bg)]/90 backdrop-blur-xl border-t border-black/[0.07] dark:border-white/[0.05] py-3 px-4">
-          <div className="max-w-lg mx-auto flex items-center justify-center gap-2">
-            <span className="text-xs text-slate-700">Powered by</span>
-            <a href="https://xca.sh" className="text-sm font-semibold text-slate-500 hover:text-orange-400 transition-colors">
+        <div className="border-t py-3 px-4">
+          <div className="max-w-lg mx-auto flex items-center justify-center gap-2 text-xs text-muted-foreground">
+            <span>Powered by</span>
+            <a href="https://xca.sh" className="font-semibold text-foreground hover:underline">
               Xcash
             </a>
-            <span className="text-slate-800 text-xs">•</span>
-            <span className="text-xs text-slate-700">Secure Crypto Payments</span>
+            <span>•</span>
+            <span>Secure Crypto Payments</span>
           </div>
         </div>
       </div>
