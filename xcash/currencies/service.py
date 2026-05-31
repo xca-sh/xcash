@@ -16,11 +16,9 @@ if typing.TYPE_CHECKING:
 class CryptoService:
     """集中封装 Crypto 模型的常见读写操作。"""
 
-    PLACEHOLDER_PREFIX = "PENDING"
-
     @staticmethod
     def list_all(*, active_only: bool = True) -> QuerySet[Crypto]:
-        # active=False 的占位币只用于监听侧和后台治理，默认不暴露给正式业务入口。
+        # active 是币的启用开关：停用的币默认不暴露给正式业务入口，仅后台可显式查看。
         queryset = Crypto.objects.all()
         if active_only:
             queryset = queryset.filter(active=True)
@@ -36,7 +34,7 @@ class CryptoService:
 
     @staticmethod
     def exists(symbol: str, *, active_only: bool = True) -> bool:
-        # 占位币不应被 invoice / withdrawal / deposit 地址申请等正式入口识别为可用资产。
+        # 停用的币不应被 invoice / withdrawal / deposit 地址申请等正式入口识别为可用资产。
         queryset = Crypto.objects.filter(symbol=symbol)
         if active_only:
             queryset = queryset.filter(active=True)

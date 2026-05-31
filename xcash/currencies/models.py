@@ -14,6 +14,14 @@ from chains.models import Chain
 from common.utils.math import round_decimal
 
 
+class PriceUnavailableError(Exception):
+    """无法取得某币在指定法币下的价格。
+
+    用于把"没有价格源"这一确定的业务态从裸 KeyError 中区分出来：
+    充/提币可据此优雅降级（worth 记 0），支付入口据此把该币排除出可选方式。
+    """
+
+
 class Crypto(models.Model):
     name = models.CharField(_("名称"), unique=True)
     symbol = models.CharField(_("代码"), help_text=_("例如:ETH、USDT"), unique=True)
@@ -26,8 +34,13 @@ class Crypto(models.Model):
         blank=True,
     )
     prices = models.JSONField(_("价格"), default=dict, blank=True)
-    coingecko_id = models.CharField(unique=True, blank=True)
-    active = models.BooleanField(default=True)
+    # CoinGecko 的全局唯一行情 slug（如 tether/binancecoin），与 symbol 无机械对应。
+    # 可空：coingecko_id 只是众多取价来源之一（CoinGecko 行情），并非币的身份。未上
+    # CoinGecko 的币（如项目方自定义代币）允许留空——它们仍可充/提币，只是没有法币价格，
+    # 故不会出现在按法币计价的支付（invoice）选项里（见 is_payable 与支付能力门禁）。
+    # NULL 让多条无 slug 的币并存而不撞唯一约束；空串在 save() 中归一为 NULL，避免空串互撞。
+    coingecko_id = models.CharField(_("CoinGecko ID"), unique=True, blank=True, null=True)
+    active = models.BooleanField(_("启用"), default=True)
     # 是否为链原生币，建币时定死，运行期作为唯一真相（取代旧的硬编码符号名单）。
     is_native = models.BooleanField(_("原生币"), default=False)
 
@@ -37,6 +50,13 @@ class Crypto(models.Model):
 
     def __str__(self):
         return f"{self.symbol}"
+
+    def save(self, *args, **kwargs):
+        # 空 coingecko_id 归一为 NULL：CharField 表单提交的是空串，但唯一约束下多条空串
+        # 会互撞，而多个 NULL 可并存（无 CoinGecko 的自定义代币就该是 NULL）。
+        if not self.coingecko_id:
+            self.coingecko_id = None
+        super().save(*args, **kwargs)
 
     def clean(self) -> None:
         # 兜底校验：标记为原生币的 Crypto，symbol 必须落在系统已知的链原生币集合内，
@@ -74,15 +94,36 @@ class Crypto(models.Model):
         return methods
 
     def price(self, fiat):
-        if fiat == "USD" and self.symbol in ["USDT", "USDC", "DAI"]:
+        # 稳定币对 USD 恒按 1 锚定，无需行情。
+        if fiat == "USD" and self.symbol in self.USD_PEGGED_SYMBOLS:
             return Decimal("1")
-        return Decimal(self.prices[fiat])
+        # 无价格源（如未上 CoinGecko 的自定义代币）抛明确领域异常，由调用方决定降级或排除，
+        # 避免裸 KeyError 在上层被误当成其他错误。
+        try:
+            return Decimal(self.prices[fiat])
+        except KeyError as exc:
+            raise PriceUnavailableError(
+                f"{self.symbol} 缺少 {fiat} 价格（coingecko_id={self.coingecko_id!r}）"
+            ) from exc
+
+    # USD 锚定稳定币的符号集合：price() 对它们恒返回 1，无需依赖行情。
+    USD_PEGGED_SYMBOLS = frozenset({"USDT", "USDC", "DAI"})
+
+    def is_payable(self) -> bool:
+        """是否具备法币计价能力，可用于按法币计价的支付（invoice）。
+
+        判据是"有没有价格来源"，而非"当前是否已刷到价"：
+        - USD 锚定稳定币恒可计价；
+        - 配了 coingecko_id 的币由行情任务周期刷新，视为可计价（首次刷新前也算）；
+        - 二者皆无（未上 CoinGecko 的自定义代币）则只能充/提币，不进支付选项。
+        """
+        return self.symbol in self.USD_PEGGED_SYMBOLS or self.coingecko_id is not None
 
     def usd_amount(self, amount: Decimal) -> Decimal:
-        """将代币数量换算为 USD 价值；无法获取价格时返回 0。"""
+        """将代币数量换算为 USD 价值；无价格源时降级为 0（充/提币不因缺价受阻）。"""
         try:
             return amount * self.price("USD")
-        except (KeyError, Exception):
+        except PriceUnavailableError:
             return Decimal("0")
 
     @cached_property
@@ -135,7 +176,7 @@ class ChainToken(models.Model):
     以使 support_this_chain 等逻辑能统一通过此表查询。
 
     「地址↔币」是链上定死的身份事实，故 crypto/chain 一经创建即不可变更
-    （见 ensure_mapping_immutable）；纠正占位映射只能走 admin 的占位符合并动作。
+    （见 ensure_mapping_immutable）；确需纠正只能经 QuerySet.update() 这一受控旁路。
     """
 
     crypto = models.ForeignKey(
@@ -190,8 +231,7 @@ class ChainToken(models.Model):
 
         链上「合约地址 ↔ 币种」是永久不变的身份事实，误改会静默污染历史 Transfer
         的资产归属（且按当前策略不追溯回填），属于不可逆的金融数据事故。新建（pk 为空）
-        不受限；占位符纠正请走 admin 合并动作——它用 QuerySet.update() 旁路本守卫，
-        是唯一受控的变更入口。
+        不受限；确需纠正只能经 QuerySet.update() 旁路本守卫，是唯一受控的变更入口。
         """
         if self.pk is None:
             return
@@ -205,7 +245,7 @@ class ChainToken(models.Model):
         if old["crypto_id"] != self.crypto_id or old["chain_id"] != self.chain_id:
             raise ValidationError(
                 _(
-                    "代币部署的链与币种一经创建不可变更；如需纠正占位映射请使用占位符合并动作。"
+                    "代币部署的链与币种一经创建不可变更；确需纠正只能经 QuerySet.update() 受控旁路。"
                 )
             )
 

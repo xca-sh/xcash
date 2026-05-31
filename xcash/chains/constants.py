@@ -63,6 +63,29 @@ NATIVE_COIN_SYMBOLS: frozenset[str] = frozenset(
 )
 
 
+# 原生币的 CoinGecko 行情 slug。原生币会被自动建成 active=True 的 Crypto，
+# 必须立刻具备可刷新的真实币价（否则 price()/to_fiat()/scale 等会 KeyError，
+# 直接卡死 invoice 金额换算等核心链路）。slug 与 symbol 无机械对应（BNB→binancecoin、
+# AVAX→avalanche-2），故在此显式建权威映射；以 symbol 为键，因多条链共享同一原生币
+# （各 L2 都用 ETH）会 get_or_create 到同一 Crypto，slug 天然一致。
+NATIVE_COIN_COINGECKO_IDS: dict[str, str] = {
+    "ETH": "ethereum",
+    "BNB": "binancecoin",
+    "POL": "polygon",
+    "AVAX": "avalanche-2",
+    "TRX": "tron",
+}
+
+# 覆盖性断言：任何新接入链的原生币都必须在此登记 slug，否则它建出来就没币价。
+# 在导入期失败，把"漏配"暴露在部署前而非运行时。
+_missing_native_slugs = NATIVE_COIN_SYMBOLS - NATIVE_COIN_COINGECKO_IDS.keys()
+if _missing_native_slugs:
+    raise RuntimeError(
+        f"原生币缺少 CoinGecko slug 映射：{sorted(_missing_native_slugs)}，"
+        "请在 NATIVE_COIN_COINGECKO_IDS 中补齐。"
+    )
+
+
 EVM_CHAIN_CODES: tuple[str, ...] = tuple(
     code for code, spec in CHAIN_SPECS.items() if spec.type == ChainType.EVM
 )

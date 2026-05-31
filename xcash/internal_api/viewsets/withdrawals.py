@@ -15,7 +15,6 @@ from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from common.permissions import RejectAll
 from currencies.models import Crypto
-from currencies.service import FiatService
 from projects.models import Project
 from withdrawals.models import Withdrawal
 from withdrawals.models import WithdrawalReviewStatus
@@ -81,8 +80,11 @@ class InternalWithdrawalViewSet(ModelViewSet):
         ):
             raise APIError(ErrorCode.INVALID_CHAIN)
 
-        usd = FiatService.get_by_code("USD")
-        worth = crypto.to_fiat(fiat=usd, amount=data["amount"])
+        # 用 usd_amount 路径算美元价值：缺价时降级为 0（无价的自定义代币按 0 计，法币限额
+        # 自然不约束它），与 WithdrawalService 核心路径一致，避免在此因 to_fiat 缺价报错。
+        worth = WithdrawalService.estimate_withdrawal_worth(
+            crypto=crypto, amount=data["amount"]
+        )
 
         # 锁 project 做策略校验
         project = Project.objects.select_for_update().get(pk=project.pk)

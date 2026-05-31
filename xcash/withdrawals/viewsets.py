@@ -66,7 +66,7 @@ class WithdrawalViewSet(viewsets.ModelViewSet):
         project = Project.objects.select_for_update().get(pk=project.pk)
 
         chain = Chain.objects.get(code=validated_data["chain"])
-        # 提币入口只能操作正式启用的资产，占位币不能进入出金链路。
+        # 提币入口只能操作正式启用的资产，停用的币不能进入出金链路。
         crypto = CryptoService.get_by_symbol(validated_data["crypto"])
         amount = validated_data["amount"]
         worth = WithdrawalService.assert_project_policy(

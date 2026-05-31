@@ -69,7 +69,7 @@ class DepositServiceCoreTests(TestCase):
 
 
 class DepositCreationTests(TestCase):
-    def test_inactive_placeholder_transfer_does_not_create_deposit(self):
+    def test_inactive_crypto_transfer_does_not_create_deposit(self):
         transfer = SimpleNamespace(
             chain=SimpleNamespace(type=ChainType.EVM),
             crypto=SimpleNamespace(active=False),

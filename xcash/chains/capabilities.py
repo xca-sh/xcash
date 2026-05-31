@@ -23,6 +23,10 @@ class ChainProductCapabilityService:
         """判断已存在 ChainToken 关系的链币组合是否可用于 Invoice。"""
         if chain.type not in cls.INVOICE_RECIPIENT_CHAIN_TYPES:
             return False
+        # 支付按法币计价，必须有价格来源；无价格源的币（如未上 CoinGecko 的自定义代币）
+        # 只能充/提币，不进支付选项，否则建单时 to_fiat/to_crypto 会因缺价失败。
+        if not crypto.is_payable():
+            return False
         if chain.type == ChainType.TRON:
             return crypto.symbol == "USDT"
         return True

@@ -68,7 +68,7 @@ class DepositViewSet(viewsets.GenericViewSet):
         except ObjectDoesNotExist as exc:
             raise APIError(ErrorCode.INVALID_CRYPTO) from exc
 
-        # inactive 占位币不允许申请充币地址，避免用户入金后因币种未激活而没有 Deposit 记录。
+        # 停用的币不允许申请充币地址，避免用户入金后因币种未启用而没有 Deposit 记录。
         if not crypto.active:
             raise APIError(ErrorCode.INVALID_CRYPTO)
 

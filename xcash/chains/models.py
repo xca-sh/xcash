@@ -17,6 +17,7 @@ from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 
 from chains.constants import CHAIN_SPECS
+from chains.constants import NATIVE_COIN_COINGECKO_IDS
 from chains.constants import ChainCode
 from chains.constants import ChainSpec
 from chains.constants import ChainType  # noqa: F401  re-export 给下游模块过渡使用
@@ -134,15 +135,17 @@ class Chain(models.Model):
     def native_coin(self):
         from currencies.models import Crypto  # noqa: PLC0415
 
-        # Crypto.name 与 Crypto.coingecko_id 均为 unique 字段；首次创建必须填充，
-        # 否则多链原生币会因为留空互相冲突。symbol 在 ChainSpec 中即天然唯一，
-        # 直接拿来兜底是最稳妥的做法，业务层后续 admin 仍可改写。
+        # Crypto.name 为 unique 字段，首次创建用 symbol 兜底（ChainSpec 中天然唯一）。
+        # coingecko_id 必须是 CoinGecko 真实 slug：原生币自动建成 active=True，立刻进入
+        # 币价依赖链路，回填 symbol.lower() 会被行情任务当真实 id 发出后静默拉空价格、
+        # 留空又会 KeyError 卡死换算。故从 NATIVE_COIN_COINGECKO_IDS 取权威 slug
+        # （该映射有覆盖性断言，漏配会在导入期报错）。
         symbol = self.spec.native_coin_symbol
         crypto, _ = Crypto.objects.get_or_create(
             symbol=symbol,
             defaults={
                 "name": symbol,
-                "coingecko_id": symbol.lower(),
+                "coingecko_id": NATIVE_COIN_COINGECKO_IDS[symbol],
                 "active": True,
                 # 原生币精度落到 ChainToken（见 ensure_native_crypto_mapping_for_chain）；
                 # 这里仅在 Crypto 上标记原生币身份。
