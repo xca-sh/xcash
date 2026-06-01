@@ -307,41 +307,51 @@ class VaultSlot(models.Model):
 
     @staticmethod
     def schedule_deploy(slot_pk: int) -> EvmTxTask | None:
-        slot = VaultSlot.objects.select_related(
-            "chain",
-            "project",
-            "deploy_tx_task__base_task",
-        ).get(pk=slot_pk)
-        if VaultSlot._is_deployed_on_chain(chain=slot.chain, address=slot.address):
-            return None
+        with db_transaction.atomic():
+            slot = (
+                VaultSlot.objects.select_for_update(of=("self",))
+                .select_related(
+                    "chain",
+                    "project",
+                    "deploy_tx_task__base_task",
+                )
+                .get(pk=slot_pk)
+            )
+            if VaultSlot._is_deployed_on_chain(chain=slot.chain, address=slot.address):
+                return None
 
-        if slot.deploy_tx_task_id is not None:
-            base_task = slot.deploy_tx_task.base_task
-            # 仍在途或已确认成功的部署任务直接复用；只有失败终局才需重建。
-            if base_task.status != TxTaskStatus.FAILED:
-                return slot.deploy_tx_task
+            deploy_task = slot.deploy_tx_task
+            if deploy_task is not None:
+                base_task = deploy_task.base_task
+                # 仍在途或已确认成功的部署任务直接复用；只有失败终局才需重建。
+                if base_task.status != TxTaskStatus.FAILED:
+                    return deploy_task
 
-        system_wallet = SystemWallet.get_current()
-        sender = system_wallet.wallet.get_address(
-            chain_type=ChainType.EVM,
-            usage=AddressUsage.HotWallet,
-        )
-        vault_address = slot.project.vault
-        if not vault_address:
-            raise RuntimeError(f"Project {slot.project_id} VaultSlot Vault 地址未配置")
-        vault_address = Web3.to_checksum_address(vault_address)
+            system_wallet = SystemWallet.get_current()
+            sender = system_wallet.wallet.get_address(
+                chain_type=ChainType.EVM,
+                usage=AddressUsage.HotWallet,
+            )
+            vault_address = slot.project.vault
+            if not vault_address:
+                raise RuntimeError(
+                    f"Project {slot.project_id} VaultSlot Vault 地址未配置"
+                )
+            vault_address = Web3.to_checksum_address(vault_address)
 
-        intent = build_vault_slot_deploy_intent(
-            sender=sender,
-            chain=slot.chain,
-            factory_address=XCASH_VAULT_SLOT_FACTORY_ADDRESS,
-            vault_address=vault_address,
-            salt=bytes(slot.salt),
-        )
-        task = EvmTxTask.schedule(intent)
-        if isinstance(task, EvmTxTask):
-            VaultSlot.objects.filter(pk=slot.pk).update(deploy_tx_task=task)
-        return task
+            # 锁住 VaultSlot 本行后再创建任务，避免并发 on_commit 调度同时看到
+            # deploy_tx_task 为空，从而为同一个 CREATE2 地址创建多笔部署交易。
+            intent = build_vault_slot_deploy_intent(
+                sender=sender,
+                chain=slot.chain,
+                factory_address=XCASH_VAULT_SLOT_FACTORY_ADDRESS,
+                vault_address=vault_address,
+                salt=bytes(slot.salt),
+            )
+            task = EvmTxTask.schedule(intent)
+            if isinstance(task, EvmTxTask):
+                VaultSlot.objects.filter(pk=slot.pk).update(deploy_tx_task=task)
+            return task
 
     @staticmethod
     def schedule_collect_for_deposit(

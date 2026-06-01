@@ -334,6 +334,27 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertNotEqual(new_task.pk, failed_task.pk)
         self.assertEqual(slot.deploy_tx_task, new_task)
 
+    def test_schedule_deploy_does_not_recreate_failed_task_when_slot_has_code(self):
+        slot = self._create_vault_slot()
+        signer_patch = self._patch_signer()
+
+        with signer_patch:
+            failed_task = VaultSlot.schedule_deploy(slot.pk)
+        failed_task.base_task.status = TxTaskStatus.FAILED
+        failed_task.base_task.save(update_fields=["status", "updated_at"])
+
+        with (
+            signer_patch,
+            patch.object(VaultSlot, "_is_deployed_on_chain", return_value=True),
+            patch.object(EvmTxTask, "schedule") as schedule,
+        ):
+            task = VaultSlot.schedule_deploy(slot.pk)
+
+        self.assertIsNone(task)
+        slot.refresh_from_db()
+        self.assertEqual(slot.deploy_tx_task, failed_task)
+        schedule.assert_not_called()
+
     def test_ensure_deposit_address_rejects_project_without_vault(self):
         Project.objects.filter(pk=self.project.pk).update(vault=None)
         self.project.refresh_from_db()

@@ -203,7 +203,8 @@ class Invoice(models.Model):
         逻辑 = 系统支持的 invoice (crypto, chain) 组合 ∩ 该 billing_mode 下项目可收款的链
               ∩ SaaS 白名单。
         - CONTRACT：仅 EVM 链，且项目已设 vault（见 contract_receivable_chain_codes）。
-        - DIFFER：项目已配 DifferRecipientAddress 的 chain_type 对应的链（EVM/Tron 通用）。
+        - DIFFER：项目已配 DifferRecipientAddress 的 chain_type 对应的链（EVM/Tron 通用），
+          且不暴露链原生币；当前差额模式依赖可被 scanner 稳定观测的代币入账。
         """
         if billing_mode == InvoiceBillingMode.CONTRACT:
             receivable_codes = ProjectService.contract_receivable_chain_codes(project)
@@ -213,6 +214,8 @@ class Invoice(models.Model):
         # allowed_methods 已按 chain_codes=receivable_codes 收敛查询，返回的每个 symbol 的
         # 链集合必为 receivable_codes 子集且非空——故此处无需再做交集或空集过滤。
         allowed = CryptoService.allowed_methods(chain_codes=receivable_codes)
+        if billing_mode == InvoiceBillingMode.DIFFER:
+            allowed = cls.filter_non_native_methods(allowed)
 
         methods = {
             symbol: sorted(chain_codes) for symbol, chain_codes in allowed.items()
@@ -222,6 +225,37 @@ class Invoice(models.Model):
             appid=project.appid,
             methods=methods,
         )
+
+    @staticmethod
+    def filter_non_native_methods(
+        allowed: dict[str, set[str]],
+    ) -> dict[str, set[str]]:
+        """从 methods 中移除每条链自己的原生币组合，保留同链上的合约代币。"""
+        chain_codes = {
+            chain_code
+            for chain_code_set in allowed.values()
+            for chain_code in chain_code_set
+        }
+        if not chain_codes:
+            return allowed
+
+        from chains.models import Chain  # noqa: PLC0415
+
+        native_symbol_by_chain = {
+            chain.code: chain.spec.native_coin_symbol.upper()
+            for chain in Chain.objects.filter(code__in=chain_codes)
+        }
+
+        filtered: dict[str, set[str]] = {}
+        for crypto_symbol, crypto_chain_codes in allowed.items():
+            non_native_chain_codes = {
+                chain_code
+                for chain_code in crypto_chain_codes
+                if native_symbol_by_chain.get(chain_code) != crypto_symbol.upper()
+            }
+            if non_native_chain_codes:
+                filtered[crypto_symbol] = non_native_chain_codes
+        return filtered
 
     def _allocate_differ_payment(
         self,
@@ -256,7 +290,7 @@ class Invoice(models.Model):
         crypto_amount: Decimal,
     ) -> bool:
         # 同一个合约收款槽位只在"币种 + 金额"重合且对方仍为 WAITING 时不可复用；
-        # 不同金额可以复用同一 VaultSlot 地址。
+        # 不同金额可以复用同一 VaultSlot 地址，因为账单匹配要求 pay_amount 精确相等。
         # 占用判据与 uniq_invoice_active_payment 约束保持一致——只看 status=WAITING，
         # 不叠加 expires_at 过滤：过期账单要等状态翻成 EXPIRED 才真正释放槽位，否则约束
         # 仍锁着该 (pay_address, pay_amount) 组合，而这里若漏判就会让分配陷入

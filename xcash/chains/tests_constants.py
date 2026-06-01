@@ -59,7 +59,9 @@ def test_native_coin_symbols():
 def test_chain_code_groups():
     from chains.constants import EVM_CHAIN_CODES, TRON_CHAIN_CODES
 
-    assert len(EVM_CHAIN_CODES) == 11
+    assert len(EVM_CHAIN_CODES) == sum(
+        1 for spec in CHAIN_SPECS.values() if spec.type == ChainType.EVM
+    )
     assert TRON_CHAIN_CODES == (ChainCode.Tron,)
     assert ChainCode.Ethereum in EVM_CHAIN_CODES
     assert ChainCode.Tron not in EVM_CHAIN_CODES

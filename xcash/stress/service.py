@@ -32,13 +32,13 @@ from .models import WithdrawalStressCase
 
 logger = structlog.get_logger()
 
-# 压测链路只打本地测试链，避免误选到其他环境链导致支付不可达。
+# 账单压测只使用本地 ERC20。当前 EVM 外部入账 scanner 基于日志：
+# ERC20 Transfer 可稳定观测；普通 ETH 转账到差额 EOA 不产生日志，发往未部署
+# VaultSlot 的 ETH 也没有 native receive 事件，不能作为账单压测支付方式。
 STRESS_FIXED_METHODS = {
-    "ETH": ["anvil"],
     "USDT": ["anvil"],
 }
 STRESS_FIXED_METHOD_CHOICES = (
-    ("ETH", "anvil"),
     ("USDT", "anvil"),
 )
 STRESS_WITHDRAWAL_METHOD_CHOICES = (
@@ -228,7 +228,7 @@ class StressService:
         """调用 API 创建 Invoice，仅使用 Stress Project 已准备好的本地链 methods。"""
         stress_run = case.stress_run
         project = stress_run.project
-        methods = _require_stress_methods_ready(project)
+        methods = _require_stress_methods_ready(project, case.billing_mode)
 
         amount = str(round(random.uniform(1, 10), 2))  # noqa: S311
         out_no = f"STRESS-{stress_run.pk}-{case.sequence}"
@@ -300,7 +300,7 @@ class StressService:
                 "crypto": case.crypto,
             },
             headers=headers,
-            timeout=10,
+            timeout=60,
         )
         if resp.status_code >= 400:
             detail = _extract_error_detail(resp)
@@ -465,8 +465,10 @@ def _setup_wallet_for_withdrawal(project: Project) -> None:
     project.save(update_fields=["wallet", "vault"])
 
 
-def _pick_billing_mode() -> str:
-    """压测目前仅生成 EVM 账单；新架构下 EVM 一律走 VaultSlot 即 CONTRACT。"""
+def _pick_billing_mode(sequence: int) -> str:
+    """稳定生成差额/合约账单各半，避免压测样本退化为单一计费模式。"""
+    if sequence % 2 == 1:
+        return InvoiceBillingMode.DIFFER
     return InvoiceBillingMode.CONTRACT
 
 
@@ -484,7 +486,7 @@ def _build_stress_cases(stress: StressRun) -> list[InvoiceStressCase]:
                 stress_run=stress,
                 sequence=i,
                 scheduled_offset=offset,
-                billing_mode=_pick_billing_mode(),
+                billing_mode=_pick_billing_mode(i),
             )
         )
 
@@ -630,20 +632,24 @@ def _build_deposit_cases(stress: StressRun) -> list[DepositStressCase]:
     return cases
 
 
-def _require_stress_methods_ready(project: Project) -> dict[str, list[str]]:
-    """校验 Stress Project 在合约（CONTRACT）模式下的本地链 methods 已完整可用。
+def _require_stress_methods_ready(
+    project: Project, billing_mode: str
+) -> dict[str, list[str]]:
+    """按当前账单计费模式校验本地链 methods 已完整可用。
 
-    压测账单实际以 CONTRACT 计费（见 _pick_billing_mode），就绪检查必须按同一模式校验：
-    CONTRACT 模式依赖 project.vault，缺失时 available_methods 返回空集，这里会立即抛错并
-    阻断后续 HTTP 建单；若仍按默认 DIFFER 校验，缺 vault 时会 silently 通过，把失败推迟到
-    建单 API 阶段（服务端 NO_RECIPIENT_ADDRESS），错误现场与根因脱节、难以定位。
+    DIFFER 依赖 DifferRecipientAddress，CONTRACT 依赖 project.vault。就绪检查必须与
+    本 case 真正创建账单时的 billing_mode 同构，否则会把某一类前置资源的错误隐藏到
+    后续 HTTP 建单或选支付方式阶段。项目可以支持更多 methods；账单压测只返回
+    STRESS_FIXED_METHODS，避免生成当前 scanner 无法观测的 ETH 账单。
     """
-    methods = Invoice.available_methods(project, InvoiceBillingMode.CONTRACT)
-    if methods != STRESS_FIXED_METHODS:
-        raise RuntimeError(
-            "Stress Project 收款地址未准备完整，必须支持 ETH/USDT 本地链支付"
-        )
-    return methods
+    methods = Invoice.available_methods(project, billing_mode)
+    for crypto_symbol, required_chains in STRESS_FIXED_METHODS.items():
+        available_chains = set(methods.get(crypto_symbol, []))
+        if not set(required_chains).issubset(available_chains):
+            raise RuntimeError(
+                "Stress Project 收款地址未准备完整，必须支持 USDT 本地链支付"
+            )
+    return STRESS_FIXED_METHODS
 
 
 def _extract_error_detail(resp: httpx.Response) -> str:
@@ -681,12 +687,14 @@ def _fund_vault_for_withdrawal(project: Project) -> None:
 
 
 def _fund_evm_vault(project: Project) -> None:
-    """EVM Vault 注资：ETH 用 anvil_setBalance，USDT 用 ERC20 mint。"""
+    """EVM 本地压测注资：项目 vault 收测试资产，系统热钱包支付 VaultSlot 部署 gas。"""
     from web3 import Web3
 
+    from chains.models import Address
     from chains.models import AddressUsage
     from chains.models import Chain
     from chains.models import ChainType
+    from core.models import SystemWallet
     from currencies.models import Crypto
     from evm.local_erc20 import LOCAL_EVM_ERC20_ABI
 
@@ -694,10 +702,9 @@ def _fund_evm_vault(project: Project) -> None:
     from .evm import _require_contract
     from .evm import _set_balance
 
-    vault_address = project.wallet.get_address(
-        chain_type=ChainType.EVM,
-        usage=AddressUsage.HotWallet,
-    ).address
+    vault_address = project.vault
+    if not vault_address:
+        raise RuntimeError("Stress Project Vault 地址未配置，无法注资")
 
     w3 = _get_w3()
 
@@ -705,6 +712,26 @@ def _fund_evm_vault(project: Project) -> None:
     eth_amount_wei = 10000 * 10**18
     _set_balance(w3, vault_address, eth_amount_wei)
     logger.info("stress.vault.evm_eth_funded", vault=vault_address, amount_eth=10000)
+
+    system_wallet = SystemWallet.get_current()
+    system_hot = Address.objects.filter(
+        wallet=system_wallet.wallet,
+        chain_type=ChainType.EVM,
+        usage=AddressUsage.HotWallet,
+        address_index=0,
+    ).first()
+    if system_hot is None:
+        system_hot = system_wallet.wallet.get_address(
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.HotWallet,
+        )
+    system_hot_address = system_hot.address
+    _set_balance(w3, system_hot_address, eth_amount_wei)
+    logger.info(
+        "stress.system_wallet.evm_eth_funded",
+        address=system_hot_address,
+        amount_eth=10000,
+    )
 
     # 2. 为 Vault 铸造 USDT
     # 直接用本地 anvil 链：其 USDT ChainToken 指向本地部署的 mock 合约，mint 才能在本地 RPC 生效。

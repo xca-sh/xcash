@@ -105,7 +105,7 @@ WEBHOOK_ALLOW_INTERNAL_TARGETS = True
 REST_FRAMEWORK = deepcopy(BASE_REST_FRAMEWORK)
 REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["anon"] = "10000/minute"
 REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["withdrawal_create"] = "10000/minute"
-REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["deposit_address"] = "10000/minute"
+REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["vault_slot"] = "10000/minute"
 
 # Stress app 侧边栏注入
 # ------------------------------------------------------------------------------

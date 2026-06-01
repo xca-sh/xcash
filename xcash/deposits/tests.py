@@ -2,6 +2,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.test import SimpleTestCase
 from django.test import TestCase
 from django.utils import timezone
 from web3 import Web3
@@ -20,6 +21,7 @@ from currencies.models import Crypto
 from deposits.exceptions import DepositStatusError
 from deposits.models import Deposit
 from deposits.service import DepositService
+from deposits.viewsets import wait_deposit_address_deployed
 from evm.models import EvmTxTask
 from evm.models import VaultSlot
 from evm.models import VaultSlotUsage
@@ -99,6 +101,26 @@ class DepositCreationTests(TestCase):
         DepositService.initialize_deposit(deposit)
 
         schedule_collect.assert_not_called()
+
+
+class DepositAddressDebugWaitTests(SimpleTestCase):
+    @patch("deposits.viewsets.time.sleep", return_value=None)
+    def test_wait_deposit_address_deployed_polls_until_code_exists(self, sleep_mock):
+        get_code = SimpleNamespace(side_effects=[b"", b"", b"\x01"])
+
+        def fake_get_code(address):
+            get_code.address = address
+            return get_code.side_effects.pop(0)
+
+        chain = SimpleNamespace(
+            w3=SimpleNamespace(eth=SimpleNamespace(get_code=fake_get_code))
+        )
+        address = "0x0000000000000000000000000000000000000001"
+
+        wait_deposit_address_deployed(chain=chain, address=address)
+
+        self.assertEqual(get_code.address, address)
+        self.assertEqual(sleep_mock.call_count, 2)
 
 
 class DepositNotificationTests(TestCase):

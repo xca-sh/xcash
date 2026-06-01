@@ -702,6 +702,39 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
         # 没配差额收款地址 → 差额模式无可用方式。
         self.assertEqual(differ_methods, {})
 
+    def test_differ_available_methods_excludes_native_coin(self):
+        project = Project.objects.create(
+            name="Invoice Differ Non Native Project",
+            wallet=Wallet.objects.create(),
+        )
+        eth_chain = Chain.objects.create(
+            code=ChainCode.Ethereum,
+            rpc="",
+            active=True,
+        )
+        usdt = Crypto.objects.create(
+            name="USDT EVM Differ Non Native",
+            symbol="USDTDIFFNN",
+            coingecko_id="usdt-evm-differ-non-native",
+        )
+        ChainToken.objects.create(
+            crypto=usdt,
+            chain=eth_chain,
+            address="0x0000000000000000000000000000000000008841",
+            decimals=6,
+        )
+        DifferRecipientAddress.objects.create(
+            name="evm-differ-pay",
+            project=project,
+            chain_type=ChainType.EVM,
+            address="0x0000000000000000000000000000000000008842",
+        )
+
+        methods = Invoice.available_methods(project, InvoiceBillingMode.DIFFER)
+
+        self.assertEqual(methods[usdt.symbol], [eth_chain.code])
+        self.assertNotIn(eth_chain.native_coin.symbol, methods)
+
     @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="xcash-saas-token")
     def test_available_methods_filters_by_cached_saas_chain_crypto_whitelist(self):
         project = Project.objects.create(
@@ -874,6 +907,7 @@ class InvoiceDifferBillingValidationTests(TestCase):
     def setUp(self):
         cache.clear()
         self.factory = APIRequestFactory()
+        Fiat.objects.get_or_create(code="USD")
         self.eth_chain = Chain.objects.create(
             code=ChainCode.Ethereum,
             rpc="",
@@ -909,7 +943,7 @@ class InvoiceDifferBillingValidationTests(TestCase):
         return InvoiceCreateSerializer(data=data, context={"request": request})
 
     def test_evm_differ_allowed_when_recipient_address_configured(self):
-        # 配了 EVM 差额收款地址 → EVM 链可走差额模式，校验通过。
+        # 配了 EVM 差额收款地址 → EVM 合约代币可走差额模式，校验通过。
         project = Project.objects.create(
             name="EVM Differ With Recipient",
             wallet=Wallet.objects.create(),
@@ -935,6 +969,40 @@ class InvoiceDifferBillingValidationTests(TestCase):
         )
 
         serializer = self.build_serializer(project)
+
+        with self.assertRaises(APIError) as ctx:
+            serializer.is_valid(raise_exception=True)
+        self.assertEqual(ctx.exception.error_code, ErrorCode.NO_RECIPIENT_ADDRESS)
+
+    def test_evm_differ_rejects_native_coin_method(self):
+        project = Project.objects.create(
+            name="EVM Differ Native Rejected",
+            wallet=Wallet.objects.create(),
+        )
+        DifferRecipientAddress.objects.create(
+            name="evm-pay",
+            project=project,
+            chain_type=ChainType.EVM,
+            address="0x0000000000000000000000000000000000007704",
+        )
+        request = self.factory.post(
+            "/invoices",
+            {},
+            format="json",
+            HTTP_XC_APPID=project.appid,
+        )
+        native = self.eth_chain.native_coin
+        serializer = InvoiceCreateSerializer(
+            data={
+                "out_no": "differ-evm-native-order",
+                "title": "differ evm native",
+                "currency": "USD",
+                "amount": "10",
+                "methods": {native.symbol: [self.eth_chain.code]},
+                "billing_mode": InvoiceBillingMode.DIFFER,
+            },
+            context={"request": request},
+        )
 
         with self.assertRaises(APIError) as ctx:
             serializer.is_valid(raise_exception=True)
@@ -2160,12 +2228,39 @@ class TryMatchContractInvoiceTest(TestCase, InvoiceTestMixin):
         self.invoice.refresh_from_db()
         self.assertEqual(self.invoice.status, InvoiceStatus.CONFIRMING)
 
-    def test_matches_when_transfer_amount_greater_than_pay_amount(self):
+    def test_does_not_match_when_transfer_amount_greater_than_pay_amount(self):
         transfer = self._make_transfer(Decimal("150"))
 
         matched = InvoiceService.try_match_invoice(transfer)
 
+        self.assertFalse(matched)
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.status, InvoiceStatus.WAITING)
+
+    def test_contract_match_uses_exact_amount_when_slot_is_shared(self):
+        newer_invoice = self.create_test_invoice(
+            out_no="contract-match-newer",
+            billing_mode=InvoiceBillingMode.CONTRACT,
+            amount=Decimal("150"),
+        )
+        Invoice.objects.filter(pk=newer_invoice.pk).update(
+            crypto=self.crypto,
+            chain=self.chain,
+            pay_address=self.slot_address,
+            pay_amount=Decimal("150"),
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
+
+        transfer = self._make_transfer(Decimal("100"))
+
+        matched = InvoiceService.try_match_invoice(transfer)
+
         self.assertTrue(matched)
+        self.invoice.refresh_from_db()
+        newer_invoice.refresh_from_db()
+        self.assertEqual(self.invoice.status, InvoiceStatus.CONFIRMING)
+        self.assertEqual(self.invoice.transfer_id, transfer.pk)
+        self.assertEqual(newer_invoice.status, InvoiceStatus.WAITING)
 
     @patch("evm.models.VaultSlot.schedule_collect_for_invoice")
     @patch("invoices.service.send_internal_callback")

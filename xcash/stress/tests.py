@@ -27,9 +27,11 @@ from stress.service import _ANVIL_RECIPIENT_ADDRESSES
 from stress.service import STRESS_FIXED_METHODS
 from stress.service import StressService
 from stress.service import _build_deposit_cases
+from stress.service import _build_stress_cases
 from stress.service import _require_stress_methods_ready
 from stress.service import _setup_differ_recipient_addresses
 from stress.service import _setup_wallet_for_withdrawal
+from stress.tasks import _do_payment
 from stress.tasks import _execute
 from stress.tasks import _execute_deposit
 from stress.tasks import execute_deposit_case_payment
@@ -100,13 +102,7 @@ class StressServiceTests(SimpleTestCase):
         self.assertEqual(result, {"sys_no": "INV-1"})
         body = post_mock.call_args.kwargs["content"]
         payload = json.loads(body)
-        self.assertEqual(
-            payload["methods"],
-            {
-                "ETH": ["anvil"],
-                "USDT": ["anvil"],
-            },
-        )
+        self.assertEqual(payload["methods"], STRESS_FIXED_METHODS)
         self.assertEqual(payload["out_no"], "STRESS-12-7")
         build_headers_mock.assert_called_once_with(project, body)
 
@@ -148,7 +144,11 @@ class StressServiceTests(SimpleTestCase):
     def test_create_invoice_raises_when_project_methods_incomplete(self):
         project = SimpleNamespace(appid="app-1", hmac_key="secret")
         stress_run = SimpleNamespace(pk=12, project=project)
-        case = SimpleNamespace(sequence=7, stress_run=stress_run)
+        case = SimpleNamespace(
+            sequence=7,
+            stress_run=stress_run,
+            billing_mode=InvoiceBillingMode.CONTRACT,
+        )
 
         with (
             patch(
@@ -223,7 +223,7 @@ class StressServiceTests(SimpleTestCase):
                 "stress.service.Project.objects.create", return_value=created_project
             ),
             patch("stress.service._setup_differ_recipient_addresses"),
-            # 新架构下 EVM 账单一律走 CONTRACT/VaultSlot，prepare 必然触发钱包与
+            # 账单压测会稳定包含 CONTRACT/VaultSlot case，prepare 需要触发钱包与
             # Vault 注资；本单元测试只关心生成的 case，故 mock 掉这些远端依赖。
             patch("stress.service._setup_wallet_for_withdrawal"),
             patch("stress.service._fund_vault_for_withdrawal"),
@@ -240,12 +240,25 @@ class StressServiceTests(SimpleTestCase):
         self.assertEqual(len(created_cases), 5)
         self.assertTrue(all(not hasattr(case, "scenario") for case in created_cases))
 
+    def test_build_stress_cases_mixes_differ_and_contract_billing_modes(self):
+        stress = StressRun(id=23, count=100)
+
+        with (
+            patch("stress.service.random.gauss", return_value=0.0),
+            patch("stress.service.random.shuffle"),
+        ):
+            cases = _build_stress_cases(stress)
+
+        billing_modes = [case.billing_mode for case in cases]
+        self.assertEqual(billing_modes.count(InvoiceBillingMode.DIFFER), 50)
+        self.assertEqual(billing_modes.count(InvoiceBillingMode.CONTRACT), 50)
+
     def test_prepare_funds_vault_when_invoice_cases_include_contract_billing(self):
         from invoices.models import InvoiceBillingMode
 
         stress = StressRun(
             id=23,
-            count=1,
+            count=2,
             status=StressRunStatus.PREPARING,
         )
         stress.save = Mock()
@@ -271,7 +284,10 @@ class StressServiceTests(SimpleTestCase):
         setup_wallet_mock.assert_called_once_with(created_project)
         fund_vault_mock.assert_called_once_with(created_project)
         created_cases = bulk_create_mock.call_args.args[0]
-        self.assertEqual(created_cases[0].billing_mode, InvoiceBillingMode.CONTRACT)
+        self.assertIn(
+            InvoiceBillingMode.CONTRACT,
+            {case.billing_mode for case in created_cases},
+        )
 
     def test_prepare_seeds_full_saas_permission_cache_for_created_project(self):
         stress = StressRun(
@@ -293,7 +309,7 @@ class StressServiceTests(SimpleTestCase):
                 "stress.service.Project.objects.create", return_value=created_project
             ),
             patch("stress.service._setup_differ_recipient_addresses"),
-            # 新架构下 EVM 账单一律走 CONTRACT/VaultSlot，prepare 必然触发钱包与
+            # 账单压测会稳定包含 CONTRACT/VaultSlot case，prepare 需要触发钱包与
             # Vault 注资；本测试只关心 SaaS 权限缓存预置，故 mock 掉这些远端依赖。
             patch("stress.service._setup_wallet_for_withdrawal"),
             patch("stress.service._fund_vault_for_withdrawal"),
@@ -363,7 +379,7 @@ class StressServiceTests(SimpleTestCase):
         self.assertEqual(cases[0].amount, Decimal("0.01234567"))
 
     def test_execute_dispatches_payment_task_after_api_phase(self):
-        """_execute 完成 API 阶段后，状态停在 CREATED，并以 countdown=2 派发链上支付 task。
+        """_execute 完成 API 阶段后，状态停在 CREATED，并立即派发链上支付 task。
 
         原本 _execute 内部 `time.sleep(2)` 会阻塞 worker 线程；改造后通过
         Celery countdown 让出线程，这里验证调度参数与最终状态。
@@ -390,7 +406,7 @@ class StressServiceTests(SimpleTestCase):
             patch(
                 "stress.tasks.StressService.select_method",
                 return_value={
-                    "crypto": "ETH",
+                    "crypto": "USDT",
                     "chain": "anvil",
                     "pay_address": "0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc",
                     "pay_amount": "1.23",
@@ -410,7 +426,7 @@ class StressServiceTests(SimpleTestCase):
         # _execute 不再直接发起链上支付，而是把链上支付派发给独立 task
         do_payment_mock.assert_not_called()
         webhook_dispatch_mock.assert_not_called()
-        payment_dispatch_mock.assert_called_once_with(args=[case.pk], countdown=2)
+        payment_dispatch_mock.assert_called_once_with(args=[case.pk])
         # 状态停留在 CREATED，等待 payment task 推进
         self.assertEqual(case.status, InvoiceStressCaseStatus.CREATED)
 
@@ -783,6 +799,29 @@ class StressPaymentTaskTests(SimpleTestCase):
         self.assertIsNotNone(case.finished_at)
         webhook_dispatch_mock.assert_not_called()
         on_finished_mock.assert_called_once_with(case)
+
+    def test_do_payment_advances_next_block_timestamp_before_sending(self):
+        api_done_at = timezone.now()
+        case = self._make_invoice_case(api_done_at=api_done_at)
+
+        with (
+            patch("stress.evm.ensure_next_block_after") as ensure_block_mock,
+            patch(
+                "stress.tasks.simulate_payment",
+                return_value={"tx_hash": "0xabc", "payer_address": "0xpayer"},
+            ) as simulate_mock,
+        ):
+            result = _do_payment(case)
+
+        self.assertEqual(result["tx_hash"], "0xabc")
+        ensure_block_mock.assert_called_once_with(api_done_at)
+        simulate_mock.assert_called_once_with(
+            to_address=case.pay_address,
+            chain_code=case.chain,
+            crypto_symbol=case.crypto,
+            amount=case.pay_amount,
+            payment_ref=f"case-{case.pk}",
+        )
 
     # ── Deposit 流程 ────────────────────────────────────────────
 
@@ -1459,7 +1498,7 @@ class StressContractProvisioningTests(TestCase):
         # 本地链统一为 anvil（链代码收敛后）。rpc 留空：EVM 链的 full_clean 会对非空 rpc
         # 发起实时连通校验，本测试不依赖链上调用。新建 Chain 的 post_save 会自动补齐原生币
         # ETH 及其 ChainToken（见 ensure_native_crypto_mapping_for_chain），故 ETH 只取不建；
-        # USDT 为合约代币需显式登记。这样 available_methods(CONTRACT) 恰好产出 STRESS_FIXED_METHODS。
+        # USDT 为账单压测固定使用的 ERC20，需显式登记。
         self.anvil = Chain.objects.create(
             code=ChainCode.Anvil,
             rpc="",
@@ -1531,11 +1570,12 @@ class StressContractProvisioningTests(TestCase):
             name="stress-ready-vault",
             vault="0x0000000000000000000000000000000000009001",
         )
-        self.assertEqual(_require_stress_methods_ready(project), STRESS_FIXED_METHODS)
+        self.assertEqual(
+            _require_stress_methods_ready(project, InvoiceBillingMode.CONTRACT),
+            STRESS_FIXED_METHODS,
+        )
 
-    def test_require_stress_methods_ready_raises_without_vault_even_with_differ(self):
-        # 关键回归：缺 vault 但配了 EVM 差额收款地址时，旧的 DIFFER 就绪校验会 silently 通过，
-        # 把失败推迟到建单 API；改按 CONTRACT 校验后必须在就绪检查阶段直接报错。
+    def test_require_stress_methods_ready_uses_case_billing_mode(self):
         project = self.make_project(name="stress-ready-no-vault")
         DifferRecipientAddress.objects.create(
             name="evm-pay",
@@ -1543,8 +1583,12 @@ class StressContractProvisioningTests(TestCase):
             chain_type=ChainType.EVM,
             address="0x0000000000000000000000000000000000009101",
         )
+        self.assertEqual(
+            _require_stress_methods_ready(project, InvoiceBillingMode.DIFFER),
+            STRESS_FIXED_METHODS,
+        )
         with self.assertRaisesMessage(RuntimeError, "收款地址未准备完整"):
-            _require_stress_methods_ready(project)
+            _require_stress_methods_ready(project, InvoiceBillingMode.CONTRACT)
 
     def test_contract_select_method_allocates_vault_slot_with_vault(self):
         project = self.make_project(

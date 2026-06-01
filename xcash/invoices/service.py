@@ -239,7 +239,7 @@ class InvoiceService:
         contract_candidate = (
             base_filter.filter(
                 billing_mode=InvoiceBillingMode.CONTRACT,
-                pay_amount__lte=transfer.amount,
+                pay_amount=transfer.amount,
             )
             .order_by("-started_at", "-pk")
             .values("pk")

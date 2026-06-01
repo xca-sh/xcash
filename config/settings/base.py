@@ -457,7 +457,7 @@ REST_FRAMEWORK = {
         "invoice_retrieve": "60/minute",
         "invoice_select_method": "10/minute",
         "withdrawal_create": "30/minute",
-        "deposit_address": "60/minute",
+        "vault_slot": "60/minute",
     },
     # 统一分页策略：GenericAPIView 及其子类（ModelViewSet/GenericViewSet 等）默认启用
     # page/size 分页，响应形如 {count, next, previous, results}。

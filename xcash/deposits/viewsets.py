@@ -1,6 +1,10 @@
 import re
+import time
 
+from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import transaction as db_transaction
+from django.utils.decorators import method_decorator
 from rest_framework import viewsets
 from rest_framework.decorators import action as view_action
 from rest_framework.permissions import AllowAny
@@ -23,6 +27,7 @@ from projects.models import Project
 _UID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,128}$")
 
 
+@method_decorator(db_transaction.non_atomic_requests, name="dispatch")
 class DepositViewSet(viewsets.GenericViewSet):
     """
     充币相关接口。仅暴露 address 这一个 action，不注册 ModelViewSet 的默认 CRUD 路由。
@@ -92,4 +97,11 @@ class DepositViewSet(viewsets.GenericViewSet):
         customer, _ = Customer.objects.get_or_create(project=project, uid=uid)
 
         deposit_address = VaultSlot.ensure_deposit_address(chain, customer)
+        if settings.DEBUG:
+            wait_deposit_address_deployed(chain=chain, address=deposit_address)
         return Response({"deposit_address": deposit_address})
+
+
+def wait_deposit_address_deployed(*, chain: Chain, address: str) -> None:
+    while len(chain.w3.eth.get_code(address)) == 0:  # noqa: SLF001
+        time.sleep(0.2)

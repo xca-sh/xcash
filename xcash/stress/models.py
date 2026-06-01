@@ -18,7 +18,7 @@ class InvoiceStressCaseStatus(models.TextChoices):
     CREATING = "creating", _("创建账单中")
     CREATED = "created", _("账单已创建")
     PAYING = "paying", _("支付中")
-    PAID = "paid", _("已支付")
+    PAID = "paid", _("链上已广播")
     WEBHOOK_OK = "webhook_ok", _("Webhook 验证通过")
     SUCCEEDED = "succeeded", _("成功")
     FAILED = "failed", _("失败")

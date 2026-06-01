@@ -87,8 +87,21 @@ class LoginView(AdminContextMixin, FormView):
                 username_snapshot=username,
                 reason="invalid_credentials",
             )
+            self._password_login_failure_recorded = True
             form.add_error(None, _("用户名或密码错误。"))
             return self.form_invalid(form)
+
+    def form_invalid(self, form):
+        username = self.request.POST.get("username", "")
+        if username and not getattr(self, "_password_login_failure_recorded", False):
+            record_admin_access(
+                request=self.request,
+                action=AdminAccessLog.Action.PASSWORD_LOGIN,
+                result=AdminAccessLog.Result.FAILED,
+                username_snapshot=username,
+                reason="invalid_credentials",
+            )
+        return super().form_invalid(form)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

@@ -603,6 +603,7 @@ class TxTask(UndeletableModel):
         unique=False,
         verbose_name=_("交易哈希"),
         null=True,
+        blank=True,
     )
     status = models.CharField(
         _("状态"),

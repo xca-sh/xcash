@@ -1,6 +1,7 @@
 # xcash/stress/evm.py
 """EVM 链上支付：直连 Anvil 本地测试链。"""
 import time
+from datetime import datetime
 from decimal import Decimal
 
 import structlog
@@ -11,6 +12,7 @@ from evm.local_erc20 import LOCAL_EVM_ERC20_ABI
 
 logger = structlog.get_logger()
 _EVM_GAS_BUFFER_WEI = 10**16
+_NATIVE_TRANSFER_GAS_LIMIT = 120_000
 
 
 def _get_w3() -> Web3:
@@ -56,6 +58,27 @@ def sync_chain_clock() -> None:
         logger.warning("stress.evm.sync_chain_clock_error", error=str(exc))
 
 
+def ensure_next_block_after(moment: datetime) -> None:
+    """确保下一笔 Anvil 交易的区块时间戳晚于业务记录时间。"""
+    try:
+        w3 = _get_w3()
+        target_timestamp = int(moment.timestamp()) + 1
+        latest_timestamp = int(w3.eth.get_block("latest")["timestamp"])
+        if latest_timestamp >= target_timestamp:
+            return
+        response = w3.provider.make_request(
+            "anvil_setNextBlockTimestamp",
+            [target_timestamp],
+        )
+        if response.get("error"):
+            logger.warning(
+                "stress.evm.set_next_block_timestamp_failed",
+                error=response["error"],
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stress.evm.set_next_block_timestamp_error", error=str(exc))
+
+
 def _require_contract(w3: Web3, address: str) -> str:
     """要求本地 ERC20 合约已存在；支付链路不负责部署。"""
     checksum = Web3.to_checksum_address(address)
@@ -74,7 +97,7 @@ def send_native(to: str, amount: Decimal | str, decimals: int = 18) -> dict[str,
         "from": payer.address,
         "to": Web3.to_checksum_address(to),
         "value": value,
-        "gas": 21000,
+        "gas": _NATIVE_TRANSFER_GAS_LIMIT,
         "gasPrice": w3.eth.gas_price,
         "nonce": w3.eth.get_transaction_count(payer.address, "pending"),
         "chainId": w3.eth.chain_id,

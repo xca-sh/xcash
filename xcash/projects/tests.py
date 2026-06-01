@@ -196,6 +196,9 @@ class ProjectAdminTests(TestCase):
                 "fast_confirm_threshold": self.project.fast_confirm_threshold,
                 "hmac_key": self.project.hmac_key,
                 "withdrawal_review_required": self.project.withdrawal_review_required,
+                "withdrawal_review_exempt_limit": (
+                    self.project.withdrawal_review_exempt_limit
+                ),
                 "active": self.project.active,
                 "vault": contract_address,
             },
@@ -229,6 +232,9 @@ class ProjectAdminTests(TestCase):
                 "fast_confirm_threshold": self.project.fast_confirm_threshold,
                 "hmac_key": self.project.hmac_key,
                 "withdrawal_review_required": self.project.withdrawal_review_required,
+                "withdrawal_review_exempt_limit": (
+                    self.project.withdrawal_review_exempt_limit
+                ),
                 "active": self.project.active,
                 "vault": contract_address,
             },

@@ -83,11 +83,8 @@ def execute_stress_case(case_id: int) -> None:
 def _execute(case: InvoiceStressCase) -> None:
     """InvoiceStressCase 执行核心流程的 API 阶段（创建账单 + 选支付方式）。
 
-    完成后通过 Celery countdown=2 调度链上支付阶段，避免 worker 线程被
-    sleep 阻塞。等待 2 秒的目的：确保链上交易的区块时间戳（秒级精度）
-    晚于 Invoice 的 started_at，否则 try_match_invoice 的
-    invoice__started_at__lte=transfer.datetime 条件会因区块时间戳被
-    截断到同一秒的起点而匹配失败。
+    完成后立即调度链上支付阶段。支付 task 会在发交易前推进 Anvil 下一块
+    时间戳，避免用固定 countdown 给每笔账单增加排队延迟。
     """
     # 阶段 1: 创建 Invoice
     resp = StressService.create_invoice(case)
@@ -121,17 +118,16 @@ def _execute(case: InvoiceStressCase) -> None:
         ]
     )
 
-    # 阶段 3: 链上支付 —— 拆为独立 task，countdown=2 保证区块时间戳晚于 started_at，
-    # 同时立即释放当前 worker 线程，避免 8 并发 worker 被 sleep 拖慢 30%。
-    execute_stress_case_payment.apply_async(args=[case.pk], countdown=2)
+    # 阶段 3: 链上支付 —— 拆为独立 task，立即释放当前 worker 线程。
+    execute_stress_case_payment.apply_async(args=[case.pk])
 
 
 @shared_task(ignore_result=True, soft_time_limit=120, time_limit=180, **_RETRY_KWARGS)
 def execute_stress_case_payment(case_id: int) -> None:
     """执行 InvoiceStressCase 的链上支付阶段（CREATED → PAYING → PAID）。
 
-    由 execute_stress_case 的 _execute 通过 countdown=2 调度，等价于原
-    `time.sleep(2)` 的语义但不占用 worker 线程。
+    由 execute_stress_case 的 _execute 调度。真正的时间戳保护在 _do_payment
+    内完成，避免固定等待拖慢批量支付。
     """
     try:
         case = InvoiceStressCase.objects.select_related("stress_run__project").get(
@@ -191,6 +187,9 @@ def _do_payment(case: InvoiceStressCase) -> dict[str, str]:
     后续如果新增充币测试或其他需要模拟链上转入的测试，应该继续走
     `stress.payment.simulate_payment()`，而不是重新旁路实现发送逻辑。
     """
+    from .evm import ensure_next_block_after
+
+    ensure_next_block_after(getattr(case, "api_done_at", None) or timezone.now())
     return simulate_payment(
         to_address=case.pay_address,
         chain_code=case.chain,
