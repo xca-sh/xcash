@@ -12,7 +12,7 @@ help:
 	@echo "  开发环境准备：cp .env.example .env 后按需改成开发值"
 	@echo "  make dev-sync         同步本地开发依赖（uv dev group）"
 	@echo "  make dev-up           前台运行 Django + Celery（开发模式）"
-	@echo "  make dev-up-pro       生产级方式运行（gunicorn + 高并发 worker，适合压测）"
+	@echo "  make dev-up-pro       生产级方式运行（signer + gunicorn + 高并发 worker，适合压测）"
 	@echo "  make dev-up-deps      仅启动 django-db/redis"
 	@echo "  make dev-up-chain     启动 django-db/redis/anvil"
 	@echo "  make dev-down         停止开发依赖容器"

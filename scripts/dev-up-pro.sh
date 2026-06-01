@@ -74,9 +74,14 @@ echo "  gunicorn workers : ${GUNICORN_WORKERS}"
 echo "  celery business  : ${CELERY_BUSINESS_WORKER_CONCURRENCY} threads"
 echo "  celery stress    : ${CELERY_STRESS_WORKER_CONCURRENCY} threads"
 echo "  celery scan      : ${CELERY_SCAN_WORKER_CONCURRENCY} threads"
+echo "  signer           : local go run"
 echo ""
 
-# ── 1. Gunicorn (替代 runserver) ──────────────────────────────
+# ── 1. Go Signer ─────────────────────────────────────────────
+ENV_FILE="${ENV_FILE}" "${SCRIPT_DIR}/dev-signer.sh" &
+child_pids+=("$!")
+
+# ── 2. Gunicorn (替代 runserver) ──────────────────────────────
 uv run gunicorn config.wsgi:application \
   --bind 0.0.0.0:8000 \
   --workers "${GUNICORN_WORKERS}" \
@@ -88,7 +93,7 @@ uv run gunicorn config.wsgi:application \
   --log-level info &
 child_pids+=("$!")
 
-# ── 2. Celery Worker — 业务队列 ──────────────────────────────
+# ── 3. Celery Worker — 业务队列 ──────────────────────────────
 uv run celery -A config.celery worker \
   -l INFO \
   --pool=threads \
@@ -97,7 +102,7 @@ uv run celery -A config.celery worker \
   -n business@%h &
 child_pids+=("$!")
 
-# ── 3. Celery Worker — 压测队列 ──────────────────────────────
+# ── 4. Celery Worker — 压测队列 ──────────────────────────────
 uv run celery -A config.celery worker \
   -l INFO \
   --pool=threads \
@@ -106,7 +111,7 @@ uv run celery -A config.celery worker \
   -n stress@%h &
 child_pids+=("$!")
 
-# ── 4. Celery Worker — 扫描队列 ──────────────────────────────
+# ── 5. Celery Worker — 扫描队列 ──────────────────────────────
 uv run celery -A config.celery worker \
   -l INFO \
   --pool=threads \
@@ -115,7 +120,7 @@ uv run celery -A config.celery worker \
   -n scan@%h &
 child_pids+=("$!")
 
-# ── 5. Celery Beat ───────────────────────────────────────────
+# ── 6. Celery Beat ───────────────────────────────────────────
 uv run celery -A config.celery beat \
   -l INFO \
   -s /tmp/xcash-celerybeat-schedule &
