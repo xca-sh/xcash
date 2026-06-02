@@ -331,9 +331,9 @@ def ensure_public_chains(*, using: str = "default", stdout=None) -> None:
                 "active": False,
             },
         )
-        # 调用 chain.native_coin 触发 Crypto get_or_create，确保原生币记录落库
+        # 访问 chain.native_coin 触发 Crypto get_or_create，确保原生币记录落库
         chain_obj = chain_manager.get(code=chain_config["chain"])
-        chain_obj.native_coin
+        _ = chain_obj.native_coin
         ensure_chain_native_mapping(
             using=using,
             chain_name=chain_config["chain"],

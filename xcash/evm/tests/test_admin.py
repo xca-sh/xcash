@@ -3,10 +3,10 @@ from unittest.mock import Mock
 from django.contrib.admin.sites import AdminSite
 from django.test import SimpleTestCase
 
-from evm.admin import EvmTxTaskAdmin
 from evm.admin import EvmScanCursorAdmin
-from evm.models import EvmTxTask
+from evm.admin import EvmTxTaskAdmin
 from evm.models import EvmScanCursor
+from evm.models import EvmTxTask
 
 
 class EvmTxTaskAdminTests(SimpleTestCase):
