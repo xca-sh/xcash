@@ -144,8 +144,7 @@ class SystemSettings(models.Model):
 class SystemWallet(models.Model):
     """全平台唯一系统热钱包归属声明。
 
-    Wallet 负责助记词托管与地址派生；SystemWallet 只表达
-    “系统热钱包业务归属”，避免和项目热钱包混淆。
+    Wallet 负责助记词托管与地址派生；
     """
 
     singleton_key = models.PositiveSmallIntegerField(
