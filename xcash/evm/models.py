@@ -311,19 +311,25 @@ class VaultSlot(models.Model):
                 .select_related(
                     "chain",
                     "project",
-                    "deploy_tx_task__base_task",
                 )
                 .get(pk=slot_pk)
             )
-            if VaultSlot._is_deployed_on_chain(chain=slot.chain, address=slot.address):
-                return None
+            # 并发 waiters 可能在首个事务更新 deploy_tx_task 前就已经发起
+            # SELECT ... FOR UPDATE 并排队。拿到锁后必须重新读这个判重字段，
+            # 否则会继续使用排队查询开始时的旧值，为同一 CREATE2 地址重复建任务。
+            slot.refresh_from_db(fields=["deploy_tx_task"])
 
-            deploy_task = slot.deploy_tx_task
-            if deploy_task is not None:
+            if slot.deploy_tx_task_id is not None:
+                deploy_task = EvmTxTask.objects.select_related("base_task").get(
+                    pk=slot.deploy_tx_task_id
+                )
                 base_task = deploy_task.base_task
                 # 仍在途或已确认成功的部署任务直接复用；只有失败终局才需重建。
                 if base_task.status != TxTaskStatus.FAILED:
                     return deploy_task
+
+            if VaultSlot._is_deployed_on_chain(chain=slot.chain, address=slot.address):
+                return None
 
             system_wallet = SystemWallet.get_current()
             sender = system_wallet.wallet.get_address(

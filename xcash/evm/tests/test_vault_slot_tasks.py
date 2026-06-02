@@ -1,9 +1,12 @@
+import threading
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from django.db import IntegrityError
+from django.db import connections
 from django.test import TestCase
 from django.utils import timezone
 from eth_utils import keccak
@@ -103,6 +106,97 @@ def test_build_vault_slot_collect_intent_encodes_slot_call():
     assert intent.gas == DEFAULT_VAULT_SLOT_COLLECT_GAS
     assert intent.data.startswith(f"0x{_selector('collect(address)')}")
     assert Web3.to_checksum_address(token_address)[2:].lower() in intent.data
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_schedule_deploy_reuses_single_task_for_same_slot():
+    chain = make_evm_chain(
+        code=ChainCode.Ethereum,
+        rpc="http://vault-slot.local",
+    )
+    project = Project.objects.create(name="Concurrent VaultSlot")
+    project.vault = Web3.to_checksum_address(
+        "0x0000000000000000000000000000000000000f01"
+    )
+    project.save(update_fields=["vault"])
+    customer = Customer.objects.create(project=project, uid="same-slot")
+    wallet = Wallet.objects.create()
+    system_wallet = Wallet.objects.create()
+    SystemWallet.objects.create(wallet=system_wallet)
+    fallback_sender = Address.objects.create(
+        wallet=wallet,
+        chain_type=ChainType.EVM,
+        usage=AddressUsage.HotWallet,
+        bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
+        address_index=0,
+        address=Web3.to_checksum_address("0x0000000000000000000000000000000000000d01"),
+    )
+    system_sender = Address.objects.create(
+        wallet=system_wallet,
+        chain_type=ChainType.EVM,
+        usage=AddressUsage.HotWallet,
+        bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
+        address_index=0,
+        address=Web3.to_checksum_address("0x0000000000000000000000000000000000000d02"),
+    )
+    slot = VaultSlot.objects.create(
+        chain=chain,
+        project=project,
+        usage=VaultSlotUsage.DEPOSIT,
+        customer=customer,
+        address=Web3.to_checksum_address("0x0000000000000000000000000000000000000a01"),
+        salt=bytes.fromhex("11" * 32),
+    )
+
+    def fake_get_address(wallet_self, *args, **kwargs):
+        if wallet_self.pk == system_wallet.pk:
+            return system_sender
+        return fallback_sender
+
+    def slow_not_deployed(*args, **kwargs):
+        # 让其余线程在首个事务更新 deploy_tx_task 前排队到 SELECT FOR UPDATE 上，
+        # 覆盖真实压测里同一 slot 多个 on_commit 调度同时触发的窗口。
+        time.sleep(0.05)
+        return False
+
+    thread_count = 8
+    barrier = threading.Barrier(thread_count)
+    errors = []
+    results = []
+    lock = threading.Lock()
+
+    def schedule():
+        connections.close_all()
+        try:
+            barrier.wait(timeout=10)
+            task = VaultSlot.schedule_deploy(slot.pk)
+            with lock:
+                results.append(None if task is None else task.pk)
+        except Exception as exc:  # pragma: no cover - 失败时由断言展示异常
+            with lock:
+                errors.append(exc)
+        finally:
+            connections.close_all()
+
+    with (
+        patch.object(VaultSlot, "_is_deployed_on_chain", side_effect=slow_not_deployed),
+        patch.object(Wallet, "get_address", autospec=True, side_effect=fake_get_address),
+    ):
+        threads = [threading.Thread(target=schedule) for _ in range(thread_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+
+    assert errors == []
+    assert len(results) == thread_count
+    assert len(set(results)) == 1
+    assert (
+        EvmTxTask.objects.filter(base_task__tx_type=TxTaskType.VaultSlotDeploy).count()
+        == 1
+    )
+    slot.refresh_from_db()
+    assert slot.deploy_tx_task_id == results[0]
 
 
 class VaultSlotAddressSchedulingTests(TestCase):
