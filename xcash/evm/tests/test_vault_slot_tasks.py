@@ -174,7 +174,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def patch_address_derivation(self):
         # 地址派生已在 chains 内部闭环；这里直接桩掉 Wallet.get_address。
-        # 部署与归集都走系统级热钱包，故系统钱包返回预建的 system_sender；
+        # 部署与归集都走系统热钱包，故系统钱包返回预建的 system_sender；
         # 其余钱包返回兜底 Address，避免依赖真实派生结果。
         def fake_get_address(wallet_self, *args, **kwargs):
             if wallet_self.pk == self.system_wallet.pk:
@@ -200,7 +200,9 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            address = VaultSlot.ensure_deposit_address(chain=self.chain, customer=self.customer)
+            address = VaultSlot.ensure_deposit_address(
+                chain=self.chain, customer=self.customer
+            )
 
         slot = VaultSlot.objects.get(chain=self.chain, customer=self.customer)
         self.assertEqual(address, slot.address)
@@ -419,7 +421,9 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            address = VaultSlot.ensure_deposit_address(chain=self.chain, customer=self.customer)
+            address = VaultSlot.ensure_deposit_address(
+                chain=self.chain, customer=self.customer
+            )
 
         self.assertEqual(address, slot.address)
         self.assertEqual(schedule.call_count, 1)
@@ -440,7 +444,9 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            address = VaultSlot.ensure_deposit_address(chain=self.chain, customer=self.customer)
+            address = VaultSlot.ensure_deposit_address(
+                chain=self.chain, customer=self.customer
+            )
 
         self.assertEqual(address, slot.address)
         self.assertEqual(
@@ -504,7 +510,9 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            address = VaultSlot.ensure_deposit_address(chain=self.chain, customer=self.customer)
+            address = VaultSlot.ensure_deposit_address(
+                chain=self.chain, customer=self.customer
+            )
 
         self.assertEqual(address, slot.address)
         schedule.assert_not_called()
@@ -647,12 +655,16 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(created_count, 1)
         schedule.refresh_from_db()
         self.assertIsNotNone(schedule.tx_task)
-        # 归集与部署一样统一用系统级热钱包作为 sender（仅付 gas，资金去向由合约写死的 vault 决定）。
+        # 归集与部署一样统一用系统热钱包作为 sender（仅付 gas，资金去向由合约写死的 vault 决定）。
         self.assertEqual(schedule.tx_task.sender, self.system_sender)
         self.assertEqual(schedule.tx_task.chain, self.chain)
         self.assertEqual(schedule.tx_task.to, slot.address)
-        self.assertEqual(schedule.tx_task.base_task.tx_type, TxTaskType.VaultSlotCollect)
-        self.assertTrue(schedule.tx_task.data.startswith(f"0x{_selector('collect(address)')}"))
+        self.assertEqual(
+            schedule.tx_task.base_task.tx_type, TxTaskType.VaultSlotCollect
+        )
+        self.assertTrue(
+            schedule.tx_task.data.startswith(f"0x{_selector('collect(address)')}")
+        )
         self.assertIn(self.token_address[2:].lower(), schedule.tx_task.data)
 
     def test_schedule_collect_for_deposit_creates_new_schedule_after_task_bound(self):

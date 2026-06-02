@@ -494,8 +494,8 @@ class StressServiceTests(SimpleTestCase):
         payer.sign_transaction.return_value = SimpleNamespace(raw_transaction=b"payer")
 
         contract = Mock()
-        contract.functions.mint.return_value.build_transaction.side_effect = lambda tx: (
-            tx
+        contract.functions.mint.return_value.build_transaction.side_effect = (
+            lambda tx: (tx)
         )
         contract.functions.transfer.return_value.build_transaction.side_effect = (
             lambda tx: tx
@@ -1533,7 +1533,7 @@ class StressContractProvisioningTests(TestCase):
         )
 
     def test_setup_wallet_for_vault_assigns_system_evm_hot_address_as_vault(self):
-        # 归集统一由系统级热钱包发起并付 gas，故 vault 必须写成系统热钱包的 EVM 地址，
+        # 归集统一由系统热钱包发起并付 gas，故 vault 必须写成系统热钱包的 EVM 地址，
         # 且与 _fund_evm_vault 注资的派生地址同址（二者用完全相同的 get_address 参数）。
         from core.models import SystemWallet
 
@@ -1543,9 +1543,7 @@ class StressContractProvisioningTests(TestCase):
         _setup_wallet_for_vault(project)
         system_hot_address = (
             SystemWallet.get_current()
-            .wallet.get_address(
-                chain_type=ChainType.EVM, usage=AddressUsage.HotWallet
-            )
+            .wallet.get_address(chain_type=ChainType.EVM, usage=AddressUsage.HotWallet)
             .address
         )
 

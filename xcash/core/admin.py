@@ -32,11 +32,7 @@ class SystemSettingsAdmin(ModelAdmin):
     fieldsets = (
         (
             "后台安全",
-            {
-                "fields": (
-                    "admin_session_timeout_minutes",
-                )
-            },
+            {"fields": ("admin_session_timeout_minutes",)},
         ),
         (
             "Webhook 投递",
@@ -50,11 +46,7 @@ class SystemSettingsAdmin(ModelAdmin):
         ),
         (
             "异常巡检",
-            {
-                "fields": (
-                    "webhook_event_timeout_minutes",
-                )
-            },
+            {"fields": ("webhook_event_timeout_minutes",)},
         ),
         (
             "VaultSlot",
@@ -105,8 +97,7 @@ class SystemSettingsAdmin(ModelAdmin):
 
     def has_add_permission(self, request):
         return (
-            self.has_module_permission(request)
-            and not SystemSettings.objects.exists()
+            self.has_module_permission(request) and not SystemSettings.objects.exists()
         )
 
     def has_delete_permission(self, request, obj=None):
@@ -155,7 +146,7 @@ class SystemWalletAdmin(ModelAdmin):
     list_display = ("id", "wallet", "updated_at")
 
     def has_module_permission(self, request):
-        # 系统级热钱包是平台基础设施入口，只向超管暴露。
+        # 系统热钱包是平台基础设施入口，只向超管暴露。
         return bool(request.user.is_active and request.user.is_superuser)
 
     def has_view_permission(self, request, obj=None):
@@ -174,7 +165,9 @@ class SystemWalletAdmin(ModelAdmin):
         if not self.has_view_permission(request):
             raise PermissionDenied
         system_wallet = SystemWallet.get_current()
-        return redirect(reverse("admin:core_systemwallet_change", args=[system_wallet.pk]))
+        return redirect(
+            reverse("admin:core_systemwallet_change", args=[system_wallet.pk])
+        )
 
     @display(description=_("说明"))
     def display_system_wallet_note(self, instance: SystemWallet):
@@ -240,8 +233,12 @@ class SystemWalletAdmin(ModelAdmin):
 
     def build_chain_balance_rows(self, instance: SystemWallet):
         rows = []
-        address, address_error = self.resolve_chain_type_address(instance, ChainType.EVM)
-        for chain in Chain.objects.filter(type=ChainType.EVM, active=True).order_by("code"):
+        address, address_error = self.resolve_chain_type_address(
+            instance, ChainType.EVM
+        )
+        for chain in Chain.objects.filter(type=ChainType.EVM, active=True).order_by(
+            "code"
+        ):
             balance = (
                 address_error
                 if address_error

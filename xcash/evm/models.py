@@ -473,7 +473,7 @@ class VaultSlot(models.Model):
             raise RuntimeError(missing_token_message)
 
         # 归集交易只把 VaultSlot 内的资金转给合约写死的 vault，collect() 无权限校验，
-        # 调用方仅承担 gas。故与部署一样统一用系统级热钱包，全局只需维护一个热钱包的 gas。
+        # 调用方仅承担 gas。故与部署一样统一用系统热钱包，全局只需维护一个热钱包的 gas。
         sender = SystemWallet.get_current().wallet.get_address(
             chain_type=ChainType.EVM,
             usage=AddressUsage.HotWallet,

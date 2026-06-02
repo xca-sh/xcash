@@ -142,10 +142,10 @@ class SystemSettings(models.Model):
 
 
 class SystemWallet(models.Model):
-    """全平台唯一系统级热钱包归属声明。
+    """全平台唯一系统热钱包归属声明。
 
     Wallet 负责助记词托管与地址派生；SystemWallet 只表达
-    “系统级热钱包业务归属”，避免和项目热钱包混淆。
+    “系统热钱包业务归属”，避免和项目热钱包混淆。
     """
 
     singleton_key = models.PositiveSmallIntegerField(
@@ -158,21 +158,21 @@ class SystemWallet(models.Model):
         "chains.Wallet",
         on_delete=models.PROTECT,
         related_name="system_wallet",
-        verbose_name=_("系统级热钱包"),
+        verbose_name=_("系统热钱包"),
         help_text=_("用于平台基础设施交易，例如统一部署 VaultSlot 合约。"),
     )
     created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
     updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
 
     class Meta:
-        verbose_name = _("系统级热钱包")
+        verbose_name = _("系统热钱包")
         verbose_name_plural = verbose_name
 
     def __str__(self):
-        return str(_("系统级热钱包"))
+        return str(_("系统热钱包"))
 
     def save(self, *args, **kwargs):
-        # 强制收口为单例记录，避免系统级热钱包入口分叉。
+        # 强制收口为单例记录，避免系统热钱包入口分叉。
         self.singleton_key = 1
         super().save(*args, **kwargs)
 
@@ -193,4 +193,4 @@ class SystemWallet(models.Model):
             return cls.objects.select_related("wallet").get(singleton_key=1)
 
     def delete(self, *args, **kwargs):
-        raise RuntimeError("系统级热钱包不允许删除")
+        raise RuntimeError("系统热钱包不允许删除")
