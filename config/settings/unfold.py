@@ -81,7 +81,7 @@ SIDEBAR_UNFOLD = {
         "navigation": [
             {
                 # 所有后台用户都统一从总览进入，避免继续维护双后台心智模型。
-                "title": _("总览"),
+                "title": _("系统"),
                 "collapsible": False,
                 "items": [
                     {
@@ -95,7 +95,7 @@ SIDEBAR_UNFOLD = {
                         "link": reverse_lazy("admin:core_systemwallet_changelist"),
                     },
                     {
-                        "title": _("系统参数"),
+                        "title": _("运行参数"),
                         "icon": "tune",
                         "link": reverse_lazy("admin:core_systemsettings_changelist"),
                     },
@@ -103,6 +103,22 @@ SIDEBAR_UNFOLD = {
                         "title": _("用户管理"),
                         "icon": "account_circle",
                         "link": reverse_lazy("admin:users_user_changelist"),
+                    },
+                ],
+            },
+            {
+                "title": _("货币"),
+                "collapsible": False,
+                "items": [
+                    {
+                        "title": _("加密货币"),
+                        "icon": "currency_exchange",
+                        "link": reverse_lazy("admin:currencies_crypto_changelist"),
+                    },
+                    {
+                        "title": _("法定货币"),
+                        "icon": "currency_yuan",
+                        "link": reverse_lazy("admin:currencies_fiat_changelist"),
                     },
                 ],
             },
@@ -168,17 +184,6 @@ SIDEBAR_UNFOLD = {
                 ],
             },
             {
-                "title": _("运维"),
-                "collapsible": True,
-                "items": [
-                    {
-                        "title": _("异常巡检"),
-                        "icon": "monitor_heart",
-                        "link": reverse_lazy("operational-inspection"),
-                    },
-                ],
-            },
-            {
                 "title": _("区块链"),
                 "collapsible": True,
                 "items": [
@@ -219,22 +224,6 @@ SIDEBAR_UNFOLD = {
                         "link": reverse_lazy(
                             "admin:django_celery_results_taskresult_changelist",
                         ),
-                    },
-                ],
-            },
-            {
-                "title": _("货币"),
-                "collapsible": True,
-                "items": [
-                    {
-                        "title": _("加密货币"),
-                        "icon": "currency_exchange",
-                        "link": reverse_lazy("admin:currencies_crypto_changelist"),
-                    },
-                    {
-                        "title": _("法币"),
-                        "icon": "currency_yuan",
-                        "link": reverse_lazy("admin:currencies_fiat_changelist"),
                     },
                 ],
             },
