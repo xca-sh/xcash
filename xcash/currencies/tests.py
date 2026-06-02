@@ -16,7 +16,7 @@ class CustomTokenPricingTests(TestCase):
     """未上 CoinGecko 的自定义代币：不进支付、价格优雅降级。"""
 
     def setUp(self):
-        self.chain = Chain.objects.create(code=ChainCode.Ethereum, rpc="", active=True)
+        self.chain = Chain.objects.create(code=ChainCode.Ethereum, rpc="", active=False)
         # 无 coingecko_id 的自定义代币
         self.custom = Crypto.objects.create(name="ProjectCoin", symbol="PJC")
         # 有行情源的币（稳定币锚定 USD）
@@ -62,7 +62,7 @@ class ChainNativeCryptoMappingTests(TestCase):
         chain = Chain.objects.create(
             code=ChainCode.Ethereum,
             rpc="",
-            active=True,
+            active=False,
         )
         native_coin = chain.native_coin
 
@@ -79,7 +79,7 @@ class ChainCryptoDeploymentImmutabilityTests(TestCase):
         self.chain = Chain.objects.create(
             code=ChainCode.Ethereum,
             rpc="",
-            active=True,
+            active=False,
         )
         self.usdt = Crypto.objects.create(
             name="Tether", symbol="USDT", coingecko_id="tether"

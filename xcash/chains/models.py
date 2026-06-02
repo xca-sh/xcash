@@ -48,6 +48,7 @@ class Chain(models.Model):
     latest_block_number = models.PositiveIntegerField(
         default=0, verbose_name=_("最新区块")
     )
+    sort_order = models.PositiveIntegerField(default=0, verbose_name=_("排序序号"))
     active = models.BooleanField(default=False, verbose_name=_("启用"))
 
     # For EVM
@@ -70,6 +71,19 @@ class Chain(models.Model):
     class Meta:
         verbose_name = _("链")
         verbose_name_plural = _("链")
+        constraints = [
+            models.CheckConstraint(
+                name="chain_active_requires_runtime_config",
+                condition=(
+                    models.Q(active=False)
+                    | (models.Q(type=ChainType.EVM) & ~models.Q(rpc=""))
+                    | (
+                        models.Q(type=ChainType.TRON)
+                        & ~models.Q(tron_api_key="")
+                    )
+                ),
+            ),
+        ]
 
     def __str__(self):
         return self.name

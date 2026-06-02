@@ -30,12 +30,14 @@ class ChainAdmin(ModelAdmin):
         "code",
         "type_display",
         "native_coin_display",
+        "sort_order",
         "active",
         "confirm_block_count_display",
         "latest_block_number",
         "evm_log_max_block_range",
     )
     list_editable = (
+        "sort_order",
         "active",
         "evm_log_max_block_range",
     )
@@ -60,6 +62,7 @@ class ChainAdmin(ModelAdmin):
             {
                 "fields": (
                     "code",
+                    "sort_order",
                     "active",
                 )
             },

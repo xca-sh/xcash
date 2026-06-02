@@ -9,6 +9,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from django.utils import timezone
 
+from chains.models import Chain
 from chains.models import ConfirmMode
 from chains.models import TransferType
 from chains.service import ChainService
@@ -111,9 +112,30 @@ class InvoiceService:
             chains = finalized.get(currency, [])
             if not chains:
                 raise APIError(ErrorCode.NO_AVAILABLE_METHOD)
-            return {currency: chains}
+            return {currency: InvoiceService.sort_chain_codes(chains)}
 
-        return finalized
+        return {
+            crypto_symbol: InvoiceService.sort_chain_codes(chain_codes)
+            for crypto_symbol, chain_codes in finalized.items()
+        }
+
+    @staticmethod
+    def sort_chain_codes(chain_codes: list[str]) -> list[str]:
+        """按 Chain.sort_order 升序排列链；同序号用 code 保持稳定顺序。"""
+        if len(chain_codes) <= 1:
+            return list(chain_codes)
+
+        order_by_code = {
+            chain.code: (chain.sort_order, chain.code)
+            for chain in Chain.objects.filter(code__in=chain_codes).only(
+                "code",
+                "sort_order",
+            )
+        }
+        return sorted(
+            chain_codes,
+            key=lambda chain_code: order_by_code.get(chain_code, (0, chain_code)),
+        )
 
     @staticmethod
     def refresh_initial_worth(invoice: Invoice) -> None:

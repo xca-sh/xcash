@@ -482,6 +482,59 @@ class InvoicePaymentSelectionTests(TestCase):
         self.assertEqual(transfer.type, TransferType.Invoice)
 
 
+class InvoiceFinalizeMethodsOrderingTests(TestCase):
+    def test_requested_chain_codes_are_sorted_by_chain_sort_order(self):
+        project = Project.objects.create(name="Method Order Project")
+        crypto = Crypto.objects.create(
+            name="Tether Ordered",
+            symbol="USDTO",
+            coingecko_id="tether-ordered",
+        )
+        eth_chain = Chain(
+            code=ChainCode.Ethereum,
+            type=ChainType.EVM,
+            rpc="http://ethereum.invalid",
+            active=True,
+            sort_order=20,
+        )
+        bsc_chain = Chain(
+            code=ChainCode.BSC,
+            type=ChainType.EVM,
+            rpc="http://bsc.invalid",
+            active=True,
+            sort_order=10,
+        )
+        Chain.objects.bulk_create([eth_chain, bsc_chain])
+        eth_chain.refresh_from_db()
+        bsc_chain.refresh_from_db()
+        ChainCryptoDeployment.objects.create(
+            crypto=crypto,
+            chain=eth_chain,
+            address="0x0000000000000000000000000000000000000001",
+            decimals=6,
+        )
+        ChainCryptoDeployment.objects.create(
+            crypto=crypto,
+            chain=bsc_chain,
+            address="0x0000000000000000000000000000000000000002",
+            decimals=6,
+        )
+        DifferRecipientAddress.objects.create(
+            name="ordered-recipient",
+            project=project,
+            chain_type=ChainType.EVM,
+            address="0x0000000000000000000000000000000000000003",
+        )
+
+        methods = InvoiceService.finalize_methods(
+            project=project,
+            billing_mode=InvoiceBillingMode.DIFFER,
+            requested={crypto.symbol: [eth_chain.code, bsc_chain.code]},
+        )
+
+        self.assertEqual(methods, {crypto.symbol: [bsc_chain.code, eth_chain.code]})
+
+
 class InvoicePaymentSelectionConcurrencyTests(TransactionTestCase):
     def setUp(self):
         self.user = User.objects.create(username="merchant-concurrency")

@@ -2,8 +2,10 @@ from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError
 
 from chains.constants import ChainCode
+from chains.constants import ChainType
 from chains.models import Chain
 
 
@@ -42,6 +44,50 @@ def test_clean_skips_when_rpc_empty():
 def test_clean_skips_for_tron():
     chain = Chain(code=ChainCode.Tron, rpc="", tron_api_key="key")
     chain.full_clean()
+
+
+@pytest.mark.django_db
+def test_active_evm_chain_requires_rpc():
+    with pytest.raises(ValidationError):
+        Chain.objects.create(code=ChainCode.Ethereum, rpc="", active=True)
+
+
+@pytest.mark.django_db
+def test_active_tron_chain_requires_api_key():
+    with pytest.raises(ValidationError):
+        Chain.objects.create(code=ChainCode.Tron, tron_api_key="", active=True)
+
+
+@pytest.mark.django_db
+def test_active_tron_chain_rejects_clearing_api_key():
+    chain = Chain.objects.create(
+        code=ChainCode.Tron,
+        tron_api_key="configured",
+        active=True,
+    )
+
+    chain.tron_api_key = ""
+    with pytest.raises(ValidationError):
+        chain.save(update_fields={"tron_api_key"})
+
+    chain.refresh_from_db()
+    assert chain.active is True
+    assert chain.tron_api_key == "configured"
+
+
+@pytest.mark.django_db
+def test_active_chain_runtime_config_database_constraint():
+    with pytest.raises(IntegrityError):
+        Chain.objects.bulk_create(
+            [
+                Chain(
+                    code=ChainCode.Ethereum,
+                    type=ChainType.EVM,
+                    rpc="",
+                    active=True,
+                )
+            ]
+        )
 
 
 @pytest.mark.django_db
