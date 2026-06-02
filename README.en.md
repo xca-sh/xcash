@@ -20,24 +20,36 @@
 
 ## What is Xcash?
 
-**Xcash** is an open-source, self-hosted **cryptocurrency payment gateway** for businesses, SaaS products, exchanges, and wallet platforms. It helps you accept crypto payments, USDT payments, on-chain deposits, and withdrawals directly through your own infrastructure.
+**Xcash** is an open-source, self-hosted **cryptocurrency payment gateway** for businesses, SaaS products, exchanges, and wallet platforms. It helps you accept crypto payments, USDT payments, and on-chain deposits directly through your own infrastructure.
 
-Unlike hosted payment processors such as CoinGate or OpenNode, Xcash is **fully self-custodial**: private keys stay on your infrastructure, payments go directly to your wallet addresses, and Xcash does not take a platform fee. It is designed for teams that need multi-chain payment collection, deposits, withdrawals, and webhook notifications.
+Unlike hosted payment processors such as CoinGate or OpenNode, Xcash is **fully self-custodial**: payments flow through smart contracts straight to your own wallet addresses, Xcash never takes custody of funds, and it charges no platform fee. It is designed for teams that need multi-chain payment collection, deposits, and webhook notifications.
 
-**Use cases:** e-commerce crypto payments, USDT deposit and withdrawal systems, cross-border stablecoin settlement, SaaS subscription billing in crypto, exchange-style wallet infrastructure, and internal treasury operations.
+**Use cases:** e-commerce crypto payments, USDT deposit systems, cross-border stablecoin settlement, SaaS subscription billing in crypto, on-chain collection infrastructure, and internal treasury reconciliation.
 
-## Key Capabilities
+## Features
 
 | Feature | Detail |
 |---------|--------|
-| Payment gateway | Accept USDT, ETH, and other crypto assets on major EVM chains and Tron |
-| Self-custody | Private keys stay on your own infrastructure |
+| Invoice payments | Fixed-amount, time-limited invoice collection for checkout, subscription billing, and more |
+| Dedicated deposit addresses | Each user gets a dedicated address—transfer in anytime for instant crediting, just like an exchange |
+| Self-custody | Payments flow through smart contracts straight to your wallet; Xcash never holds funds |
 | Zero platform fees | No percentage cuts, pay only blockchain gas |
-| Deposit and withdrawal | Exchange-style crypto deposit and withdrawal flows |
-| Webhooks | Real-time payment, deposit, and withdrawal event notifications |
-| Risk control | MistTrack on-chain address risk scoring for payments and deposits |
-| EasyPay compatibility | Compatible with EasyPay V1 payment integrations |
-| Docker deployment | Production deployment with Docker Compose |
+| Multi-chain & multi-asset | Major EVM chains plus Tron, with support for any ERC-20 token |
+| Multi-merchant & multi-project | Isolated management of multiple merchants and projects on a single instance |
+| Contract invoices | EVM chains can derive a dedicated CREATE2 address per invoice |
+| On-chain risk control | MistTrack risk scoring on the source addresses of payments and deposits |
+| Webhooks | Real-time payment and deposit event notifications |
+| EasyPay compatibility | Compatible with the EasyPay V1 protocol for smooth migration |
+| Docker deployment | One-command production deployment with Docker Compose |
+
+## Payments vs. Deposits
+
+Xcash offers two ways to receive funds—distinguish them before integrating:
+
+- **Payments**: Invoice-based collection. Each transaction creates a fixed-amount, time-limited invoice that completes once the buyer pays—ideal for one-off collection such as e-commerce checkout or subscription billing. Payments come in two modes based on how addresses are assigned:
+  - **Differential payments**: Buyers share collection addresses, and invoices are told apart by a tiny amount difference. Works on every chain with no extra deployment cost; but the number of concurrent invoices for the same asset and amount is bounded by the available difference slots, so bursts of identical-amount orders can fail to allocate.
+  - **Contract payments**: EVM-only. CREATE2 derives a dedicated collection address per invoice. Addresses never collide, so it handles high concurrency naturally and amounts need no difference offset.
+- **Deposits**: Exchange-style top-ups. Each user is assigned a dedicated deposit address and can transfer in anytime for instant crediting, with no invoice required—ideal for wallets and trading platforms that maintain user balances.
 
 ## Supported Chains
 
@@ -45,7 +57,6 @@ Unlike hosted payment processors such as CoinGate or OpenNode, Xcash is **fully 
 |:-------:|:---:|:---------:|:--------:|:----:|:----:|:-------:|:---------:|:--------:|:---------:|
 | Payment | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Deposit | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes | Yes |
-| Withdrawal | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes | Yes |
 
 All EVM-compatible chains can be enabled from the admin panel without code changes.
 
@@ -75,7 +86,7 @@ Xcash supports MistTrack OpenAPI V3 first and can fall back to the QuickNode Mis
 | Self-hosted | Yes | No | No |
 | Major EVM chains and Tron | Yes | Yes | No |
 | Zero platform fees | Yes | No | No |
-| Deposit and withdrawal | Yes | No | No |
+| On-chain deposits | Yes | No | No |
 | Risk control | Yes | No | No |
 | EasyPay compatibility | Yes | No | No |
 | Docker deployment | Yes | N/A | N/A |
@@ -128,7 +139,7 @@ Recommended server profiles:
 
 Set `PERFORMANCE` in `.env` to `low`, `medium`, or `high`. If it is not set, Xcash uses `low`.
 
-Native EVM coin scanning is disabled by default. Deposit and withdrawal flows depend on native coin scanning because gas distribution, collection, and chain confirmation require continuous block polling. Enable it in the admin panel under **System -> Platform parameters** only when your RPC provider can handle high-frequency calls.
+Native EVM coin scanning is disabled by default. Deposit collection and chain confirmation depend on native coin scanning and continuous block polling. Enable it in the admin panel under **System -> Platform parameters** only when your RPC provider can handle high-frequency calls.
 
 ## Quick Start
 
@@ -201,7 +212,7 @@ This pulls the latest `main` branch and runs the full production upgrade flow.
 
 ## API Integration
 
-After deployment, see [API.md](API.md) to integrate payments, deposits, withdrawals, and webhook callbacks.
+After deployment, see [API.md](API.md) to integrate payments, deposits, and webhook callbacks.
 
 Invoice creation can include an invoice-level `notify_url` to override the project default webhook. The EasyPay V1-compatible `submit.php` endpoint also maps `notify_url` to the invoice-level notification URL.
 
