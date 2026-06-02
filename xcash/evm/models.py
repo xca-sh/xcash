@@ -27,7 +27,6 @@ from common.models import UndeletableModel
 from core.models import SystemWallet
 from core.runtime_settings import get_vault_slot_collect_delay
 from evm.adapter import EvmAdapter
-from evm.choices import TxKind
 from evm.constants import EVM_PIPELINE_DEPTH
 from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS
 from evm.contracts_codec import predict_xcash_vault_slot_address
@@ -690,11 +689,6 @@ class EvmTxTask(UndeletableModel):
     )
     data = models.TextField(_("Data"), blank=True, default="")
     gas = models.PositiveIntegerField(_("Gas"))
-    tx_kind = models.CharField(
-        _("交易形态"),
-        max_length=32,
-        choices=TxKind,
-    )
     gas_price = models.PositiveBigIntegerField(_("Gas Price"), blank=True, null=True)
     signed_payload = models.TextField(_("已签名链上载荷"), blank=True, default="")
 
@@ -708,15 +702,6 @@ class EvmTxTask(UndeletableModel):
                 fields=("sender", "chain", "nonce"),
                 # 约束名直接采用 TxTask 语义，保持当前模型命名一致。
                 name="uniq_evm_tx_task_sender_chain_nonce",
-            ),
-            models.CheckConstraint(
-                condition=models.Q(
-                    tx_kind__in=[
-                        TxKind.NATIVE_TRANSFER,
-                        TxKind.CONTRACT_CALL,
-                    ]
-                ),
-                name="ck_evm_tx_task_tx_kind_valid",
             ),
         ]
         ordering = ("created_at",)
@@ -757,8 +742,7 @@ class EvmTxTask(UndeletableModel):
     def _passes_balance_preflight(self) -> bool:
         # pre-flight 第 1 步：主动阈值检查。
         # buffer_required = value + N * task.gas * signed_gas_price。
-        # N 由 tx_kind 派发表控制；task.gas 是 schedule 时按具体交易形态
-        # 已经确定的 gas limit，避免原生转账和合约调用都套用 ERC-20 上限。
+        # task.gas 是 schedule 时按具体内部合约调用确定的 gas limit。
         if self.gas_price is None:
             raise ValueError("EVM 任务尚未签名，gas_price 不可为空")
         current_native_balance = self.chain.w3.eth.get_balance(
@@ -987,6 +971,9 @@ class EvmTxTask(UndeletableModel):
         首次签名和首个 tx_hash 生成延后到 broadcast()；内部稳定身份只依赖
         (sender, chain, nonce)。
         """
+        if intent.value != 0:
+            raise ValueError("EVM task value must be 0")
+
         with db_transaction.atomic():
             AddressChainState.acquire_for_update(
                 address=intent.sender,
@@ -1014,7 +1001,6 @@ class EvmTxTask(UndeletableModel):
                 nonce=nonce,
                 data=intent.data,
                 gas=intent.gas,
-                tx_kind=intent.tx_kind,
             )
 
     @staticmethod

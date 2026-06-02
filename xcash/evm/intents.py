@@ -9,19 +9,14 @@ import eth_abi
 from web3 import Web3
 
 from chains.models import TxTaskType
-from evm.choices import TxKind
-from evm.constants import DEFAULT_BASE_TRANSFER_GAS
-from evm.constants import DEFAULT_ERC20_TRANSFER_GAS
 from evm.constants import DEFAULT_VAULT_SLOT_COLLECT_GAS
 from evm.constants import DEFAULT_VAULT_SLOT_DEPLOY_GAS
-from evm.constants import ERC20_TRANSFER_SELECTOR
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from chains.models import Address
     from chains.models import Chain
-    from currencies.models import Crypto
 
 
 @dataclass(frozen=True)
@@ -30,7 +25,6 @@ class EvmTxIntent:
 
     sender: Address
     chain: Chain
-    tx_kind: TxKind
     to: str
     value: int
     data: str
@@ -64,32 +58,6 @@ def _function_selector(signature: str) -> str:
     return bytes(Web3.keccak(text=signature)[:4]).hex()
 
 
-def build_native_transfer_intent(
-    *,
-    sender: Address,
-    chain: Chain,
-    to: str,
-    value: int,
-    tx_type: TxTaskType,
-    verify_fn: Callable[[], None] | None = None,
-) -> EvmTxIntent:
-    if value < 0:
-        raise ValueError("value must be >= 0")
-
-    to_checksum = Web3.to_checksum_address(to)
-    return EvmTxIntent(
-        sender=sender,
-        chain=chain,
-        tx_kind=TxKind.NATIVE_TRANSFER,
-        to=to_checksum,
-        value=value,
-        data="",
-        gas=DEFAULT_BASE_TRANSFER_GAS,
-        tx_type=tx_type,
-        verify_fn=verify_fn,
-    )
-
-
 def build_contract_call_intent(
     *,
     sender: Address,
@@ -103,52 +71,16 @@ def build_contract_call_intent(
 ) -> EvmTxIntent:
     if gas <= 0:
         raise ValueError("gas must be > 0")
-    if value < 0:
-        raise ValueError("value must be >= 0")
+    if value != 0:
+        raise ValueError("contract call value must be 0")
 
     return EvmTxIntent(
         sender=sender,
         chain=chain,
-        tx_kind=TxKind.CONTRACT_CALL,
         to=Web3.to_checksum_address(contract_address),
         value=value,
         data=_normalize_hex_calldata(data),
         gas=gas,
-        tx_type=tx_type,
-        verify_fn=verify_fn,
-    )
-
-
-def build_erc20_transfer_intent(
-    *,
-    sender: Address,
-    chain: Chain,
-    crypto: Crypto,
-    to: str,
-    value_raw: int,
-    tx_type: TxTaskType,
-    verify_fn: Callable[[], None] | None = None,
-) -> EvmTxIntent:
-    if value_raw < 0:
-        raise ValueError("value_raw must be >= 0")
-
-    to_checksum = Web3.to_checksum_address(to)
-    token_addr = crypto.address(chain)
-    if not token_addr:
-        raise ValueError(
-            f"Crypto {crypto.symbol} is not deployed on chain {chain.code}"
-        )
-
-    encoded_args = eth_abi.encode(
-        ["address", "uint256"], [to_checksum, value_raw]
-    ).hex()
-
-    return build_contract_call_intent(
-        sender=sender,
-        chain=chain,
-        contract_address=token_addr,
-        data=f"{ERC20_TRANSFER_SELECTOR}{encoded_args}",
-        gas=DEFAULT_ERC20_TRANSFER_GAS,
         tx_type=tx_type,
         verify_fn=verify_fn,
     )

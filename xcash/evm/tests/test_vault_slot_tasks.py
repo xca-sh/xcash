@@ -24,7 +24,6 @@ from core.models import SystemWallet
 from currencies.models import ChainCryptoDeployment
 from currencies.models import Crypto
 from deposits.models import Deposit
-from evm.choices import TxKind
 from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS
 from evm.intents import DEFAULT_VAULT_SLOT_COLLECT_GAS
 from evm.intents import DEFAULT_VAULT_SLOT_DEPLOY_GAS
@@ -68,7 +67,6 @@ def test_build_vault_slot_deploy_intent_encodes_factory_call():
     )
 
     assert intent.tx_type == TxTaskType.VaultSlotDeploy
-    assert intent.tx_kind == TxKind.CONTRACT_CALL
     assert intent.to == Web3.to_checksum_address(factory_address)
     assert intent.value == 0
     assert intent.gas == DEFAULT_VAULT_SLOT_DEPLOY_GAS
@@ -100,7 +98,6 @@ def test_build_vault_slot_collect_intent_encodes_slot_call():
     )
 
     assert intent.tx_type == TxTaskType.VaultSlotCollect
-    assert intent.tx_kind == TxKind.CONTRACT_CALL
     assert intent.to == Web3.to_checksum_address(vault_slot_address)
     assert intent.value == 0
     assert intent.gas == DEFAULT_VAULT_SLOT_COLLECT_GAS

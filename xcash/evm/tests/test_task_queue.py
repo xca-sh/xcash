@@ -15,7 +15,6 @@ from chains.models import TxTaskStatus
 from chains.models import TxTaskType
 from chains.models import Wallet
 from currencies.models import Crypto
-from evm.choices import TxKind
 from evm.models import EvmTxTask
 from evm.tests._fixtures import make_evm_chain
 
@@ -79,7 +78,7 @@ class EvmTaskQueueTests(TestCase):
             to=Web3.to_checksum_address("0x00000000000000000000000000000000000000f2"),
             value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
         )
 
@@ -110,7 +109,7 @@ class EvmTaskQueueTests(TestCase):
                 ),
                 value=0,
                 gas=21_000,
-                tx_kind=TxKind.NATIVE_TRANSFER,
+                data="0xdeadbeef",
                 gas_price=1,
             )
 

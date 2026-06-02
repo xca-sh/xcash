@@ -13,7 +13,6 @@ from chains.models import TxTaskStatus
 from chains.models import TxTaskType
 from chains.models import Wallet
 from currencies.models import Crypto
-from evm.choices import TxKind
 from evm.intents import EvmTxIntent
 from evm.models import EvmTxTask
 from evm.tests._fixtures import make_evm_chain
@@ -49,10 +48,9 @@ class EvmTxTaskScheduleTests(TestCase):
         values = {
             "sender": self.address,
             "chain": self.chain,
-            "tx_kind": TxKind.NATIVE_TRANSFER,
             "to": self.recipient,
-            "value": 1_230_000_000_000_000_000,
-            "data": "",
+            "value": 0,
+            "data": "0xdeadbeef",
             "gas": 21_000,
             "tx_type": TxTaskType.VaultSlotCollect,
             "verify_fn": None,
@@ -63,17 +61,14 @@ class EvmTxTaskScheduleTests(TestCase):
     def test_schedule_persists_base_and_evm_fields_from_intent(self):
         intent = self._intent(
             to=Web3.to_checksum_address("0x0000000000000000000000000000000000000c03"),
-            value=456,
             data="0x1234",
             gas=88_000,
-            tx_kind=TxKind.CONTRACT_CALL,
         )
 
         task = EvmTxTask.schedule(intent)
 
         self.assertEqual(task.sender, intent.sender)
         self.assertEqual(task.chain, intent.chain)
-        self.assertEqual(task.tx_kind, intent.tx_kind)
         self.assertEqual(task.to, intent.to)
         self.assertEqual(task.value, intent.value)
         self.assertEqual(task.data, intent.data)
@@ -129,6 +124,14 @@ class EvmTxTaskScheduleTests(TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "balance changed"):
             EvmTxTask.schedule(self._intent(verify_fn=reject))
+
+        self.assertEqual(TxTask.objects.count(), 0)
+        self.assertEqual(EvmTxTask.objects.count(), 0)
+        self.assertEqual(AddressChainState.objects.count(), 0)
+
+    def test_schedule_rejects_non_zero_value(self):
+        with self.assertRaisesRegex(ValueError, "value must be 0"):
+            EvmTxTask.schedule(self._intent(value=1))
 
         self.assertEqual(TxTask.objects.count(), 0)
         self.assertEqual(EvmTxTask.objects.count(), 0)

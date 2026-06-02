@@ -20,8 +20,7 @@ from chains.service import ObservedTransferPayload
 from chains.service import TransferService
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from currencies.models import Crypto
-from evm.choices import TxKind
-from evm.intents import build_native_transfer_intent
+from evm.intents import build_contract_call_intent
 from evm.models import EvmScanCursor
 from evm.models import EvmTxTask
 from evm.scanner.rpc import EvmScannerRpcError
@@ -145,13 +144,14 @@ class EvmChainScannerServiceTests(TestCase):
             ),
         )
         task = EvmTxTask.schedule(
-            build_native_transfer_intent(
+            build_contract_call_intent(
                 sender=addr,
                 chain=chain,
-                to=Web3.to_checksum_address(
+                contract_address=Web3.to_checksum_address(
                     "0x00000000000000000000000000000000000000f2"
                 ),
-                value=123,
+                data="0xdeadbeef",
+                gas=120_000,
                 tx_type=TxTaskType.VaultSlotCollect,
             )
         )
@@ -195,13 +195,14 @@ class EvmChainScannerServiceTests(TestCase):
         )
 
         task = EvmTxTask.schedule(
-            build_native_transfer_intent(
+            build_contract_call_intent(
                 sender=addr,
                 chain=chain,
-                to=Web3.to_checksum_address(
+                contract_address=Web3.to_checksum_address(
                     "0x00000000000000000000000000000000000000fb"
                 ),
-                value=123,
+                data="0xdeadbeef",
+                gas=120_000,
                 tx_type=TxTaskType.VaultSlotCollect,
             )
         )
@@ -266,7 +267,7 @@ class EvmChainScannerServiceTests(TestCase):
                 value=0,
                 nonce=n,
                 gas=21_000,
-                tx_kind=TxKind.NATIVE_TRANSFER,
+                data="0xdeadbeef",
                 gas_price=1,
             )
         base_task = TxTask.objects.create(
@@ -284,7 +285,7 @@ class EvmChainScannerServiceTests(TestCase):
             value=0,
             nonce=5,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x01",
         )
@@ -295,13 +296,14 @@ class EvmChainScannerServiceTests(TestCase):
         )
 
         task = EvmTxTask.schedule(
-            build_native_transfer_intent(
+            build_contract_call_intent(
                 sender=addr,
                 chain=chain,
-                to=Web3.to_checksum_address(
+                contract_address=Web3.to_checksum_address(
                     "0x00000000000000000000000000000000000000f7"
                 ),
-                value=123,
+                data="0xdeadbeef",
+                gas=120_000,
                 tx_type=TxTaskType.VaultSlotCollect,
             )
         )
@@ -351,13 +353,14 @@ class EvmChainScannerServiceTests(TestCase):
         )[1]
 
         EvmTxTask.schedule(
-            build_native_transfer_intent(
+            build_contract_call_intent(
                 sender=addr,
                 chain=chain,
-                to=Web3.to_checksum_address(
+                contract_address=Web3.to_checksum_address(
                     "0x00000000000000000000000000000000000000f9"
                 ),
-                value=123,
+                data="0xdeadbeef",
+                gas=120_000,
                 tx_type=TxTaskType.VaultSlotCollect,
             )
         )

@@ -90,7 +90,6 @@ class EvmTxTaskAdmin(ReadOnlyModelAdmin):
         "display_sender",
         "display_chain",
         "tx_type",
-        "tx_kind",
         "to",
         "value",
         "display_nonce",
@@ -100,7 +99,6 @@ class EvmTxTaskAdmin(ReadOnlyModelAdmin):
     )
     # 状态展示优先读取统一父任务，后台查询一并预加载，避免 N+1。
     list_select_related = ("base_task", "sender", "chain")
-    list_filter = ("tx_kind",)
     search_fields = ("base_task__tx_hash", "sender__address", "to")
 
     @admin.display(ordering="last_attempt_at", description="执行时间")

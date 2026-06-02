@@ -23,8 +23,6 @@ from chains.models import Wallet
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from currencies.models import ChainCryptoDeployment
 from currencies.models import Crypto
-from evm.choices import TxKind
-from evm.constants import DEFAULT_ERC20_TRANSFER_GAS
 from evm.models import EvmScanCursor
 from evm.models import EvmTxTask
 from evm.models import VaultSlot
@@ -219,8 +217,7 @@ class EvmErc20ScannerTests(TestCase):
             to=self.token_deployment.address,
             value=0,
             data=f"0xa9059cbb{encoded_args}",
-            gas=DEFAULT_ERC20_TRANSFER_GAS,
-            tx_kind=TxKind.CONTRACT_CALL,
+            gas=120_000,
             gas_price=1,
             signed_payload="0x01",
         )

@@ -2,8 +2,6 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from unittest.mock import patch
 
-from django.db import IntegrityError
-from django.db import transaction
 from django.test import TestCase
 from web3 import Web3
 from web3.exceptions import ContractLogicError
@@ -19,47 +17,11 @@ from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
 from chains.models import Wallet
-from evm.choices import TxKind
-from evm.constants import DEFAULT_BASE_TRANSFER_GAS
 from evm.models import EvmTxTask
 from evm.tests._fixtures import make_evm_chain
 
 
 class EvmTxTaskTests(TestCase):
-    def test_create_without_tx_kind_is_rejected_by_database(self):
-        chain = make_evm_chain(
-            code=ChainCode.Ethereum,
-            rpc="http://localhost:8545",
-        )
-        wallet = Wallet.objects.create()
-        addr = Address.objects.create(
-            wallet=wallet,
-            chain_type=ChainType.EVM,
-            usage=AddressUsage.HotWallet,
-            bip44_account=1,
-            address_index=0,
-            address="0x0000000000000000000000000000000000000C01",
-        )
-        base_task = TxTask.objects.create(
-            chain=chain,
-            sender=addr,
-            tx_type=TxTaskType.VaultSlotCollect,
-            status=TxTaskStatus.QUEUED,
-        )
-
-        with self.assertRaises(IntegrityError), transaction.atomic():
-            EvmTxTask.objects.create(
-                base_task=base_task,
-                sender=addr,
-                chain=chain,
-                to="0x0000000000000000000000000000000000000002",
-                value=0,
-                nonce=0,
-                gas=21000,
-                gas_price=1,
-                signed_payload="0x00",
-            )
-
     def test_next_nonce_returns_count_of_existing_tasks(self):
         # nonce 基于已有任务数量推算，事务回滚时自动复用，不会产生空洞。
         chain = make_evm_chain(
@@ -95,7 +57,7 @@ class EvmTxTaskTests(TestCase):
             value=0,
             nonce=0,
             gas=21000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x00",
         )
@@ -139,7 +101,7 @@ class EvmTxTaskTests(TestCase):
             to="0x0000000000000000000000000000000000000002",
             value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -169,7 +131,7 @@ class EvmTxTaskTests(TestCase):
         chain.__dict__["w3"] = SimpleNamespace(
             eth=SimpleNamespace(
                 gas_price=1,
-                get_balance=Mock(return_value=10**17),
+                get_balance=Mock(return_value=1),
                 estimate_gas=estimate_gas_mock,
                 send_raw_transaction=send_raw_mock,
             )
@@ -190,9 +152,9 @@ class EvmTxTaskTests(TestCase):
             chain=chain,
             nonce=0,
             to=recipient,
-            value=10**18,
+            value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -244,7 +206,6 @@ class EvmTxTaskTests(TestCase):
             value=0,
             data="0xdeadbeef",
             gas=100_000,
-            tx_kind=TxKind.CONTRACT_CALL,
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -298,9 +259,9 @@ class EvmTxTaskTests(TestCase):
             chain=chain,
             nonce=0,
             to=recipient,
-            value=10**18,
+            value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -314,9 +275,9 @@ class EvmTxTaskTests(TestCase):
         send_raw_mock.assert_called_once()
         self.assertIsNotNone(tx_task.last_attempt_at)
 
-    def test_broadcast_preflight_buffer_uses_task_gas_for_native_transfer(self):
-        # NATIVE_TRANSFER 的主动余额阈值按任务自身 gas 计算；余额刚好覆盖
-        # value + 2 * base_transfer_gas * gas_price 时应通过并进入真实广播。
+    def test_broadcast_preflight_buffer_uses_task_gas_for_contract_call(self):
+        # CONTRACT_CALL 的主动余额阈值按任务自身 gas 计算；余额刚好覆盖
+        # 2 * task_gas * gas_price 时应通过并进入真实广播。
         chain = make_evm_chain(
             code=ChainCode.Avalanche,
             rpc="http://localhost:8545",
@@ -332,14 +293,14 @@ class EvmTxTaskTests(TestCase):
             ),
         )
         gas_price = 1_000
-        value = 10**18
+        value = 0
         estimate_gas_mock = Mock(return_value=21_000)
         send_raw_mock = Mock()
         chain.__dict__["w3"] = SimpleNamespace(
             eth=SimpleNamespace(
                 gas_price=gas_price,
                 get_balance=Mock(
-                    return_value=value + 2 * DEFAULT_BASE_TRANSFER_GAS * gas_price
+                    return_value=2 * 21_000 * gas_price
                 ),
                 estimate_gas=estimate_gas_mock,
                 send_raw_transaction=send_raw_mock,
@@ -361,8 +322,8 @@ class EvmTxTaskTests(TestCase):
             nonce=0,
             to=recipient,
             value=value,
-            gas=DEFAULT_BASE_TRANSFER_GAS,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            gas=21_000,
+            data="0xdeadbeef",
             gas_price=gas_price,
             signed_payload="0x7261772d6279746573",
         )
@@ -418,7 +379,6 @@ class EvmTxTaskTests(TestCase):
             value=0,
             data="0xdeadbeef",
             gas=task_gas,
-            tx_kind=TxKind.CONTRACT_CALL,
             gas_price=gas_price,
             signed_payload="0x7261772d6279746573",
         )
@@ -462,9 +422,8 @@ class EvmTxTaskTests(TestCase):
             nonce=0,
             to=Web3.to_checksum_address("0x" + "a2" * 20),
             value=0,
-            data="",
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=10,
             signed_payload="0x7261772d6279746573",
         )
@@ -517,9 +476,9 @@ class EvmTxTaskTests(TestCase):
             chain=chain,
             nonce=0,
             to=recipient,
-            value=10**18,
+            value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -567,9 +526,8 @@ class EvmTxTaskTests(TestCase):
             nonce=0,
             to=Web3.to_checksum_address("0x" + "a6" * 20),
             value=0,
-            data="",
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=100,
             signed_payload="0x01",
         )
@@ -622,7 +580,7 @@ class EvmTxTaskTests(TestCase):
             to=recipient,
             value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -678,7 +636,7 @@ class EvmTxTaskTests(TestCase):
             to=recipient,
             value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -729,7 +687,7 @@ class EvmTxTaskTests(TestCase):
             to=lower_recipient,
             value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -750,7 +708,7 @@ class EvmTxTaskTests(TestCase):
             to=recipient,
             value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -803,7 +761,7 @@ class EvmTxTaskTests(TestCase):
             to=recipient,
             value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -838,7 +796,7 @@ class EvmTxTaskTests(TestCase):
             eth=SimpleNamespace(
                 gas_price=1,
                 get_transaction_receipt=Mock(return_value=receipt),
-                get_balance=Mock(return_value=10**18),
+                get_balance=Mock(return_value=0),
                 estimate_gas=Mock(return_value=21_000),
                 send_raw_transaction=send_raw_mock,
             )
@@ -865,9 +823,9 @@ class EvmTxTaskTests(TestCase):
             chain=chain,
             nonce=0,
             to=recipient,
-            value=10**18,
+            value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )
@@ -936,9 +894,9 @@ class EvmTxTaskTests(TestCase):
             chain=chain,
             nonce=0,
             to=recipient,
-            value=10**18,
+            value=0,
             gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
+            data="0xdeadbeef",
             gas_price=1,
             signed_payload="0x7261772d6279746573",
         )

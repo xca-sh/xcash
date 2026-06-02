@@ -12,8 +12,7 @@ from chains.models import ChainType
 from chains.models import TxTaskType
 from chains.models import Wallet
 from currencies.models import Crypto
-from evm.choices import TxKind
-from evm.intents import build_native_transfer_intent
+from evm.intents import build_contract_call_intent
 from evm.models import EvmTxTask
 from evm.tests._fixtures import make_evm_chain
 
@@ -49,7 +48,7 @@ class EvmNonceConcurrencyTests(TransactionTestCase):
             ),
         )
 
-    def test_concurrent_native_schedule_assigns_unique_sequential_nonces(self):
+    def test_concurrent_contract_call_schedule_assigns_unique_sequential_nonces(self):
         """同一 (address, chain) 上 N 个线程同时 schedule(intent)，nonce 必须为 {0..N-1}。"""
         barrier = threading.Barrier(self.THREAD_COUNT)
         results: list[int] = []
@@ -63,13 +62,14 @@ class EvmNonceConcurrencyTests(TransactionTestCase):
             try:
                 barrier.wait(timeout=5)
                 task = EvmTxTask.schedule(
-                    build_native_transfer_intent(
+                    build_contract_call_intent(
                         sender=self.address,
                         chain=self.chain,
-                        to=recipient,
-                        value=thread_idx + 1,
+                        contract_address=recipient,
+                        data="0xdeadbeef",
+                        gas=120_000,
                         tx_type=TxTaskType.VaultSlotCollect,
-                    )
+                        )
                 )
                 results.append(task.nonce)
             except Exception as exc:
@@ -103,17 +103,8 @@ class EvmNonceConcurrencyTests(TransactionTestCase):
             ).count(),
             self.THREAD_COUNT,
         )
-        self.assertEqual(
-            set(
-                EvmTxTask.objects.filter(
-                    sender=self.address,
-                    chain=self.chain,
-                ).values_list("tx_kind", flat=True)
-            ),
-            {TxKind.NATIVE_TRANSFER},
-        )
 
-    def test_concurrent_native_schedule_across_addresses_are_independent(self):
+    def test_concurrent_contract_call_schedule_across_addresses_are_independent(self):
         """不同地址并发 schedule，各自 nonce 独立从 0 开始。"""
         addresses = []
         for i in range(self.THREAD_COUNT):
@@ -141,13 +132,14 @@ class EvmNonceConcurrencyTests(TransactionTestCase):
             try:
                 barrier.wait(timeout=5)
                 task = EvmTxTask.schedule(
-                    build_native_transfer_intent(
+                    build_contract_call_intent(
                         sender=addr,
                         chain=self.chain,
-                        to=recipient,
-                        value=1,
+                        contract_address=recipient,
+                        data="0xdeadbeef",
+                        gas=120_000,
                         tx_type=TxTaskType.VaultSlotCollect,
-                    )
+                        )
                 )
                 results.append((str(addr.address), task.nonce))
             except Exception as exc:
@@ -190,13 +182,14 @@ class EvmNonceConcurrencyTests(TransactionTestCase):
             try:
                 batch_barrier.wait(timeout=10)
                 task = EvmTxTask.schedule(
-                    build_native_transfer_intent(
+                    build_contract_call_intent(
                         sender=self.address,
                         chain=self.chain,
-                        to=recipient,
-                        value=1,
+                        contract_address=recipient,
+                        data="0xdeadbeef",
+                        gas=120_000,
                         tx_type=TxTaskType.VaultSlotCollect,
-                    )
+                        )
                 )
                 with lock:
                     results.append(task.nonce)
