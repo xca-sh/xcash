@@ -121,20 +121,20 @@ class InvoiceInitializationTests(TestCase):
             active=True,
         )
 
-    def test_remote_signer_project_wallet_can_initialize_and_select_method_without_local_keys(
+    def test_project_with_differ_recipient_can_initialize_and_select_method(
         self,
     ):
-        # 支付链路本身不依赖项目钱包持钥；即使钱包助记词只在 signer 中，也应能正常创建账单和分配收款地址。
-        remote_wallet = Wallet.objects.create()
+        # 支付链路使用商户指定收款地址，不依赖项目钱包派生地址，应能正常创建账单并分配收款地址。
+        project_wallet = Wallet.objects.create()
         self.eth.prices = {"USD": "1"}
         self.eth.save(update_fields=["prices"])
-        with patch("projects.signals.Wallet.generate", return_value=remote_wallet):
+        with patch("projects.signals.Wallet.generate", return_value=project_wallet):
             project = Project.objects.create(
-                name="RemoteSignerInvoice",
-                wallet=remote_wallet,
+                name="DifferRecipientInvoice",
+                wallet=project_wallet,
             )
         DifferRecipientAddress.objects.create(
-            name="RemoteSigner 收款地址",
+            name="商户指定收款地址",
             project=project,
             chain_type=ChainType.EVM,
             address=Web3.to_checksum_address(
@@ -143,7 +143,7 @@ class InvoiceInitializationTests(TestCase):
         )
         invoice = Invoice.objects.create(
             project=project,
-            out_no="remote-signer-invoice",
+            out_no="differ-recipient-invoice",
             title="Remote invoice",
             currency="USD",
             amount=Decimal("15"),

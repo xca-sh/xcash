@@ -3,7 +3,6 @@ name: xcash
 volumes:
   redis_data: {}
   django_db_data: {}
-  signer_data: {}
   django_staticfiles: {}
 
 # 同机 SaaS 等可信服务通过加入 xcash_public 按 DNS 别名互通（如 http://xcash-caddy）。
@@ -52,20 +51,6 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
 
-  signer:
-    build:
-      context: ./signer
-      dockerfile: Dockerfile
-    container_name: xcash_signer
-    restart: unless-stopped
-    # signer 专属密钥文件（含助记词解密密钥），主应用容器不加载。
-    env_file:
-      - ${SIGNER_ENV_FILE:-.env.signer}
-    # Go + SQLite 单实例托管者：无 PG、无 Redis 依赖，状态全在挂载卷里的 sqlite 文件。
-    networks: [default]
-    volumes:
-      - signer_data:/data
-
   django: &django
     build:
       context: .
@@ -75,9 +60,8 @@ services:
     depends_on:
       - django-db
       - redis
-      - signer
-    # 主环境文件：刻意【不含】signer 助记词解密密钥（仅在 .env.signer）。
-    # 含 SIGNER_SHARED_SECRET（调 signer 的 HMAC）。worker/beat 经 anchor 继承。
+    # 主环境文件含 WALLET_MNEMONIC_ENCRYPTION_KEY（钱包助记词加密密钥）。
+    # 地址派生与 EVM 签名在主系统内部完成，worker/beat 经 anchor 继承同一份配置。
     env_file:
       - ${ENV_FILE:-.env}
     # django/worker/beat 都需要按 DNS 别名解析 saas 侧 Caddy：

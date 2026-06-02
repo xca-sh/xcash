@@ -1541,28 +1541,15 @@ class StressContractProvisioningTests(TestCase):
     def test_setup_wallet_for_vault_assigns_evm_hot_address_as_vault(self):
         # vault 必须写成项目 EVM 热钱包地址，且与 _fund_evm_vault 注资的派生地址同址
         # （二者用完全相同的 get_address(EVM, HotWallet) 参数）。
-        hot_address = "0x1000000000000000000000000000000000000001"
-
-        class _StubSigner:
-            def create_wallet(self, *, wallet_id):
-                return wallet_id
-
-            def derive_address(
-                self, *, wallet, chain_type, bip44_account, address_index
-            ):
-                return hot_address
-
         project = self.make_project(name="stress-vault-wiring")
         self.assertIsNone(project.vault)
 
-        with patch("chains.signer.get_signer_backend", return_value=_StubSigner()):
-            _setup_wallet_for_vault(project)
-            funded_address = project.wallet.get_address(
-                chain_type=ChainType.EVM, usage=AddressUsage.HotWallet
-            ).address
+        _setup_wallet_for_vault(project)
+        funded_address = project.wallet.get_address(
+            chain_type=ChainType.EVM, usage=AddressUsage.HotWallet
+        ).address
 
         project.refresh_from_db()
-        self.assertEqual(project.vault, hot_address)
         self.assertEqual(project.vault, funded_address)
 
     def test_require_stress_methods_ready_passes_with_vault(self):

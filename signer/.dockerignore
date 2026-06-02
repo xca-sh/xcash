@@ -1,8 +1,0 @@
-# 仅构建需要 go 源码与模块文件；以下对镜像无用，排除以缩小构建上下文
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
-/data/
-testdata/
-SPEC.md
-.gitignore

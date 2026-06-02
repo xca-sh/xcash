@@ -43,10 +43,6 @@ wait_for_first_exit() {
 
 trap cleanup EXIT INT TERM
 
-# Go signer 本地运行（go run，:8010），与 django 同为宿主进程。
-ENV_FILE="${ENV_FILE}" "${SCRIPT_DIR}/dev-signer.sh" &
-child_pids+=("$!")
-
 ENV_FILE="${ENV_FILE}" "${SCRIPT_DIR}/dev-web.sh" &
 child_pids+=("$!")
 

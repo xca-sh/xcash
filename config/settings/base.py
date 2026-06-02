@@ -66,14 +66,11 @@ DEFAULT_SUPERUSER_PASSWORD = env.str(
     default="Admin@123456",
 )
 
-# Signer
+# 钱包助记词静态加密
 # ------------------------------------------------------------------------------
-# 主应用默认通过独立 signer 服务完成地址派生和签名；local 仅保留给显式开发场景。
-SIGNER_BACKEND = "remote"
-SIGNER_BASE_URL = "http://signer:8000"
-SIGNER_TIMEOUT = 8.0
-SIGNER_SHARED_SECRET = env.str("SIGNER_SHARED_SECRET", default="")
-SIGNER_REQUEST_TTL = 300
+# 地址派生与 EVM 签名在主系统内部闭环完成（见 chains/keys.py）；助记词以 AES-256-GCM
+# 加密入库，密钥取自该高熵主密钥。生产环境必须显式配置（chains.checks 在 check 阶段拦截缺失）。
+WALLET_MNEMONIC_ENCRYPTION_KEY = env.str("WALLET_MNEMONIC_ENCRYPTION_KEY", default="")
 TRON_RPC_TIMEOUT = 8.0
 
 # 只有当 TCP 对端本身属于受信代理网段时，才接受其转发的 X-Real-IP。

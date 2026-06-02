@@ -177,11 +177,6 @@ SIDEBAR_UNFOLD = {
                         "link": reverse_lazy("operational-inspection"),
                     },
                     {
-                        "title": _("Signer"),
-                        "icon": "shield_lock",
-                        "link": reverse_lazy("signer-overview"),
-                    },
-                    {
                         "title": _("告警通道"),
                         "icon": "campaign",
                         "link": reverse_lazy(

@@ -1,12 +1,8 @@
-import hashlib
-import hmac
-import json
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import Mock
 from unittest.mock import patch
 
-import httpx
 import pytest
 from django.core import checks
 from django.core.exceptions import ValidationError
@@ -32,11 +28,6 @@ from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
 from chains.models import Wallet
-from chains.signer import RemoteSignerBackend
-from chains.signer import SignerAdminSummary
-from chains.signer import SignerServiceError
-from chains.signer import build_signer_signature_payload
-from chains.signer import get_signer_backend
 from chains.tasks import process_transfer
 from chains.transfer_matching import addresses_equal
 from chains.transfer_matching import raw_amount
@@ -368,17 +359,13 @@ class AddressIdentityTests(TestCase):
                 address="0x0000000000000000000000000000000000000002",
             )
 
-    @patch("chains.signer.get_signer_backend")
-    def test_get_address_rejects_corrupted_existing_identity(
-        self, get_signer_backend_mock
-    ):
+    @patch("chains.keys.derive_evm_address")
+    def test_get_address_rejects_corrupted_existing_identity(self, derive_mock):
         # 历史脏数据若把同一 HD 身份写成错误地址，运行时必须立即报错而不是继续使用。
-        signer_backend = Mock(spec=RemoteSignerBackend)
-        signer_backend.derive_address.return_value = Web3.to_checksum_address(
+        derive_mock.return_value = Web3.to_checksum_address(
             "0x00000000000000000000000000000000000000aa"
         )
-        get_signer_backend_mock.return_value = signer_backend
-        wallet = Wallet.objects.create()
+        wallet = Wallet.generate()
         Address.objects.create(
             wallet=wallet,
             chain_type=ChainType.EVM,
@@ -395,19 +382,15 @@ class AddressIdentityTests(TestCase):
                 address_index=0,
             )
 
-    @patch("chains.signer.get_signer_backend")
-    def test_get_address_preserves_non_identity_integrity_error(
-        self, get_signer_backend_mock
-    ):
+    @patch("chains.keys.derive_evm_address")
+    def test_get_address_preserves_non_identity_integrity_error(self, derive_mock):
         # 若冲突的是别的唯一约束（如地址被其他地址记录占用），不能误判成 tuple 并发创建成功。
         expected_address = Web3.to_checksum_address(
             "0x00000000000000000000000000000000000000ab"
         )
-        signer_backend = Mock(spec=RemoteSignerBackend)
-        signer_backend.derive_address.return_value = expected_address
-        get_signer_backend_mock.return_value = signer_backend
-        wallet = Wallet.objects.create()
-        occupied_wallet = Wallet.objects.create()
+        derive_mock.return_value = expected_address
+        wallet = Wallet.generate()
+        occupied_wallet = Wallet.generate()
         Address.objects.create(
             wallet=occupied_wallet,
             chain_type=ChainType.EVM,
@@ -424,19 +407,17 @@ class AddressIdentityTests(TestCase):
                 address_index=0,
             )
 
-    @patch("chains.signer.get_signer_backend")
+    @patch("chains.keys.derive_evm_address")
     def test_get_address_falls_back_to_locked_read_after_integrity_error(
-        self, get_signer_backend_mock
+        self, derive_mock
     ):
         # 模拟并发事务已落库但 get_or_create 撞 unique 约束失败的场景：
         # IntegrityError 后必须用 select_for_update 加锁回查，等对方事务提交后命中记录。
         expected_address = Web3.to_checksum_address(
             "0x00000000000000000000000000000000000000cc"
         )
-        signer_backend = Mock(spec=RemoteSignerBackend)
-        signer_backend.derive_address.return_value = expected_address
-        get_signer_backend_mock.return_value = signer_backend
-        wallet = Wallet.objects.create()
+        derive_mock.return_value = expected_address
+        wallet = Wallet.generate()
         # 预创建等价于"对方事务已提交"的身份记录；bip44_account 必须与  Vault
         # 的 BIP44 映射一致，否则会触发 get_address 的身份完整性检查。
         bip44_account = Wallet.get_bip44_account(AddressUsage.HotWallet)
@@ -463,17 +444,15 @@ class AddressIdentityTests(TestCase):
 
         self.assertEqual(addr.address, expected_address)
 
-    @patch("chains.signer.get_signer_backend")
+    @patch("chains.keys.derive_evm_address")
     def test_get_address_reraises_integrity_error_when_fallback_misses(
-        self, get_signer_backend_mock
+        self, derive_mock
     ):
         # 回查 DoesNotExist 时必须把原 IntegrityError 抛出，避免吞掉真错误。
-        signer_backend = Mock(spec=RemoteSignerBackend)
-        signer_backend.derive_address.return_value = Web3.to_checksum_address(
+        derive_mock.return_value = Web3.to_checksum_address(
             "0x00000000000000000000000000000000000000dd"
         )
-        get_signer_backend_mock.return_value = signer_backend
-        wallet = Wallet.objects.create()
+        wallet = Wallet.generate()
 
         def fake_get_or_create(**_kwargs):
             raise IntegrityError("unrelated unique constraint")
@@ -545,340 +524,90 @@ class AddressChainStateAcquireTests(TestCase):
             )
 
 
-class SignerBackendTests(TestCase):
-    @override_settings(
-        SIGNER_BACKEND="remote",
-        SIGNER_BASE_URL="http://signer.internal",
-        SIGNER_TIMEOUT=3.5,
-        SIGNER_SHARED_SECRET="secret",
-    )
-    @patch("chains.signer.httpx.post")
-    def test_remote_signer_backend_posts_wallet_chain_and_bip44_params(
-        self, httpx_post_mock
-    ):
-        # 远端 signer 接受 wallet_id / chain_type / bip44_account / address_index。
-        addr = Mock(
-            wallet_id=12, chain_type=ChainType.EVM, bip44_account=1, address_index=0
+class WalletGenerationTests(TestCase):
+    """钱包生成与地址派生已在主系统内部闭环（chains/keys.py）。"""
+
+    def test_generate_creates_distinct_encrypted_mnemonics(self):
+        # 每个钱包持有独立助记词；密文非空、互不相同，且能解密回 24 词助记词。
+        wallet_a = Wallet.generate()
+        wallet_b = Wallet.generate()
+
+        self.assertTrue(wallet_a.encrypted_mnemonic)
+        self.assertTrue(wallet_b.encrypted_mnemonic)
+        self.assertNotEqual(
+            wallet_a.encrypted_mnemonic, wallet_b.encrypted_mnemonic
         )
-        chain = Mock()
-        response = Mock()
-        response.json.return_value = {
-            "tx_hash": "0x" + "11" * 32,
-            "raw_transaction": "0xdeadbeef",
-        }
-        httpx_post_mock.return_value = response
+        mnemonic_a = wallet_a.decrypt_mnemonic()
+        self.assertEqual(len(mnemonic_a.split()), 24)
+        self.assertNotEqual(mnemonic_a, wallet_b.decrypt_mnemonic())
 
-        payload = get_signer_backend().sign_evm_transaction(
-            address=addr,
-            chain=chain,
-            tx_dict={"nonce": 7, "data": "0x"},
-        )
+    def test_get_address_matches_internal_derivation_and_is_idempotent(self):
+        # get_address 用本钱包助记词按 HD 路径在进程内派生，落库后再次调用应命中同一条记录。
+        from chains.keys import derive_evm_address
 
-        self.assertEqual(payload.tx_hash, "0x" + "11" * 32)
-        self.assertEqual(payload.raw_transaction, "0xdeadbeef")
-        _, kwargs = httpx_post_mock.call_args
-        body = kwargs["content"].decode("utf-8")
-        self.assertIn('"wallet_id":12', body)
-        self.assertIn(f'"chain_type":"{ChainType.EVM}"', body)
-        self.assertIn('"bip44_account":1', body)
-        self.assertIn('"address_index":0', body)
-
-    @override_settings(
-        SIGNER_BACKEND="remote",
-        SIGNER_BASE_URL="http://signer.internal",
-        SIGNER_TIMEOUT=3.5,
-        SIGNER_SHARED_SECRET="secret",
-    )
-    @patch("chains.signer.httpx.post")
-    def test_remote_signer_backend_create_wallet_returns_wallet_id(
-        self, httpx_post_mock
-    ):
-        response = Mock()
-        response.json.return_value = {
-            "wallet_id": 99,
-            "created": True,
-        }
-        httpx_post_mock.return_value = response
-
-        wallet_id = get_signer_backend().create_wallet(wallet_id=99)
-
-        self.assertEqual(wallet_id, 99)
-        _, kwargs = httpx_post_mock.call_args
-        self.assertEqual(
-            json.loads(kwargs["content"].decode("utf-8")),
-            {
-                "wallet_id": 99,
-                "request_id": json.loads(kwargs["content"].decode("utf-8"))[
-                    "request_id"
-                ],
-            },
-        )
-        request_payload = json.loads(kwargs["content"].decode("utf-8"))
-        self.assertEqual(
-            kwargs["headers"]["X-Signer-Signature"],
-            hmac.new(
-                b"secret",
-                build_signer_signature_payload(
-                    method="POST",
-                    path="/v1/wallets/create",
-                    request_id=request_payload["request_id"],
-                    request_body=kwargs["content"],
-                ),
-                hashlib.sha256,
-            ).hexdigest(),
-        )
-
-    @override_settings(
-        SIGNER_BACKEND="remote",
-        SIGNER_BASE_URL="http://signer.internal",
-        SIGNER_TIMEOUT=3.5,
-        SIGNER_SHARED_SECRET="secret",
-    )
-    @patch("chains.signer.httpx.post")
-    def test_remote_signer_backend_create_wallet_rejects_mismatched_wallet_id(
-        self, httpx_post_mock
-    ):
-        response = Mock()
-        response.json.return_value = {
-            "wallet_id": 100,
-            "created": True,
-        }
-        httpx_post_mock.return_value = response
-
-        with self.assertRaisesMessage(SignerServiceError, "wallet_id 不匹配"):
-            get_signer_backend().create_wallet(wallet_id=99)
-
-    @override_settings(
-        SIGNER_BACKEND="remote",
-        SIGNER_BASE_URL="http://signer.internal",
-        SIGNER_TIMEOUT=3.5,
-        SIGNER_SHARED_SECRET="secret",
-    )
-    @patch("chains.signer.httpx.post")
-    def test_remote_signer_backend_includes_signer_error_detail(
-        self, httpx_post_mock
-    ):
-        response = Mock()
-        response.status_code = 400
-        response.json.return_value = {
-            "code": "1000",
-            "message": "参数错误",
-            "detail": "wallet_id 无效",
-        }
-        response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "Bad Request",
-            request=httpx.Request("POST", "http://signer.internal/v1/sign/evm"),
-            response=response,
-        )
-        httpx_post_mock.return_value = response
-        addr = Mock(
-            wallet_id=95, chain_type=ChainType.EVM, bip44_account=1, address_index=0
-        )
-
-        with self.assertRaisesMessage(
-            SignerServiceError,
-            "远端 signer 请求失败: /v1/sign/evm (HTTP 400, code=1000, detail=wallet_id 无效)",
-        ):
-            get_signer_backend().sign_evm_transaction(
-                address=addr,
-                chain=Mock(),
-                tx_dict={"nonce": 0, "data": "0x"},
-            )
-
-    @override_settings(
-        SIGNER_BACKEND="remote",
-        SIGNER_BASE_URL="http://signer.internal",
-        SIGNER_TIMEOUT=3.5,
-        SIGNER_SHARED_SECRET="secret",
-    )
-    @patch("chains.signer.httpx.post")
-    def test_remote_signer_backend_derive_address_posts_bip44_params(
-        self, httpx_post_mock
-    ):
-        wallet = Mock(pk=12)
-        response = Mock()
-        response.json.return_value = {
-            "address": "0x00000000000000000000000000000000000000f1",
-        }
-        httpx_post_mock.return_value = response
-
-        address = get_signer_backend().derive_address(
-            wallet=wallet,
-            chain_type=ChainType.EVM,
-            bip44_account=1,
+        wallet = Wallet.generate()
+        expected = derive_evm_address(
+            mnemonic=wallet.decrypt_mnemonic(),
+            bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
             address_index=0,
         )
 
-        self.assertEqual(address, "0x00000000000000000000000000000000000000f1")
-        _, kwargs = httpx_post_mock.call_args
-        body = kwargs["content"].decode("utf-8")
-        self.assertIn('"wallet_id":12', body)
-        self.assertIn(f'"chain_type":"{ChainType.EVM}"', body)
-        self.assertIn('"bip44_account":1', body)
-        self.assertIn('"address_index":0', body)
-
-    @override_settings(
-        SIGNER_BACKEND="remote",
-        SIGNER_BASE_URL="http://signer.internal",
-        SIGNER_TIMEOUT=3.5,
-        SIGNER_SHARED_SECRET="secret",
-    )
-    @patch("chains.signer.httpx.get")
-    def test_remote_signer_backend_fetches_admin_summary(self, httpx_get_mock):
-        # 主应用后台只通过内部只读 API 拉取 signer 摘要，不直接读取 signer 数据库。
-        response = Mock()
-        response.json.return_value = {
-            "health": {
-                "database": True,
-                "cache": True,
-                "auth_configured": True,
-                "healthy": True,
-            },
-            "wallets": {"total": 3, "active": 2, "frozen": 1},
-            "requests_last_hour": {
-                "total": 10,
-                "succeeded": 8,
-                "failed": 1,
-                "rate_limited": 1,
-            },
-            "recent_anomalies": [
-                {
-                    "request_id": "req-1",
-                    "endpoint": "/v1/sign/evm",
-                    "wallet_id": 12,
-                    "chain_type": ChainType.EVM,
-                    "bip44_account": 0,
-                    "address_index": 0,
-                    "status": "failed",
-                    "error_code": "1005",
-                    "detail": "wallet 已冻结",
-                    "created_at": "2026-03-14T10:00:00+00:00",
-                }
-            ],
-        }
-        httpx_get_mock.return_value = response
-
-        summary = get_signer_backend().fetch_admin_summary()
-
-        self.assertIsInstance(summary, SignerAdminSummary)
-        self.assertEqual(summary.wallets["frozen"], 1)
-        self.assertEqual(summary.requests_last_hour["failed"], 1)
-        self.assertEqual(summary.recent_anomalies[0]["wallet_id"], 12)
-        _, kwargs = httpx_get_mock.call_args
-        self.assertEqual(
-            kwargs["headers"]["X-Signer-Signature"],
-            hmac.new(
-                b"secret",
-                build_signer_signature_payload(
-                    method="GET",
-                    path="/internal/admin-summary",
-                    request_id=kwargs["headers"]["X-Signer-Request-Id"],
-                    request_body=b"",
-                ),
-                hashlib.sha256,
-            ).hexdigest(),
+        first = wallet.get_address(
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.HotWallet,
         )
-
-
-@override_settings(
-    SIGNER_BACKEND="remote",
-    SIGNER_BASE_URL="http://signer.internal",
-    SIGNER_TIMEOUT=3.5,
-    SIGNER_SHARED_SECRET="secret",
-)
-class WalletRemoteGenerationTests(TestCase):
-    @patch("chains.signer.httpx.post")
-    def test_generate_remote_wallet_uses_signer_create_and_derive_address(
-        self, httpx_post_mock
-    ):
-        # remote 模式下新钱包不再本地生成助记词，但后续 get_address 仍应能通过 signer 派生地址。
-        def side_effect(url, **kwargs):
-            response = Mock()
-            body = json.loads(kwargs["content"].decode("utf-8"))
-            if url.endswith("/v1/wallets/create"):
-                self.assertIsInstance(body["wallet_id"], int)
-                response.json.return_value = {
-                    "wallet_id": body["wallet_id"],
-                    "created": True,
-                }
-                return response
-            if url.endswith("/v1/wallets/derive-address"):
-                self.assertEqual(body["wallet_id"], created_wallet_id)
-                response.json.return_value = {
-                    "address": Web3.to_checksum_address(
-                        "0x000000000000000000000000000000000000abcd"
-                    ),
-                }
-                return response
-            raise AssertionError(f"unexpected url: {url}")
-
-        created_wallet_id = None
-
-        def capturing_side_effect(url, **kwargs):
-            nonlocal created_wallet_id
-            response = side_effect(url, **kwargs)
-            body = json.loads(kwargs["content"].decode("utf-8"))
-            if url.endswith("/v1/wallets/create"):
-                created_wallet_id = body["wallet_id"]
-            return response
-
-        httpx_post_mock.side_effect = capturing_side_effect
-
-        wallet = Wallet.generate()
-        addr = wallet.get_address(
+        second = wallet.get_address(
             chain_type=ChainType.EVM,
             usage=AddressUsage.HotWallet,
         )
 
-        self.assertEqual(wallet.pk, created_wallet_id)
+        self.assertEqual(first.address, expected)
+        self.assertEqual(first.pk, second.pk)
         self.assertEqual(
-            addr.address,
-            Web3.to_checksum_address("0x000000000000000000000000000000000000abcd"),
-        )
-
-    @patch("chains.signer.get_signer_backend")
-    def test_generate_remote_wallet_raises_readable_error_when_signer_unavailable(
-        self,
-        get_signer_backend_mock,
-    ):
-        signer_backend = Mock(spec=RemoteSignerBackend)
-        signer_backend.create_wallet.side_effect = SignerServiceError("signer down")
-        get_signer_backend_mock.return_value = signer_backend
-
-        with self.assertRaisesMessage(
-            RuntimeError, "signer 服务不可用，无法创建新钱包"
-        ):
-            Wallet.generate()
-
-    @patch("chains.signer.get_signer_backend")
-    def test_get_address_raises_readable_error_when_signer_unavailable(
-        self,
-        get_signer_backend_mock,
-    ):
-        signer_backend = Mock(spec=RemoteSignerBackend)
-        signer_backend.derive_address.side_effect = SignerServiceError("signer down")
-        get_signer_backend_mock.return_value = signer_backend
-        wallet = Wallet.objects.create()
-
-        with self.assertRaisesMessage(RuntimeError, "signer 服务不可用，无法为钱包"):
-            wallet.get_address(
+            Address.objects.filter(
+                wallet=wallet,
                 chain_type=ChainType.EVM,
                 usage=AddressUsage.HotWallet,
-            )
+                address_index=0,
+            ).count(),
+            1,
+        )
+
+    def test_address_sign_evm_transaction_round_trips(self):
+        # Address 能用本钱包私钥签出 legacy 交易：tx_hash / raw 均为小写 0x 十六进制。
+        wallet = Wallet.generate()
+        address = wallet.get_address(
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.HotWallet,
+        )
+        tx_dict = {
+            "chainId": 1,
+            "nonce": 0,
+            "from": address.address,
+            "to": "0x000000000000000000000000000000000000dEaD",
+            "value": 1000,
+            "data": "0x",
+            "gas": 21000,
+            "gasPrice": 20000000000,
+        }
+
+        signed = address.sign_evm_transaction(tx_dict=tx_dict)
+
+        self.assertTrue(signed.tx_hash.startswith("0x"))
+        self.assertEqual(signed.tx_hash, signed.tx_hash.lower())
+        self.assertTrue(signed.raw_transaction.startswith("0x"))
 
 
-@override_settings(
-    SIGNER_BACKEND="remote",
-    SIGNER_BASE_URL="",
-    SIGNER_SHARED_SECRET="",
-)
-class SignerSystemCheckTests(TestCase):
-    def test_remote_signer_requires_base_url_and_shared_secret(self):
-        errors = checks.run_checks()
-        error_ids = {error.id for error in errors}
+class WalletMnemonicKeyCheckTests(TestCase):
+    @override_settings(DEBUG=False, WALLET_MNEMONIC_ENCRYPTION_KEY="")
+    def test_missing_key_in_production_raises_error(self):
+        error_ids = {error.id for error in checks.run_checks()}
+        self.assertIn("chains.E001", error_ids)
 
-        self.assertIn("chains.E002", error_ids)
-        self.assertIn("chains.E003", error_ids)
+    @override_settings(DEBUG=False, WALLET_MNEMONIC_ENCRYPTION_KEY="configured-key")
+    def test_configured_key_passes(self):
+        error_ids = {error.id for error in checks.run_checks()}
+        self.assertNotIn("chains.E001", error_ids)
 
 
 class TransferServiceCreateObservedTests(TestCase):

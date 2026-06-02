@@ -1,5 +1,4 @@
 from unittest.mock import MagicMock
-from unittest.mock import patch
 
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.core.cache import cache as _cache
@@ -13,7 +12,6 @@ from django.utils import timezone
 from django_otp.oath import TOTP
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
-from chains.test_signer import build_test_remote_signer_backend
 from users.models import AdminAccessLog
 from users.models import User
 from users.otp import ADMIN_OTP_PENDING_USER_ID_SESSION_KEY
@@ -21,22 +19,13 @@ from users.otp import ADMIN_OTP_VERIFIED_AT_SESSION_KEY
 from users.otp import get_admin_otp_ratelimit_key
 from users.otp import verify_otp_token
 
-_USERS_TEST_PATCHERS = []
-
 
 def setUpModule():
-    # 用户初始化会自动创建项目与钱包；测试阶段统一切到进程内 signer 假体，避免额外依赖外部 HTTP 服务。
+    # 用户初始化会自动创建项目与钱包；地址派生与签名已在 chains 内部闭环，测试直接走真实派生。
     _cache.clear()
-    backend = build_test_remote_signer_backend()
-    for target in ("chains.signer.get_signer_backend",):
-        patcher = patch(target, return_value=backend)
-        patcher.start()
-        _USERS_TEST_PATCHERS.append(patcher)
 
 
 def tearDownModule():
-    while _USERS_TEST_PATCHERS:
-        _USERS_TEST_PATCHERS.pop().stop()
     _cache.clear()
 
 

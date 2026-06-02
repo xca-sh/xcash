@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import TestCase
-from django.test import override_settings
 from web3 import Web3
 
 from chains.constants import ChainCode
@@ -118,59 +117,6 @@ class EvmChainScannerServiceTests(TestCase):
         self.assertEqual(result.from_block, 10)
         self.assertEqual(result.to_block, 10)
 
-    @override_settings(SIGNER_BACKEND="remote")
-    def test_broadcast_rejects_local_fallback_when_remote_signer_enabled(self):
-        # remote signer 模式下，广播阶段不允许再用本地私钥补签，避免应用进程重新持钥。
-        native = Crypto.objects.create(
-            name="Ethereum Remote Signer",
-            symbol="ETHRS",
-            coingecko_id="ethereum-remote-signer",
-        )
-        chain = make_evm_chain(
-            code=ChainCode.Ethereum,
-            rpc="http://localhost:8545",
-            native_coin=native,
-        )
-        chain.__dict__["w3"] = SimpleNamespace(
-            eth=SimpleNamespace(
-                gas_price=2, send_raw_transaction=Mock(), account=Mock()
-            ),
-        )
-        wallet = Wallet.objects.create()
-        addr = Address.objects.create(
-            wallet=wallet,
-            chain_type=ChainType.EVM,
-            usage=AddressUsage.HotWallet,
-            bip44_account=1,
-            address_index=0,
-            address=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000001"
-            ),
-        )
-        base_task = TxTask.objects.create(
-            chain=chain,
-            sender=addr,
-            tx_type=TxTaskType.VaultSlotCollect,
-            status=TxTaskStatus.QUEUED,
-        )
-        tx_task = EvmTxTask.objects.create(
-            base_task=base_task,
-            sender=addr,
-            chain=chain,
-            nonce=0,
-            to=Web3.to_checksum_address("0x0000000000000000000000000000000000000002"),
-            value=0,
-            gas=21_000,
-            tx_kind=TxKind.NATIVE_TRANSFER,
-            gas_price=1,
-            signed_payload="",
-        )
-
-        with self.assertRaisesMessage(Exception, "远端 signer 请求失败"):
-            tx_task.broadcast()
-
-        chain.w3.eth.account.sign_transaction.assert_not_called()
-
     @patch.object(EvmTxTask, "_next_nonce", return_value=0)
     def test_schedule_defers_signing_until_first_broadcast(
         self,
@@ -215,12 +161,12 @@ class EvmChainScannerServiceTests(TestCase):
         self.assertIsNone(task.base_task.tx_hash)
         self.assertFalse(TxHash.objects.filter(tx_task=task.base_task).exists())
 
-    @patch("evm.models.get_signer_backend")
+    @patch.object(Address, "sign_evm_transaction")
     @patch.object(EvmTxTask, "_next_nonce", return_value=0)
     def test_first_broadcast_creates_initial_tx_hash_history(
         self,
         _next_nonce_mock,
-        get_signer_backend_mock,
+        sign_mock,
     ):
         native = Crypto.objects.create(
             name="Ethereum TxHash History",
@@ -243,12 +189,10 @@ class EvmChainScannerServiceTests(TestCase):
             ),
         )
         chain.__dict__["w3"] = SimpleNamespace(eth=SimpleNamespace(gas_price=9))
-        signer_backend = Mock()
-        signer_backend.sign_evm_transaction.return_value = SimpleNamespace(
+        sign_mock.return_value = SimpleNamespace(
             tx_hash="0x" + "ac" * 32,
             raw_transaction="0xdeadbeef",
         )
-        get_signer_backend_mock.return_value = signer_backend
 
         task = EvmTxTask.schedule(
             build_native_transfer_intent(
@@ -278,10 +222,10 @@ class EvmChainScannerServiceTests(TestCase):
         self.assertEqual(task.signed_payload, "0xdeadbeef")
         self.assertEqual(task.gas_price, 9)
 
-    @patch("evm.models.get_signer_backend")
+    @patch.object(Address, "sign_evm_transaction")
     def test_schedule_uses_next_nonce_after_highest_existing_nonce(
         self,
-        get_signer_backend_mock,
+        sign_mock,
     ):
         native = Crypto.objects.create(
             name="Ethereum Nonce State",
@@ -345,12 +289,10 @@ class EvmChainScannerServiceTests(TestCase):
             signed_payload="0x01",
         )
         chain.__dict__["w3"] = SimpleNamespace(eth=SimpleNamespace(gas_price=9))
-        signer_backend = Mock()
-        signer_backend.sign_evm_transaction.return_value = SimpleNamespace(
+        sign_mock.return_value = SimpleNamespace(
             tx_hash="0x" + "aa" * 32,
             raw_transaction="0xdeadbeef",
         )
-        get_signer_backend_mock.return_value = signer_backend
 
         task = EvmTxTask.schedule(
             build_native_transfer_intent(

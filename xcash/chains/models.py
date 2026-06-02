@@ -25,6 +25,7 @@ from common.fields import HashField
 from common.models import UndeletableModel
 
 if TYPE_CHECKING:
+    from chains.keys import EvmSignedPayload
     from currencies.models import Crypto
     from deposits.models import Deposit
     from invoices.models import Invoice
@@ -305,6 +306,11 @@ BIP44_ACCOUNT_MAP: dict[str, int] = {
 
 
 class Wallet(UndeletableModel):
+    # 每个钱包持有一份独立助记词（AES-256-GCM 加密入库，见 chains/keys.py）。
+    # 一份助记词可派生该钱包在所有链、所有用途下的地址，故本字段链中立。
+    # editable=False：助记词只在 generate() 时写入，禁止后台手动改写。
+    encrypted_mnemonic = models.TextField(_("加密助记词"), editable=False)
+
     class Meta:
         verbose_name = _("钱包")
         verbose_name_plural = _("钱包")
@@ -318,22 +324,23 @@ class Wallet(UndeletableModel):
 
     @classmethod
     def generate(cls) -> Wallet:
-        """
-        创建钱包引用并委托独立 signer 生成远端钱包。
-        :return:
-        """
-        from chains.signer import SignerServiceError
-        from chains.signer import get_signer_backend
+        """生成新钱包：在主系统内部创建助记词、加密后落库。
 
-        signer_backend = get_signer_backend()
-        try:
-            with db_transaction.atomic():
-                # 主应用本地只保存钱包引用，密钥材料完全由 signer 托管。
-                wallet = cls.objects.create()
-                signer_backend.create_wallet(wallet_id=wallet.pk)
-        except SignerServiceError as exc:
-            raise RuntimeError("signer 服务不可用，无法创建新钱包") from exc
-        return wallet
+        密钥材料不出主系统：助记词密文存于本表，私钥仅在派生/签名时由 keys.py 在内存中重建，
+        绝不写日志、不在系统外传输。
+        """
+        from chains.keys import encrypt_mnemonic
+        from chains.keys import generate_mnemonic
+
+        # 助记词明文只在内存中短暂存在，加密后立即落库。
+        encrypted_mnemonic = encrypt_mnemonic(generate_mnemonic())
+        return cls.objects.create(encrypted_mnemonic=encrypted_mnemonic)
+
+    def decrypt_mnemonic(self) -> str:
+        """解密本钱包助记词。仅供进程内派生/签名调用，结果绝不写日志、不出系统。"""
+        from chains.keys import decrypt_mnemonic
+
+        return decrypt_mnemonic(self.encrypted_mnemonic)
 
     @staticmethod
     def get_bip44_account(usage: AddressUsage | str) -> int:
@@ -356,22 +363,19 @@ class Wallet(UndeletableModel):
         """
         from django.db import IntegrityError
 
+        from chains.keys import derive_evm_address
+
         bip44_account = self.get_bip44_account(usage)
 
-        from chains.signer import SignerServiceError
-        from chains.signer import get_signer_backend
+        # 当前仅支持 EVM 链派生；新增链族时在 chains/keys.py 扩展派生分支。
+        if chain_type != ChainType.EVM:
+            raise NotImplementedError(f"unsupported chain_type={chain_type}")
 
-        try:
-            expected_address = get_signer_backend().derive_address(
-                wallet=self,
-                chain_type=chain_type,
-                bip44_account=bip44_account,
-                address_index=address_index,
-            )
-        except SignerServiceError as exc:
-            raise RuntimeError(
-                f"signer 服务不可用，无法为钱包 {self.pk} 派生地址"
-            ) from exc
+        expected_address = derive_evm_address(
+            mnemonic=self.decrypt_mnemonic(),
+            bip44_account=bip44_account,
+            address_index=address_index,
+        )
 
         created = False  # noqa
         try:
@@ -452,6 +456,27 @@ class Address(UndeletableModel):
 
     def __str__(self):
         return f"{self.address}"
+
+    def sign_evm_transaction(self, *, tx_dict: dict) -> EvmSignedPayload:
+        """用本地址私钥对一笔 legacy EVM 交易签名，返回归一化签名结果。
+
+        私钥由本地址所属钱包助记词按其 HD 路径在内存中临时重建，绝不写日志、不出系统。
+        仅 EVM 链地址可走此方法；非 EVM 链由各自实现负责签名。
+        """
+        from chains.keys import derive_evm_private_key
+        from chains.keys import sign_evm_transaction
+
+        if self.chain_type != ChainType.EVM:
+            raise NotImplementedError(
+                f"sign_evm_transaction 不支持 chain_type={self.chain_type}"
+            )
+
+        private_key = derive_evm_private_key(
+            mnemonic=self.wallet.decrypt_mnemonic(),
+            bip44_account=self.bip44_account,
+            address_index=self.address_index,
+        )
+        return sign_evm_transaction(private_key=private_key, tx_dict=tx_dict)
 
     def send_crypto(
         self,

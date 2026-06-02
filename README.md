@@ -128,7 +128,7 @@ graph LR
     subgraph Xcash
         API["Xcash API"]
         Worker["Xcash Worker<br/>交易监听 · 归集 · 状态流转"]
-        Signer["Xcash Signer<br/>独立签名服务"]
+        Wallet["Xcash 钱包引擎<br/>助记词托管 · 地址派生 · 交易签名"]
         Webhook["Xcash Webhook<br/>异步通知"]
     end
 
@@ -137,7 +137,7 @@ graph LR
     Buyer -->|发起支付| API
     Merchant <-->|创建账单 / 查询| API
     API <--> Worker
-    API <--> Signer
+    Worker <--> Wallet
     Worker <-->|监听 · 广播| Blockchain
     Webhook -->|推送事件| Merchant
 ```
@@ -179,12 +179,9 @@ cd xcash
 make init-env
 ```
 
-该命令会生成两个环境文件并自动填充随机密钥：
+该命令会生成 `.env` 并自动填充随机密钥：主应用（django/worker/beat）容器 + docker compose 插值 + 本地 dev 共用，含 Django Secret、主库口令、钱包助记词加密密钥（`WALLET_MNEMONIC_ENCRYPTION_KEY`）等。
 
-- `.env` —— 主应用（django/worker/beat）容器 + docker compose 插值 + 本地 dev 共用，含 Django Secret、主库口令、Signer 共享密钥等；**刻意不含** Signer 助记词解密密钥。
-- `.env.signer` —— 仅 signer 容器加载，含助记词加密密钥（`SIGNER_MNEMONIC_ENCRYPTION_KEY`）等最敏感凭据，已 `chmod 600`。
-
-> ⚠️ `.env.signer` **生成后请勿修改**，尤其 `SIGNER_MNEMONIC_ENCRYPTION_KEY`：更改将导致数据库中已加密的助记词永久无法解密、热钱包私钥丢失。请妥善离线备份这两个文件，切勿提交版本库。
+> ⚠️ `.env` **生成后请勿修改** `WALLET_MNEMONIC_ENCRYPTION_KEY`：地址派生与交易签名在主系统内部完成，钱包助记词以 AES-256-GCM 静态加密入库，该密钥用于加解密助记词。一旦更改，数据库中已加密的助记词将永久无法解密、热钱包私钥丢失。请妥善离线备份 `.env`，切勿提交版本库。
 
 ### 3. 设置访问域名
 

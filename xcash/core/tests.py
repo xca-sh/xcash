@@ -19,7 +19,6 @@ from web3 import Web3
 from chains.constants import ChainType
 from chains.models import Chain
 from chains.models import Wallet
-from chains.test_signer import build_test_remote_signer_backend
 from core.default_data import ensure_base_currencies
 from core.default_data import ensure_local_chains
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
@@ -35,26 +34,14 @@ from evm.local_erc20 import LOCAL_EVM_ERC20_ABI
 from evm.local_erc20 import LOCAL_EVM_ERC20_BYTECODE
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 
-_CORE_TEST_PATCHERS = []
-
 
 def setUpModule():
     # core 真实链路会用到账户锁；每轮开始前清掉测试 Redis，避免前序 run 遗留锁串扰。
+    # 地址派生与签名已在 chains 内部闭环，测试直接走真实派生，无需 mock 外部 signer。
     _cache.clear()
-    backend = build_test_remote_signer_backend()
-    # core 联调测试需要真实地址派生与签名，但不应额外依赖外部 signer 进程。
-    for target in (
-        "chains.signer.get_signer_backend",
-        "evm.models.get_signer_backend",
-    ):
-        patcher = patch(target, return_value=backend)
-        patcher.start()
-        _CORE_TEST_PATCHERS.append(patcher)
 
 
 def tearDownModule():
-    while _CORE_TEST_PATCHERS:
-        _CORE_TEST_PATCHERS.pop().stop()
     _cache.clear()
 
 
@@ -238,10 +225,8 @@ class LocalChainBootstrapCommandTests(TestCase):
 
 
 class InitEnvScriptTests(SimpleTestCase):
-    # signer 助记词解密密钥必须只存在于 .env.signer，绝不能进入主应用容器加载的 .env
-    # —— 这是隔离热钱包种子的核心安全约束。
-    SIGNER_ONLY_KEYS = ("SIGNER_MNEMONIC_ENCRYPTION_KEY",)
-
+    # 地址派生与签名已在主系统内部闭环：钱包助记词加密密钥随主应用 .env 一起加载，
+    # 不再有独立 .env.signer。该密钥一旦生成必须稳定不变（改动即等同种子失守）。
     def run_init_env(self, tmp_path):
         """把 init_env.sh 复制进临时 scripts/ 并以 tmp_path 为项目根执行。"""
         repo_root = Path(__file__).resolve().parents[2]
@@ -267,68 +252,40 @@ class InitEnvScriptTests(SimpleTestCase):
             if line and not line.startswith("#") and "=" in line
         )
 
-    def test_generates_env_and_signer_with_isolated_secrets(self):
+    def test_generates_env_with_wallet_mnemonic_key(self):
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             result = self.run_init_env(tmp_path)
 
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             env_path = tmp_path / ".env"
-            signer_path = tmp_path / ".env.signer"
             self.assertTrue(env_path.exists())
-            self.assertTrue(signer_path.exists())
+            # 不再生成独立 signer 环境文件
+            self.assertFalse((tmp_path / ".env.signer").exists())
 
             env = self.parse_env(env_path)
-            signer = self.parse_env(signer_path)
-
-            # 主文件：随机密钥按约定长度生成
+            # 随机密钥按约定长度生成
             self.assertEqual(len(env["DJANGO_SECRET_KEY"]), 64)
             self.assertEqual(len(env["POSTGRES_PASSWORD"]), 32)
             self.assertRegex(env["DJANGO_SECRET_KEY"], r"^[A-Za-z0-9]+$")
+            # 助记词加密密钥随主应用 .env 加载
+            self.assertEqual(len(env["WALLET_MNEMONIC_ENCRYPTION_KEY"]), 64)
 
-            # 安全核心：解密密钥绝不出现在主应用加载的 .env
-            for key in self.SIGNER_ONLY_KEYS:
-                self.assertNotIn(key, env)
-                self.assertIn(key, signer)
-            self.assertEqual(len(signer["SIGNER_MNEMONIC_ENCRYPTION_KEY"]), 64)
-
-            # 跨文件共享的 HMAC 密钥必须严格一致，否则鉴权失败
-            self.assertEqual(
-                env["SIGNER_SHARED_SECRET"], signer["SIGNER_SHARED_SECRET"]
-            )
-
-    def test_does_not_overwrite_existing_env_and_reuses_shared_secret(self):
+    def test_does_not_overwrite_existing_env(self):
+        # 已有 .env 视为密钥复用源：再次运行不得覆盖（避免改掉助记词加密密钥）。
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             env_path = tmp_path / ".env"
             original = (
                 "DJANGO_SECRET_KEY=existing-secret\n"
-                "SIGNER_SHARED_SECRET=existing-hmac\n"
+                "WALLET_MNEMONIC_ENCRYPTION_KEY=do-not-touch\n"
             )
             env_path.write_text(original, encoding="utf-8")
 
             result = self.run_init_env(tmp_path)
 
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            # 已有 .env 原样保留，不被覆盖
             self.assertEqual(env_path.read_text(encoding="utf-8"), original)
-
-            # 派生的 .env.signer 复用 .env 中的共享 HMAC，而非另行随机
-            signer = self.parse_env(tmp_path / ".env.signer")
-            self.assertEqual(signer["SIGNER_SHARED_SECRET"], "existing-hmac")
-
-    def test_does_not_overwrite_existing_signer_env(self):
-        # .env.signer 生成后视为不可变：再次运行不得覆盖（避免改掉解密密钥）。
-        with TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            signer_path = tmp_path / ".env.signer"
-            original = "SIGNER_MNEMONIC_ENCRYPTION_KEY=do-not-touch\n"
-            signer_path.write_text(original, encoding="utf-8")
-
-            result = self.run_init_env(tmp_path)
-
-            self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertEqual(signer_path.read_text(encoding="utf-8"), original)
 
 
 class LocalChainIntegrationMixin:

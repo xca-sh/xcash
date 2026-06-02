@@ -20,7 +20,6 @@ from chains.models import TxHash
 from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
-from chains.signer import get_signer_backend
 from chains.types import AddressStr
 from common.fields import AddressField
 from common.fields import EvmAddressField
@@ -878,9 +877,7 @@ class EvmTxTask(UndeletableModel):
         """首次广播时签名并生成首个 tx_hash；重试时仅在 gas 提升时重签。"""
         current_gas_price = self.chain.w3.eth.gas_price  # noqa: SLF001
         if not self.signed_payload or self.gas_price is None:
-            signed = get_signer_backend().sign_evm_transaction(
-                address=self.sender,
-                chain=self.chain,
+            signed = self.sender.sign_evm_transaction(
                 tx_dict=self._build_transaction_dict(gas_price=current_gas_price),
             )
             self.gas_price = current_gas_price
@@ -896,9 +893,7 @@ class EvmTxTask(UndeletableModel):
             old_gas_price=int(self.gas_price),
             current_gas_price=int(current_gas_price),
         )
-        signed = get_signer_backend().sign_evm_transaction(
-            address=self.sender,
-            chain=self.chain,
+        signed = self.sender.sign_evm_transaction(
             tx_dict=self._build_transaction_dict(gas_price=replacement_gas_price),
         )
         self.gas_price = replacement_gas_price

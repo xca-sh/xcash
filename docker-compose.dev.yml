@@ -92,6 +92,3 @@ services:
       # 1s 出块下 10000 块 ≈ 2.8h 历史，覆盖典型 dev 调试场景。
       - --prune-history
       - "10000"
-
-  # Go signer 在 dev 下不进容器：用 `make dev-up-signer`（scripts/dev-signer.sh，go run）
-  # 在宿主本地运行，监听 :8010，SQLite 落本地文件。无独立 signer 数据库。

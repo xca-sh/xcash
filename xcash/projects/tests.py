@@ -15,7 +15,6 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 from chains.constants import ChainCode
 from chains.constants import ChainType
 from chains.models import Chain
-from chains.test_signer import build_test_remote_signer_backend
 from common.admin import ModelAdmin
 from currencies.models import Crypto
 from projects.admin import DifferRecipientAddressInline
@@ -30,11 +29,8 @@ _PROJECT_TEST_PATCHERS = []
 
 
 def setUpModule():
-    backend = build_test_remote_signer_backend()
-    for target in ("chains.signer.get_signer_backend",):
-        patcher = patch(target, return_value=backend)
-        patcher.start()
-        _PROJECT_TEST_PATCHERS.append(patcher)
+    # 地址派生与签名已在 chains 内部闭环，测试直接走真实派生；
+    # 这里仅旁路 Chain.full_clean（避免单测连真实 RPC 校验 chain_id）。
     patcher = patch.object(Chain, "full_clean", autospec=True)
     patcher.start()
     _PROJECT_TEST_PATCHERS.append(patcher)

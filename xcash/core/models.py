@@ -36,7 +36,7 @@ class SystemSettings(models.Model):
         default=900,
         validators=[MinValueValidator(60)],
         help_text=_(
-            "超过该时间后，Signer 运营等高风险动作需要重新验证两步验证码。"
+            "超过该时间后，项目配置等高风险动作需要重新验证两步验证码。"
         ),
     )
     alerts_repeat_interval_minutes = models.PositiveIntegerField(
@@ -158,7 +158,7 @@ class SystemSettings(models.Model):
 class SystemWallet(models.Model):
     """全平台唯一系统级热钱包归属声明。
 
-    Wallet 仍然只负责 signer 钱包引用和地址派生；SystemWallet 只表达
+    Wallet 负责助记词托管与地址派生；SystemWallet 只表达
     “系统级热钱包业务归属”，避免和项目热钱包混淆。
     """
 
@@ -197,20 +197,12 @@ class SystemWallet(models.Model):
             return system_wallet
 
         from chains.models import Wallet
-        from chains.signer import SignerServiceError
-        from chains.signer import get_signer_backend
 
         try:
             with transaction.atomic():
-                wallet = Wallet.objects.create()
-                system_wallet = cls.objects.create(wallet=wallet)
-                try:
-                    get_signer_backend().create_wallet(wallet_id=wallet.pk)
-                except SignerServiceError as exc:
-                    raise RuntimeError(
-                        "signer 服务不可用，无法创建系统级热钱包"
-                    ) from exc
-                return system_wallet
+                # Wallet.generate() 在主系统内部生成并加密助记词，密钥材料不出系统。
+                wallet = Wallet.generate()
+                return cls.objects.create(wallet=wallet)
         except IntegrityError:
             return cls.objects.select_related("wallet").get(singleton_key=1)
 

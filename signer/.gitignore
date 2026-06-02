@@ -1,6 +1,0 @@
-# SQLite 数据文件（含助记词密文），绝不入库
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
-/data/
-/.bin/

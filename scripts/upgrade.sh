@@ -208,7 +208,7 @@ stop_app_services() {
 
   log "stop app services ${reason}"
   if [[ "${APP_SERVICES_STOP_REQUESTED}" != "true" ]]; then
-    running_services="$("${COMPOSE[@]}" ps --services --filter status=running django worker beat signer)"
+    running_services="$("${COMPOSE[@]}" ps --services --filter status=running django worker beat)"
     if [[ -n "${running_services}" ]]; then
       while IFS= read -r service; do
         [[ -n "${service}" ]] && APP_SERVICES_TO_RESTORE+=("${service}")
@@ -217,7 +217,7 @@ stop_app_services() {
   fi
 
   APP_SERVICES_STOP_REQUESTED=true
-  "${COMPOSE[@]}" stop django worker beat signer
+  "${COMPOSE[@]}" stop django worker beat
 }
 
 restore_pre_migration_services() {
@@ -276,14 +276,6 @@ require_command flock
 [[ -f "${ENV_FILE}" ]] || die "env file not found: ${ENV_FILE}"
 [[ -f "${COMPOSE_FILE}" ]] || die "compose file not found: ${COMPOSE_FILE}"
 
-# signer 专属密钥文件 .env.signer 若缺失则由 init_env.sh 生成（复用 .env 中已有的
-# 共享项，绝不重随机 SIGNER_MNEMONIC_ENCRYPTION_KEY，故对已加密助记词安全）。
-if [[ ! -f .env.signer ]]; then
-  log "ensure .env.signer exists (generate via init_env.sh)"
-  "$(dirname "$0")/init_env.sh"
-fi
-[[ -f .env.signer ]] || die "缺少 .env.signer（请先运行 scripts/init_env.sh）"
-
 set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
@@ -313,7 +305,6 @@ pull_code
 log "build production images"
 "${COMPOSE[@]}" build
 
-# signer 现为 Go + SQLite：无独立 DB 容器，开机自建表，无需迁移彩排。
 log "ensure database and cache dependencies are running"
 "${COMPOSE[@]}" up -d django-db redis
 wait_for_postgres django-db
@@ -359,7 +350,7 @@ run_main_manage django-db migrate --plan 2>&1 \
 compare_plans "${MAIN_REHEARSAL_PLAN}" "${MAIN_PRODUCTION_PLAN}" "main database"
 
 # 跨过此线后 production 主库可能进入（部分）迁移后状态；迁移完成后
-# cleanup 才会按新 schema 尝试拉起服务。signer 用 SQLite，开机自建表，不在此流程内。
+# cleanup 才会按新 schema 尝试拉起服务。
 PRODUCTION_MIGRATE_STARTED=true
 
 log "apply production migrations"

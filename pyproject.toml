@@ -75,7 +75,6 @@ production = [
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "--ds=config.settings.test --reuse-db --import-mode=importlib"
-# 根仓库 pytest 只负责主应用 xcash；独立 signer 需要在 signer/ 目录下按自己的 settings 单独执行。
 testpaths = ["xcash"]
 python_files = [
     "tests.py",

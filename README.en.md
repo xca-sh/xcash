@@ -105,7 +105,7 @@ graph LR
     subgraph Xcash
         API["Xcash API"]
         Worker["Xcash Worker<br/>Monitoring / Collection / State transitions"]
-        Signer["Xcash Signer<br/>Standalone signing service"]
+        Wallet["Xcash wallet engine<br/>Mnemonic custody / Address derivation / Signing"]
         Webhook["Xcash Webhook<br/>Event notification"]
     end
 
@@ -114,7 +114,7 @@ graph LR
     Buyer -->|Pay| API
     Merchant <-->|Create invoice / query| API
     API <--> Worker
-    API <--> Signer
+    Worker <--> Wallet
     Worker <-->|Monitor / Broadcast| Blockchain
     Webhook -->|Push events| Merchant
 ```
@@ -158,10 +158,9 @@ make init-env
 
 This generates two env files with auto-filled random secrets:
 
-- `.env` — shared by the main app containers (django/worker/beat), docker compose interpolation, and local dev. Holds the Django secret key, main DB password, signer shared secret, etc. It deliberately does **not** contain the signer mnemonic decryption key.
-- `.env.signer` — loaded only by the signer container. Holds the most sensitive credentials including `SIGNER_MNEMONIC_ENCRYPTION_KEY`; created with `chmod 600`.
+- `.env` — shared by the main app containers (django/worker/beat), docker compose interpolation, and local dev. Holds the Django secret key, main DB password, and the wallet mnemonic encryption key (`WALLET_MNEMONIC_ENCRYPTION_KEY`), etc.
 
-> ⚠️ Do **not** modify `.env.signer` after it is generated, especially `SIGNER_MNEMONIC_ENCRYPTION_KEY`: changing it makes every encrypted mnemonic in the database permanently undecryptable and loses the hot-wallet private keys. Back up both files offline and never commit them.
+> ⚠️ Do **not** modify `WALLET_MNEMONIC_ENCRYPTION_KEY` after it is generated. Address derivation and transaction signing run inside the main system, and wallet mnemonics are stored encrypted with AES-256-GCM using this key. Changing it makes every encrypted mnemonic in the database permanently undecryptable and loses the hot-wallet private keys. Back up `.env` offline and never commit it.
 
 ### 3. Configure your domain
 

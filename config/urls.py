@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.urls import include
 from django.urls import path
 
-from core.dashboard import operational_inspection_view, signer_overview_view
+from core.dashboard import operational_inspection_view
 from invoices.epay.views import EpaySubmitView
 from invoices.views import payment_view
 
@@ -21,11 +21,6 @@ urlpatterns = [
         # 改动原因：为“异常巡检”提供独立后台页，避免继续复用 admin 首页。
         admin.site.admin_view(operational_inspection_view),
         name="operational-inspection",
-    ),
-    path(
-        "signer/overview",
-        admin.site.admin_view(signer_overview_view),
-        name="signer-overview",
     ),
 ]
 

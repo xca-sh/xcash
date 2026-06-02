@@ -4,7 +4,4 @@ set -o errexit
 set -o pipefail
 set -o nounset
 
-/app/compose/production/django/check-signer-preflight
-
-
 exec celery -A config.celery beat -l WARNING -s /tmp/celerybeat-schedule

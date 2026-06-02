@@ -528,8 +528,8 @@ class EvmTxTaskTests(TestCase):
 
         send_raw_mock.assert_called_once()
 
-    @patch("evm.models.get_signer_backend")
-    def test_rebroadcast_bumps_gas_price_by_125_percent(self, get_signer_backend_mock):
+    @patch.object(Address, "sign_evm_transaction")
+    def test_rebroadcast_bumps_gas_price_by_125_percent(self, sign_mock):
         chain = make_evm_chain(
             code=ChainCode.Anvil,
             rpc="http://localhost:8545",
@@ -542,12 +542,10 @@ class EvmTxTaskTests(TestCase):
             address_index=0,
             address=Web3.to_checksum_address("0x" + "a3" * 20),
         )
-        signer = Mock()
-        signer.sign_evm_transaction.return_value = SimpleNamespace(
+        sign_mock.return_value = SimpleNamespace(
             tx_hash="0x" + "a4" * 32,
             raw_transaction="0x02",
         )
-        get_signer_backend_mock.return_value = signer
         chain.__dict__["w3"] = SimpleNamespace(
             eth=SimpleNamespace(
                 gas_price=105,
@@ -578,7 +576,7 @@ class EvmTxTaskTests(TestCase):
 
         task.broadcast(allow_pending_chain_rebroadcast=True)
 
-        tx_dict = signer.sign_evm_transaction.call_args.kwargs["tx_dict"]
+        tx_dict = sign_mock.call_args.kwargs["tx_dict"]
         assert tx_dict["gasPrice"] == 113
 
     def test_broadcast_keeps_fee_too_low_error_retryable_without_finalizing(self):

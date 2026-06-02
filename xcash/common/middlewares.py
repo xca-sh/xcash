@@ -91,12 +91,6 @@ class XcashMiddleware:
         return request.path.startswith("/v1/")
 
     @staticmethod
-    def _is_signer_request(request: HttpRequest) -> bool:
-        return request.path.startswith("/v1/sign/") or request.path.startswith(
-            "/v1/wallets/"
-        )
-
-    @staticmethod
     def _is_no_signature_request(request: HttpRequest) -> bool:
         post_patterns = [
             re.compile(r"^/v1/invoice/[^/]+/select-method$"),
@@ -110,9 +104,6 @@ class XcashMiddleware:
         return False
 
     def _requires_project(self, request: HttpRequest) -> bool:
-        if self._is_signer_request(request):
-            # signer API 使用独立共享密钥鉴权，不走商户 AppID/HMAC 链路。
-            return False
         return self._is_api_request(request) and not self._is_no_signature_request(
             request
         )

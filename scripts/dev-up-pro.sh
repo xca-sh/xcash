@@ -74,14 +74,9 @@ echo "  gunicorn workers : ${GUNICORN_WORKERS}"
 echo "  celery business  : ${CELERY_BUSINESS_WORKER_CONCURRENCY} threads"
 echo "  celery stress    : ${CELERY_STRESS_WORKER_CONCURRENCY} threads"
 echo "  celery scan      : ${CELERY_SCAN_WORKER_CONCURRENCY} threads"
-echo "  signer           : local go run"
 echo ""
 
-# ── 1. Go Signer ─────────────────────────────────────────────
-ENV_FILE="${ENV_FILE}" "${SCRIPT_DIR}/dev-signer.sh" &
-child_pids+=("$!")
-
-# ── 2. Gunicorn (替代 runserver) ──────────────────────────────
+# ── 1. Gunicorn (替代 runserver) ──────────────────────────────
 uv run gunicorn config.wsgi:application \
   --bind 0.0.0.0:8000 \
   --workers "${GUNICORN_WORKERS}" \

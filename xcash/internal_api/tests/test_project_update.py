@@ -20,7 +20,7 @@ AUTH_HEADER = "Bearer test-internal-token"
 
 @pytest.fixture
 def project(db):
-    # 直接本地创建 Wallet 记录，避免 Wallet.generate() 调用远端 signer。
+    # 直接本地创建 Wallet 记录，避免 Wallet.generate() 无谓地生成助记词。
     wallet = Wallet.objects.create()
     return Project.objects.create(
         name="patch-test-project",

@@ -7,8 +7,6 @@
 - 不支持 DELETE（每个项目必须始终拥有 EpayMerchant）
 """
 
-from unittest.mock import Mock
-from unittest.mock import patch
 
 import pytest
 
@@ -200,16 +198,9 @@ class TestEpayMerchantSafety:
 
 @pytest.mark.django_db
 class TestProjectCreateAutoProvisions:
-    @patch("chains.signer.get_signer_backend")
-    def test_project_create_auto_provisions_epay_merchant(
-        self, get_signer_backend_mock, client,
-    ):
-        # Wallet.generate 会调用远端 signer，测试里 mock 掉避免发真请求。
-        signer_backend = Mock()
-        signer_backend.create_wallet.return_value = None
-        get_signer_backend_mock.return_value = signer_backend
-
+    def test_project_create_auto_provisions_epay_merchant(self, client):
         # 通过 internal_api 创建 Project，应自动配套创建 EpayMerchant。
+        # Wallet.generate 在主系统内部完成助记词生成与加密，无需 mock 外部 signer。
         response = client.post(
             "/internal/v1/projects",
             data={"name": "auto-provision-project"},

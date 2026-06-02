@@ -173,17 +173,19 @@ class VaultSlotAddressSchedulingTests(TestCase):
         deployed_patch.start()
         self.addCleanup(deployed_patch.stop)
 
-    def _patch_signer(self):
-        # factory / template 地址已通过 evm.constants 模块常量注入，无需再 mock 部署配置。
-        return patch(
-            "chains.signer.get_signer_backend",
-            return_value=SimpleNamespace(
-                derive_address=lambda **kwargs: (
-                    self.system_sender.address
-                    if kwargs["wallet"].pk == self.system_wallet.pk
-                    else self.vault.address
-                )
-            ),
+    def patch_address_derivation(self):
+        # 地址派生已在 chains 内部闭环；这里直接桩掉 Wallet.get_address，
+        # 让系统钱包与项目钱包各自返回测试预建的 Address，避免依赖真实派生结果。
+        def fake_get_address(wallet_self, *args, **kwargs):
+            if wallet_self.pk == self.system_wallet.pk:
+                return self.system_sender
+            return self.vault
+
+        return patch.object(
+            Wallet,
+            "get_address",
+            autospec=True,
+            side_effect=fake_get_address,
         )
 
     def test_first_ensure_deposit_address_schedules_deploy_after_commit(self):
@@ -191,10 +193,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
             "0x0000000000000000000000000000000000000f01"
         )
         self.project.save(update_fields=["vault"])
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
@@ -211,10 +213,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertIn(self.project.vault[2:].lower(), intent.data)
 
     def test_customer_vault_slot_records_project_usage_without_invoice_index(self):
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(EvmTxTask, "schedule"),
             self.captureOnCommitCallbacks(execute=True),
         ):
@@ -257,9 +259,9 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_schedule_deploy_records_deploy_tx_task(self):
         slot = self._create_vault_slot()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
-        with signer_patch:
+        with address_patch:
             task = VaultSlot.schedule_deploy(slot.pk)
 
         slot.refresh_from_db()
@@ -267,19 +269,19 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_schedule_deploy_uses_system_wallet_sender(self):
         slot = self._create_vault_slot()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
-        with signer_patch:
+        with address_patch:
             task = VaultSlot.schedule_deploy(slot.pk)
 
         self.assertEqual(task.sender, self.system_sender)
 
     def test_schedule_deploy_skips_when_slot_already_deployed_on_chain(self):
         slot = self._create_vault_slot()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(VaultSlot, "_is_deployed_on_chain", return_value=True),
             patch.object(EvmTxTask, "schedule") as schedule,
         ):
@@ -292,12 +294,12 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_schedule_deploy_returns_recorded_unfinalized_deploy_tx_task(self):
         slot = self._create_vault_slot()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
-        with signer_patch:
+        with address_patch:
             existing_task = VaultSlot.schedule_deploy(slot.pk)
 
-        with signer_patch, patch.object(EvmTxTask, "schedule") as schedule:
+        with address_patch, patch.object(EvmTxTask, "schedule") as schedule:
             task = VaultSlot.schedule_deploy(slot.pk)
 
         self.assertEqual(task.pk, existing_task.pk)
@@ -305,14 +307,14 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_schedule_deploy_skips_successful_recorded_deploy_tx_task(self):
         slot = self._create_vault_slot()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
-        with signer_patch:
+        with address_patch:
             existing_task = VaultSlot.schedule_deploy(slot.pk)
         existing_task.base_task.status = TxTaskStatus.CONFIRMED
         existing_task.base_task.save(update_fields=["status", "updated_at"])
 
-        with signer_patch, patch.object(EvmTxTask, "schedule") as schedule:
+        with address_patch, patch.object(EvmTxTask, "schedule") as schedule:
             task = VaultSlot.schedule_deploy(slot.pk)
 
         self.assertEqual(task.pk, existing_task.pk)
@@ -320,14 +322,14 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_schedule_deploy_recreates_after_failed_recorded_deploy_tx_task(self):
         slot = self._create_vault_slot()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
-        with signer_patch:
+        with address_patch:
             failed_task = VaultSlot.schedule_deploy(slot.pk)
         failed_task.base_task.status = TxTaskStatus.FAILED
         failed_task.base_task.save(update_fields=["status", "updated_at"])
 
-        with signer_patch:
+        with address_patch:
             new_task = VaultSlot.schedule_deploy(slot.pk)
 
         slot.refresh_from_db()
@@ -336,15 +338,15 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_schedule_deploy_does_not_recreate_failed_task_when_slot_has_code(self):
         slot = self._create_vault_slot()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
-        with signer_patch:
+        with address_patch:
             failed_task = VaultSlot.schedule_deploy(slot.pk)
         failed_task.base_task.status = TxTaskStatus.FAILED
         failed_task.base_task.save(update_fields=["status", "updated_at"])
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(VaultSlot, "_is_deployed_on_chain", return_value=True),
             patch.object(EvmTxTask, "schedule") as schedule,
         ):
@@ -358,10 +360,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
     def test_ensure_deposit_address_rejects_project_without_vault(self):
         Project.objects.filter(pk=self.project.pk).update(vault=None)
         self.project.refresh_from_db()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(EvmTxTask, "schedule") as schedule,
             self.assertRaisesRegex(RuntimeError, "VaultSlot Vault 地址未配置"),
         ):
@@ -377,10 +379,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
             code=ChainCode.BSC,
             rpc="http://vault-slot-2.local",
         )
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(EvmTxTask, "schedule"),
             self.captureOnCommitCallbacks(execute=True),
         ):
@@ -410,10 +412,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_existing_slot_without_deploy_task_recovers_schedule(self):
         slot = self._create_vault_slot()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
@@ -428,13 +430,13 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_existing_slot_with_same_deploy_task_does_not_duplicate_schedule(self):
         slot = self._create_vault_slot()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
-        with signer_patch:
+        with address_patch:
             existing_task = VaultSlot.schedule_deploy(slot.pk)
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
@@ -450,10 +452,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
     def test_second_ensure_deposit_address_returns_existing_address_without_scheduling(
         self,
     ):
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
         with (
-            signer_patch,
+            address_patch,
             self.captureOnCommitCallbacks(execute=True),
         ):
             first_address = VaultSlot.ensure_deposit_address(
@@ -462,7 +464,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             )
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
@@ -484,10 +486,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ),
             salt=b"\x11" * 32,
         )
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(
                 VaultSlot.objects,
                 "filter",
@@ -508,11 +510,11 @@ class VaultSlotAddressSchedulingTests(TestCase):
         schedule.assert_not_called()
 
     def test_integrity_error_lookup_failure_reraises_original_integrity_error(self):
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
         original_error = IntegrityError("duplicate")
 
         with (
-            signer_patch,
+            address_patch,
             patch.object(
                 VaultSlot.objects,
                 "filter",
@@ -538,10 +540,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
         SystemSettings.objects.create(vault_slot_collect_delay_minutes=30)
         slot = self._create_vault_slot()
         deposit = self._create_deposit(slot=slot)
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
         before = timezone.now()
 
-        with signer_patch:
+        with address_patch:
             schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
 
         self.assertEqual(schedule.chain, self.chain)
@@ -583,7 +585,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             expires_at=timezone.now(),
         )
 
-        with self._patch_signer():
+        with self.patch_address_derivation():
             schedule = VaultSlot.schedule_collect_for_invoice(invoice.pk)
 
         self.assertEqual(schedule.chain, self.chain)
@@ -594,12 +596,12 @@ class VaultSlotAddressSchedulingTests(TestCase):
     def test_schedule_collect_for_deposit_is_idempotent_for_pending_schedule(self):
         slot = self._create_vault_slot()
         deposit = self._create_deposit(slot=slot)
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
-        with signer_patch:
+        with address_patch:
             existing = VaultSlot.schedule_collect_for_deposit(deposit.pk)
 
-        with signer_patch, patch.object(EvmTxTask, "schedule") as schedule:
+        with address_patch, patch.object(EvmTxTask, "schedule") as schedule:
             task = VaultSlot.schedule_collect_for_deposit(deposit.pk)
 
         self.assertEqual(task.pk, existing.pk)
@@ -607,14 +609,14 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_schedule_collect_for_deposit_reuses_pending_schedule_across_deposits(self):
         slot = self._create_vault_slot()
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
         first_deposit = self._create_deposit(slot=slot, tx_hash_suffix="1")
         second_deposit = self._create_deposit(slot=slot, tx_hash_suffix="2")
-        with signer_patch:
+        with address_patch:
             existing = VaultSlot.schedule_collect_for_deposit(first_deposit.pk)
 
-        with signer_patch, patch.object(EvmTxTask, "schedule") as schedule:
+        with address_patch, patch.object(EvmTxTask, "schedule") as schedule:
             task = VaultSlot.schedule_collect_for_deposit(second_deposit.pk)
 
         self.assertEqual(task.pk, existing.pk)
@@ -632,14 +634,14 @@ class VaultSlotAddressSchedulingTests(TestCase):
     def test_due_collect_schedule_creates_tx_task_and_binds_it(self):
         slot = self._create_vault_slot()
         deposit = self._create_deposit(slot=slot)
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
-        with signer_patch:
+        with address_patch:
             schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
-        with signer_patch:
+        with address_patch:
             created_count = VaultSlotCollectSchedule.execute_due()
 
         self.assertEqual(created_count, 1)
@@ -656,14 +658,14 @@ class VaultSlotAddressSchedulingTests(TestCase):
         slot = self._create_vault_slot()
         first_deposit = self._create_deposit(slot=slot, tx_hash_suffix="1")
         second_deposit = self._create_deposit(slot=slot, tx_hash_suffix="2")
-        signer_patch = self._patch_signer()
+        address_patch = self.patch_address_derivation()
 
-        with signer_patch:
+        with address_patch:
             schedule = VaultSlot.schedule_collect_for_deposit(first_deposit.pk)
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
-        with signer_patch:
+        with address_patch:
             VaultSlotCollectSchedule.execute_due()
             new_schedule = VaultSlot.schedule_collect_for_deposit(second_deposit.pk)
 

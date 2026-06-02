@@ -21,7 +21,7 @@ os.environ.setdefault("REDIS_HOST", "localhost")
 os.environ.setdefault("REDIS_PORT", "6379")
 os.environ.setdefault("REDIS_DB", "0")
 os.environ.setdefault("TRUSTED_PROXY_IPS", "127.0.0.1,::1")
-os.environ.setdefault("SIGNER_SHARED_SECRET", "test-signer-secret")
+os.environ.setdefault("WALLET_MNEMONIC_ENCRYPTION_KEY", "test-wallet-mnemonic-encryption-key")
 
 # web3 7.14.1 仍会在导入阶段触发 websockets.legacy 的上游弃用告警；
 # 测试环境先静默该第三方噪音，避免掩盖项目自身 warning。
@@ -38,12 +38,6 @@ from .base import env
 
 INTERNAL_API_TOKEN = "test-internal-token"
 IS_SAAS = True
-
-# Signer
-# ------------------------------------------------------------------------------
-# base 中 SIGNER_BASE_URL 为按环境写死的常量，不走 env；测试用独立地址以与
-# 真实 signer 区分，配合各用例的 @override_settings 生效。
-SIGNER_BASE_URL = "http://signer.internal"
 
 # stress app 仅在开发/测试环境加载，生产环境不包含。
 INSTALLED_APPS += ["stress"]

@@ -81,10 +81,13 @@ CSRF_TRUSTED_ORIGINS = []
 # 开发环境允许所有跨域请求，生产环境必须通过 CORS_ALLOWED_ORIGINS 配置白名单。
 CORS_ALLOW_ALL_ORIGINS = True
 
-# Signer
+# 钱包助记词静态加密
 # ------------------------------------------------------------------------------
-# 开发环境默认直连本机暴露的 signer 端口，保证 fresh init 时无需先手工补环境变量。
-SIGNER_BASE_URL = "http://127.0.0.1:8010"
+# 开发环境提供固定默认密钥，保证 fresh init 时无需先手工补环境变量即可生成/派生钱包。
+WALLET_MNEMONIC_ENCRYPTION_KEY = env.str(
+    "WALLET_MNEMONIC_ENCRYPTION_KEY",
+    default="dev-wallet-mnemonic-encryption-key-change-me",
+)
 
 # Stress test 配置（仅开发环境）
 STRESS_EVM_RPC_URL = "http://localhost:8545"

@@ -162,7 +162,7 @@ def build_admin_approval_context(
 def build_admin_sensitive_action_context(
     *, verified_at=None, source: str = ""
 ) -> dict[str, object]:
-    # 审批只是敏感动作的一种；项目配置、signer 运营页等入口复用同一份上下文结构。
+    # 审批只是敏感动作的一种；项目配置等敏感入口复用同一份上下文结构。
     return build_admin_approval_context(verified_at=verified_at, source=source)
 
 

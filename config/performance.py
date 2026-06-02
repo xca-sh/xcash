@@ -12,7 +12,6 @@ PROFILE_ENV = "PERFORMANCE"
 class PerformanceProfile:
     django_workers: int
     django_threads: int
-    signer_workers: int
     celery_worker_concurrency: int
 
 
@@ -20,19 +19,16 @@ PROFILES = {
     "low": PerformanceProfile(
         django_workers=1,
         django_threads=2,
-        signer_workers=1,
         celery_worker_concurrency=2,
     ),
     "medium": PerformanceProfile(
         django_workers=4,
         django_threads=4,
-        signer_workers=2,
         celery_worker_concurrency=4,
     ),
     "high": PerformanceProfile(
         django_workers=8,
         django_threads=8,
-        signer_workers=2,
         celery_worker_concurrency=8,
     ),
 }
@@ -94,14 +90,7 @@ def shell_env(target: str) -> dict[str, int]:
                     "celery_worker_concurrency",
                 ),
             }
-        case "signer":
-            return {
-                "SIGNER_GUNICORN_WORKERS": get_int(
-                    "SIGNER_GUNICORN_WORKERS",
-                    "signer_workers",
-                ),
-            }
-    raise ImproperlyConfigured("shell-env target must be one of: web, worker, signer")
+    raise ImproperlyConfigured("shell-env target must be one of: web, worker")
 
 
 def print_shell_env(target: str) -> None:
@@ -115,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         print_shell_env(args[1])
         return 0
     sys.stderr.write(
-        "Usage: python config/performance.py shell-env <web|worker|signer>\n"
+        "Usage: python config/performance.py shell-env <web|worker>\n"
     )
     return 2
 

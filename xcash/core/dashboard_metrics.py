@@ -14,8 +14,6 @@ from django.db.models.functions import Coalesce
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 
-from chains.signer import SignerServiceError
-from chains.signer import get_signer_backend
 from core.monitoring import OperationalRiskService
 from invoices.models import Invoice
 from invoices.models import InvoiceStatus
@@ -40,24 +38,6 @@ def _rate(numerator: int, denominator: int) -> Decimal:
     return (Decimal(numerator) / Decimal(denominator) * Decimal("100")).quantize(
         Decimal("0.1")
     )
-
-
-def build_signer_dashboard_summary() -> dict | None:
-    try:
-        summary = get_signer_backend().fetch_admin_summary()
-    except SignerServiceError as exc:
-        return {
-            "available": False,
-            "detail": str(exc),
-        }
-
-    return {
-        "available": True,
-        "health": summary.health,
-        "wallets": summary.wallets,
-        "requests_last_hour": summary.requests_last_hour,
-        "recent_anomalies": summary.recent_anomalies,
-    }
 
 
 def build_dashboard_metrics() -> dict:
@@ -127,7 +107,6 @@ def build_dashboard_metrics() -> dict:
         status=WebhookEvent.Status.PENDING
     ).count()
     operational_risk = OperationalRiskService.build_summary()
-    signer_summary = build_signer_dashboard_summary()
 
     daily_rows = (
         invoice_30d.annotate(day=TruncDate("created_at"))
@@ -238,5 +217,4 @@ def build_dashboard_metrics() -> dict:
         "recent_stalled_webhook_events": operational_risk[
             "recent_stalled_webhook_events"
         ],
-        "signer_summary": signer_summary,
     }

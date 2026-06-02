@@ -1,42 +1,21 @@
 import json
 
 from django.contrib import admin
-from django.core.exceptions import PermissionDenied
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import RedirectView
 
 from core.dashboard_metrics import build_dashboard_metrics
-from core.dashboard_metrics import build_signer_dashboard_summary
 from core.monitoring import OperationalRiskService
-from users.forms import OTPVerifyForm
-from users.models import AdminAccessLog
-from users.otp import AdminOTPRequiredError
-from users.otp import complete_admin_otp_login
-from users.otp import get_fresh_admin_sensitive_action_context
-from users.otp import get_pending_admin_user
-from users.otp import get_primary_totp_device
-from users.otp import record_admin_access
-from users.otp import set_pending_admin_otp
-from users.otp import verify_otp_token
 
 
 class HomeView(RedirectView):
     pattern_name = "admin:index"
 
 
-def _build_environment_badge(
-    signer_summary: dict | None, risk_summary: dict
-) -> list[str]:
+def _build_environment_badge(risk_summary: dict) -> list[str]:
     """为后台顶部角标生成轻量状态摘要，避免复用完整首页聚合。"""
-    if not signer_summary or not signer_summary.get("available"):
-        return [_("Signer异常"), "danger"]
-
-    health = signer_summary.get("health") or {}
-    if not health.get("healthy", True) or not _signer_auth_configured(signer_summary):
-        return [_("Signer异常"), "danger"]
-
     pending_count = risk_summary["stalled_webhook_event_count"]
     if pending_count > 0:
         return [_("存在高风险告警"), "danger"]
@@ -45,30 +24,17 @@ def _build_environment_badge(
 
 
 def environment_callback(request):
-    signer_summary = build_signer_dashboard_summary()
-    # 顶部 environment badge 只需要判断是否可安全操作后台，
-    # 这里仅读取 signer 健康与巡检计数，避免触发完整首页统计查询。
+    # 顶部 environment badge 只需要判断是否有高风险积压，
+    # 这里仅读取巡检计数，避免触发完整首页统计查询。
     risk_summary = OperationalRiskService.build_summary(limit=0)
-    return _build_environment_badge(signer_summary, risk_summary)
+    return _build_environment_badge(risk_summary)
 
 
 def _fmt_usd(amount) -> str:
     return f"$ {amount:,.2f}"
 
 
-def _signer_auth_configured(signer_summary: dict | None) -> bool:
-    """兼容 signer 健康摘要字段演进，避免后台页因字段改名直接报错。"""
-    if not signer_summary or not signer_summary.get("available"):
-        return False
-    health = signer_summary.get("health") or {}
-    # signer 服务已将旧字段 signer_shared_secret 统一收口为 auth_configured，
-    # 这里保留向后兼容，避免主应用与 signer 灰度升级期间出现管理页 500。
-    return bool(
-        health.get("auth_configured", health.get("signer_shared_secret", False))
-    )
-
-
-def _build_operational_inspection_payload(metrics, signer_summary):
+def _build_operational_inspection_payload(metrics):
     # 改动原因：首页摘要与独立巡检页必须共用同一套异常组装逻辑，避免两个入口出现口径漂移。
     inspection_sections = []
     attention_items = []
@@ -149,57 +115,15 @@ def _build_operational_inspection_payload(metrics, signer_summary):
     )
     attention_items.extend(stalled_webhook_rows)
 
-    if signer_summary:
-        signer_rows = []
-        if signer_summary["available"]:
-            signer_rows.extend(
-                {
-                    "level": _("高") if anomaly["status"] == "failed" else _("中"),
-                    "title": _("Signer 请求异常"),
-                    "description": _(
-                        "%(endpoint)s / wallet=%(wallet)s / %(code)s / %(time)s"
-                    )
-                    % {
-                        "endpoint": anomaly["endpoint"],
-                        "wallet": anomaly["wallet_id"] or "-",
-                        "code": anomaly["error_code"] or "-",
-                        "time": anomaly["created_at"][5:16].replace("T", " "),
-                    },
-                    "href": None,
-                }
-                for anomaly in signer_summary["recent_anomalies"]
-            )
-            empty_text = _("近1小时没有新的 Signer 异常")
-        else:
-            signer_rows.append(
-                {
-                    "level": _("高"),
-                    "title": _("Signer 服务不可达"),
-                    "description": signer_summary["detail"],
-                    "href": None,
-                }
-            )
-            empty_text = _("Signer 服务当前不可用")
-        inspection_sections.append(
-            {
-                "title": _("Signer 巡检"),
-                "subtitle": _("签名服务健康度与近期异常"),
-                "count": len(signer_rows),
-                "rows": signer_rows,
-                "empty_text": empty_text,
-            }
-        )
-        attention_items.extend(signer_rows)
-
     return {
         "attention_items": attention_items,
         "inspection_sections": inspection_sections,
     }
 
 
-def _build_operational_inspection_summary_cards(snapshot, signer_summary):
+def _build_operational_inspection_summary_cards(snapshot):
     # 改动原因：独立巡检页需要先给出风险摘要，用户不必逐段滚动才能判断当前是否有异常。
-    summary_cards = [
+    return [
         {
             "title": _("账单确认风险"),
             "metric": snapshot["confirming_count"],
@@ -221,30 +145,6 @@ def _build_operational_inspection_summary_cards(snapshot, signer_summary):
             "tone": "bg-sky-50",
         },
     ]
-    if signer_summary:
-        if signer_summary["available"]:
-            summary_cards.append(
-                {
-                    "title": _("Signer 巡检"),
-                    "metric": len(signer_summary["recent_anomalies"]),
-                    "subtitle": _("近1小时失败 %(failed)s 次，限流 %(limited)s 次")
-                    % {
-                        "failed": signer_summary["requests_last_hour"]["failed"],
-                        "limited": signer_summary["requests_last_hour"]["rate_limited"],
-                    },
-                    "tone": "bg-indigo-50",
-                }
-            )
-        else:
-            summary_cards.append(
-                {
-                    "title": _("Signer 巡检"),
-                    "metric": _("不可用"),
-                    "subtitle": signer_summary["detail"],
-                    "tone": "bg-gray-100",
-                }
-            )
-    return summary_cards
 
 
 def dashboard_callback(request, context):
@@ -252,8 +152,7 @@ def dashboard_callback(request, context):
     metrics = build_dashboard_metrics()
     snapshot = metrics["snapshot"]
     chart_rows = metrics["chart_rows"]
-    signer_summary = metrics.get("signer_summary")
-    inspection_payload = _build_operational_inspection_payload(metrics, signer_summary)
+    inspection_payload = _build_operational_inspection_payload(metrics)
 
     # 后台首页改为实时经营看板，优先展示商户最关心的成交、转化、积压和失败指标。
     snapshot_cards = [
@@ -348,37 +247,6 @@ def dashboard_callback(request, context):
             "subtitle": _("超时回调"),
         },
     ]
-    if signer_summary:
-        if signer_summary["available"]:
-            # signer 作为独立签名服务，首页只展示健康与异常摘要，不把敏感细节暴露给运营界面。
-            health_cards.append(
-                {
-                    "title": _("Signer 服务"),
-                    "metric": _("%(healthy)s / %(failed)s / %(rate_limited)s")
-                    % {
-                        "healthy": signer_summary["requests_last_hour"]["succeeded"],
-                        "failed": signer_summary["requests_last_hour"]["failed"],
-                        "rate_limited": signer_summary["requests_last_hour"][
-                            "rate_limited"
-                        ],
-                    },
-                    "subtitle": _(
-                        "近1小时成功 / 失败 / 限流，请求总数 %(total)s，冻结钱包 %(frozen)s 个"
-                    )
-                    % {
-                        "total": signer_summary["requests_last_hour"]["total"],
-                        "frozen": signer_summary["wallets"]["frozen"],
-                    },
-                }
-            )
-        else:
-            health_cards.append(
-                {
-                    "title": _("Signer 服务"),
-                    "metric": _("不可用"),
-                    "subtitle": signer_summary["detail"],
-                }
-            )
 
     context.update(
         {
@@ -449,139 +317,18 @@ def dashboard_callback(request, context):
 
 
 def operational_inspection_view(request):
-    # 改动原因：“异常巡检”菜单需要落到独立页面，而不是继续回到 admin 首页。
+    # 改动原因：“异常巡检”菜单需要落到独立页面，而不是继续复用 admin 首页。
     metrics = build_dashboard_metrics()
-    signer_summary = metrics.get("signer_summary")
-    inspection_payload = _build_operational_inspection_payload(metrics, signer_summary)
+    inspection_payload = _build_operational_inspection_payload(metrics)
     overview_context = admin.site.each_context(request)
     overview_context.update(
         {
             "title": _("异常巡检"),
             "inspection_summary_cards": _build_operational_inspection_summary_cards(
                 metrics["snapshot"],
-                signer_summary,
             ),
             "inspection_sections": inspection_payload["inspection_sections"],
             "attention_items_count": len(inspection_payload["attention_items"]),
         }
     )
     return render(request, "admin/operational_inspection.html", overview_context)
-
-
-def _render_signer_otp_modal(request, *, form: OTPVerifyForm):
-    overview_context = admin.site.each_context(request)
-    overview_context.update(
-        {
-            "title": _("Signer 运营"),
-            "signer_summary": None,
-            "signer_health_rows": [],
-            "otp_verify_form": form,
-            "otp_modal_open": True,
-            "otp_modal_locked_title": _("继续查看前需要重新验证"),
-            "otp_modal_locked_text": _(
-                "Signer 运营属于高敏感后台入口。请输入一次两步验证码后继续查看。"
-            ),
-        }
-    )
-    return render(request, "admin/signer_overview.html", overview_context)
-
-
-def _handle_signer_modal_verification(request):
-    pending_user = get_pending_admin_user(request)
-    if pending_user is None or pending_user.pk != request.user.pk:
-        raise PermissionDenied("当前会话缺少可用的两步验证上下文")
-
-    device = get_primary_totp_device(user=pending_user, confirmed=True)
-    if device is None:
-        raise PermissionDenied("当前账号尚未绑定两步验证设备")
-
-    form = OTPVerifyForm(request.POST)
-    if not form.is_valid():
-        return _render_signer_otp_modal(request, form=form)
-
-    if not verify_otp_token(device, form.cleaned_data["token"]):
-        record_admin_access(
-            request=request,
-            action=AdminAccessLog.Action.OTP_VERIFY,
-            result=AdminAccessLog.Result.FAILED,
-            user=pending_user,
-            reason="modal_invalid_token",
-        )
-        form.add_error("token", _("两步验证码无效，请检查设备时间或重新输入。"))
-        return _render_signer_otp_modal(request, form=form)
-
-    record_admin_access(
-        request=request,
-        action=AdminAccessLog.Action.OTP_VERIFY,
-        result=AdminAccessLog.Result.SUCCEEDED,
-        user=pending_user,
-        reason="modal_sensitive_action_verified",
-    )
-    return complete_admin_otp_login(
-        request,
-        user=pending_user,
-        device=device,
-    )
-
-
-def signer_overview_view(request):
-    if not request.user.is_superuser:
-        raise PermissionDenied("只有超管可以查看 signer 运营页")
-
-    if request.method == "POST":
-        return _handle_signer_modal_verification(request)
-
-    try:
-        # Signer 运营页属于系统级敏感观测入口，要求超管近期完成过 OTP。
-        get_fresh_admin_sensitive_action_context(
-            request=request,
-            source="signer_overview",
-        )
-    except AdminOTPRequiredError:
-        # 对已登录超管更合理的行为是页面内弹出 OTP 二次验证，而不是跳整页或直接 403。
-        set_pending_admin_otp(
-            request,
-            user=request.user,
-            next_path=request.get_full_path(),
-        )
-        return _render_signer_otp_modal(request, form=OTPVerifyForm())
-
-    signer_summary = build_signer_dashboard_summary()
-    overview_context = admin.site.each_context(request)
-    overview_context.update(
-        {
-            "title": _("Signer 运营"),
-            "signer_summary": signer_summary,
-            "signer_health_rows": [
-                {
-                    "label": _("数据库"),
-                    "value": (
-                        _("正常")
-                        if signer_summary
-                        and signer_summary["available"]
-                        and signer_summary["health"]["database"]
-                        else _("异常")
-                    ),
-                },
-                {
-                    "label": _("缓存"),
-                    "value": (
-                        _("正常")
-                        if signer_summary
-                        and signer_summary["available"]
-                        and signer_summary["health"]["cache"]
-                        else _("异常")
-                    ),
-                },
-                {
-                    "label": _("共享密钥"),
-                    "value": (
-                        _("已配置")
-                        if _signer_auth_configured(signer_summary)
-                        else _("未配置")
-                    ),
-                },
-            ],
-        }
-    )
-    return render(request, "admin/signer_overview.html", overview_context)
