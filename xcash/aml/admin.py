@@ -1,11 +1,11 @@
-from aml.models import AmlAssessment
+from aml.models import RiskAssessment
 from django.contrib import admin
 
 from common.admin import ReadOnlyModelAdmin
 
 
-@admin.register(AmlAssessment)
-class AmlAssessmentAdmin(ReadOnlyModelAdmin):
+@admin.register(RiskAssessment)
+class RiskAssessmentAdmin(ReadOnlyModelAdmin):
     list_display = (
         "id",
         "target_type",

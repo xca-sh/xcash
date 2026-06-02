@@ -12,10 +12,8 @@ from aml.clients import QuicknodeMistTrackClient
 from aml.misttrack_coin_map import OPENAPI_EVM_COIN
 from aml.misttrack_coin_map import OPENAPI_TRON_COIN
 from aml.misttrack_coin_map import QUICKNODE_EVM_CHAIN
-from aml.models import AmlAssessment
-from aml.models import AmlAssessmentStatus
-from aml.models import AmlProvider
-from aml.models import AmlTargetType
+from aml.models import Provider
+from aml.models import RiskAssessment
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
@@ -39,7 +37,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 
-class UnsupportedAmlProviderChainError(RuntimeError):
+class UnsupportedProviderChainError(RuntimeError):
     """provider 当前未覆盖该 chain/coin 的映射，无法发起 AML 查询。"""
 
 
@@ -56,7 +54,7 @@ class AmlScreeningService:
         if invoice is None or invoice.transfer_id is None:
             return
 
-        # 以下三种"业务上根本不该走 AML"的场景直接返回，不写 AmlAssessment：
+        # 以下三种"业务上根本不该走 AML"的场景直接返回，不写 RiskAssessment：
         # - SaaS tier 未开权限：每个商户每笔都写记录会污染审计数据，权限本身在 saas tier 可查。
         # - AML 总开关关闭：会让所有 invoice/deposit 各写一条无查询记录，纯垃圾数据。
         # - 价值低于阈值：小额支付占绝大多数，要查"哪些单没 AML"看 invoice.risk_level IS NULL 即可。
@@ -69,7 +67,7 @@ class AmlScreeningService:
 
         cls._screen_target(
             target=invoice,
-            target_type=AmlTargetType.INVOICE,
+            target_type=RiskAssessment.TargetType.INVOICE,
             worth=invoice.worth,
         )
 
@@ -89,7 +87,7 @@ class AmlScreeningService:
         if deposit is None:
             return
 
-        # 同 screen_invoice，"业务上不该走 AML"的场景直接 return，不写 AmlAssessment。
+        # 同 screen_invoice，"业务上不该走 AML"的场景直接 return，不写 RiskAssessment。
         if not cls._is_aml_screening_allowed(deposit):
             return
         if not get_aml_screening_enabled():
@@ -99,7 +97,7 @@ class AmlScreeningService:
 
         cls._screen_target(
             target=deposit,
-            target_type=AmlTargetType.DEPOSIT,
+            target_type=RiskAssessment.TargetType.DEPOSIT,
             worth=deposit.worth,
         )
 
@@ -182,7 +180,7 @@ class AmlScreeningService:
                 crypto=transfer.crypto,
                 address=address,
             )
-        except UnsupportedAmlProviderChainError as exc:
+        except UnsupportedProviderChainError as exc:
             logger.info(
                 "aml_screening.unsupported_provider_chain",
                 source=provider["source"],
@@ -231,7 +229,7 @@ class AmlScreeningService:
         )
         defaults = {
             "source": source,
-            "status": AmlAssessmentStatus.SUCCESS,
+            "status": RiskAssessment.Status.SUCCESS,
             "target_type": target_type,
             "address": target.transfer.from_address,
             "tx_hash": target.transfer.hash,
@@ -254,14 +252,14 @@ class AmlScreeningService:
         target_type: str,
         error_message: str,
         *,
-        source: str = AmlProvider.QUICKNODE_MISTTRACK,
+        source: str = Provider.QUICKNODE_MISTTRACK,
     ) -> None:
         cls._upsert_assessment(
             target,
             target_type,
             {
                 "source": source,
-                "status": AmlAssessmentStatus.FAILED,
+                "status": RiskAssessment.Status.FAILED,
                 "target_type": target_type,
                 "address": target.transfer.from_address,
                 "tx_hash": target.transfer.hash,
@@ -293,13 +291,13 @@ class AmlScreeningService:
         target: Invoice | Deposit, target_type: str, defaults: dict[str, Any]
     ) -> None:
         lookup: dict[str, Any]
-        if target_type == AmlTargetType.INVOICE:
+        if target_type == RiskAssessment.TargetType.INVOICE:
             lookup = {"invoice": target}
             defaults["deposit"] = None
         else:
             lookup = {"deposit": target}
             defaults["invoice"] = None
-        AmlAssessment.objects.update_or_create(defaults=defaults, **lookup)
+        RiskAssessment.objects.update_or_create(defaults=defaults, **lookup)
 
     @staticmethod
     def _cache_key(*, source: str, address: str, chain: str = "") -> str:
@@ -318,12 +316,12 @@ class AmlScreeningService:
     def _select_provider() -> dict[str, str] | None:
         api_key = get_misttrack_openapi_api_key()
         if api_key:
-            return {"source": AmlProvider.MISTTRACK_OPENAPI, "api_key": api_key}
+            return {"source": Provider.MISTTRACK_OPENAPI, "api_key": api_key}
 
         endpoint_url = get_quicknode_misttrack_endpoint_url()
         if endpoint_url:
             return {
-                "source": AmlProvider.QUICKNODE_MISTTRACK,
+                "source": Provider.QUICKNODE_MISTTRACK,
                 "endpoint_url": endpoint_url,
             }
 
@@ -333,7 +331,7 @@ class AmlScreeningService:
     def _query_provider(
         cls, *, provider: dict[str, str], chain: Chain, crypto: Crypto, address: str
     ) -> MistTrackAmlResult:
-        if provider["source"] == AmlProvider.MISTTRACK_OPENAPI:
+        if provider["source"] == Provider.MISTTRACK_OPENAPI:
             coin = cls._misttrack_openapi_coin(chain=chain, crypto=crypto)
             return MistTrackOpenApiClient(
                 api_key=provider["api_key"]
@@ -350,7 +348,7 @@ class AmlScreeningService:
             return "TRX"
         if chain.type == ChainType.EVM and chain.chain_id in QUICKNODE_EVM_CHAIN:
             return QUICKNODE_EVM_CHAIN[chain.chain_id]
-        raise UnsupportedAmlProviderChainError(
+        raise UnsupportedProviderChainError(
             f"unsupported QuickNode MistTrack chain: {chain.code}"
         )
 
@@ -363,6 +361,6 @@ class AmlScreeningService:
             mapping = OPENAPI_EVM_COIN.get(chain.chain_id)
             if mapping and symbol in mapping:
                 return mapping[symbol]
-        raise UnsupportedAmlProviderChainError(
+        raise UnsupportedProviderChainError(
             f"unsupported MistTrack OpenAPI coin: {crypto.symbol} on {chain.code}"
         )

@@ -5,45 +5,43 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 
-class AmlProvider(models.TextChoices):
+class Provider(models.TextChoices):
     QUICKNODE_MISTTRACK = "quicknode_misttrack", _("QuickNode MistTrack")
     MISTTRACK_OPENAPI = "misttrack_openapi", _("MistTrack OpenAPI")
 
 
-class AmlRiskLevel(models.TextChoices):
+class RiskLevel(models.TextChoices):
     LOW = "Low", _("Low")
     MODERATE = "Moderate", _("Moderate")
     HIGH = "High", _("High")
     SEVERE = "Severe", _("Severe")
 
 
-class AmlAssessmentStatus(models.TextChoices):
-    SUCCESS = "success", _("查询成功")
-    FAILED = "failed", _("查询失败")
+class RiskAssessment(models.Model):
+    class Status(models.TextChoices):
+        SUCCESS = "success", _("查询成功")
+        FAILED = "failed", _("查询失败")
 
+    class TargetType(models.TextChoices):
+        INVOICE = "invoice", _("账单")
+        DEPOSIT = "deposit", _("充币")
 
-class AmlTargetType(models.TextChoices):
-    INVOICE = "invoice", _("账单")
-    DEPOSIT = "deposit", _("充币")
-
-
-class AmlAssessment(models.Model):
     source = models.CharField(
         _("数据来源"),
-        choices=AmlProvider,
+        choices=Provider,
         max_length=32,
-        default=AmlProvider.QUICKNODE_MISTTRACK,
+        default=Provider.QUICKNODE_MISTTRACK,
         db_index=True,
     )
     status = models.CharField(
         _("查询状态"),
-        choices=AmlAssessmentStatus,
+        choices=Status,
         max_length=16,
         db_index=True,
     )
     target_type = models.CharField(
         _("目标类型"),
-        choices=AmlTargetType,
+        choices=TargetType,
         max_length=16,
         db_index=True,
     )
@@ -67,7 +65,7 @@ class AmlAssessment(models.Model):
     tx_hash = models.CharField(_("交易哈希"), max_length=128, blank=True, default="")
     risk_level = models.CharField(  # noqa: DJ001
         _("风险等级"),
-        choices=AmlRiskLevel,
+        choices=RiskLevel,
         max_length=16,
         null=True,
         blank=True,
@@ -111,12 +109,12 @@ class AmlAssessment(models.Model):
                 name="aml_assessment_target_type_matches_target",
                 condition=(
                     (
-                        models.Q(target_type=AmlTargetType.INVOICE)
+                        models.Q(target_type="invoice")
                         & models.Q(invoice__isnull=False)
                         & models.Q(deposit__isnull=True)
                     )
                     | (
-                        models.Q(target_type=AmlTargetType.DEPOSIT)
+                        models.Q(target_type="deposit")
                         & models.Q(invoice__isnull=True)
                         & models.Q(deposit__isnull=False)
                     )

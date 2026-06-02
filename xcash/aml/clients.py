@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
-from aml.models import AmlRiskLevel
+from aml.models import RiskLevel
 
 
 @dataclass(frozen=True)
@@ -141,7 +141,7 @@ class QuicknodeMistTrackClient:
             raise TypeError("QuickNode MistTrack response missing result")
 
         risk_level = result.get("risk_level")
-        if risk_level not in AmlRiskLevel.values:
+        if risk_level not in RiskLevel.values:
             raise RuntimeError(f"unknown MistTrack risk level: {risk_level}")
 
         score = result.get("score")
@@ -190,7 +190,7 @@ class MistTrackOpenApiClient:
             raise TypeError("MistTrack OpenAPI response missing data")
 
         risk_level = result.get("risk_level")
-        if risk_level not in AmlRiskLevel.values:
+        if risk_level not in RiskLevel.values:
             raise RuntimeError(f"unknown MistTrack risk level: {risk_level}")
 
         score = result.get("score")
