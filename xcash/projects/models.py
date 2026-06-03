@@ -108,7 +108,7 @@ class Project(models.Model):
         # 错误项采用统一的"短名词 + 状态"格式，便于前端横排拼接（如"通知地址未配置、差额账单收款地址未配置"）
         errors: list[str] = []
         if not self.vault:
-            errors.append(_("多签钱包地址未配置"))  # noqa
+            errors.append(_("金库地址未配置"))  # noqa
         if not self.ip_white_list:
             errors.append(_("IP 白名单未配置"))  # noqa
         if not self.webhook:
