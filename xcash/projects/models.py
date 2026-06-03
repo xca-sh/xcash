@@ -58,7 +58,7 @@ class Project(models.Model):
         decimal_places=2,
         default=Decimal("10"),
         verbose_name=_("快速确认阈值（USD）"),
-        help_text=_("低于该金额的账单无需等待，立即确认"),
+        help_text=_("低于该金额的账单无需等待区块确认数，立即确认"),
     )
     hmac_key = ShortUUIDField(
         verbose_name=_("HMAC密钥"),
@@ -107,6 +107,8 @@ class Project(models.Model):
     def is_ready(self) -> tuple[bool, list[str]]:
         # 错误项采用统一的"短名词 + 状态"格式，便于前端横排拼接（如"通知地址未配置、差额账单收款地址未配置"）
         errors: list[str] = []
+        if not self.vault:
+            errors.append(_("多签钱包地址未配置"))  # noqa
         if not self.ip_white_list:
             errors.append(_("IP 白名单未配置"))  # noqa
         if not self.webhook:

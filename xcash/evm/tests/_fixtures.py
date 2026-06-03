@@ -44,7 +44,7 @@ def make_evm_chain(
     chain = Chain.objects.create(
         code=chain_code,
         rpc="",
-        active=active,
+        active=False,
     )
     # rpc / latest_block_number / evm_log_max_block_range 仍是真实字段，但 save() 会对
     # rpc 触发 chain_id 远端校验；测试构造的 rpc 多为占位且 w3 已被 mock，故用 update()
@@ -52,6 +52,9 @@ def make_evm_chain(
     updates: dict[str, object] = {}
     if rpc:
         updates["rpc"] = rpc
+    if active:
+        updates.setdefault("rpc", "http://evm-test.invalid")
+        updates["active"] = True
     if latest_block_number:
         updates["latest_block_number"] = latest_block_number
     if evm_log_max_block_range is not None:

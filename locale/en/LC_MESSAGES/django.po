@@ -821,7 +821,7 @@ msgid "快速确认阈值（USD）"
 msgstr "Quick Confirmation Threshold (USD)"
 
 #: xcash/projects/models.py:70
-msgid "低于该金额的账单无需等待，立即确认"
+msgid "低于该金额的账单无需等待区块确认数，立即确认"
 msgstr ""
 "Invoices below this amount will be confirmed instantly without waiting."
 

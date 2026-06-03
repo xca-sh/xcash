@@ -27,8 +27,9 @@ class ChainAdmin(ModelAdmin):
     # 字段瘦身后，type / native_coin / confirm_block_count 已转为 property，
     # 通过 display 方法暴露到列表页，方便运维一眼看清链配置。
     list_display = (
-        "code",
-        "type_display",
+        "name_display",
+        "code_display",
+        "type",
         "native_coin_display",
         "sort_order",
         "active",
@@ -44,9 +45,13 @@ class ChainAdmin(ModelAdmin):
     list_filter = ("active",)
     search_fields = ("code",)
 
-    @display(description=_("类型"))
-    def type_display(self, obj: Chain) -> str:
-        return obj.type
+    @display(ordering="code", description=_("名称"))
+    def name_display(self, obj: Chain) -> str:
+        return obj.name
+
+    @display(ordering="code", description=_("代码"))
+    def code_display(self, obj: Chain) -> str:
+        return obj.code
 
     @display(description=_("原生币"))
     def native_coin_display(self, obj: Chain) -> str:
