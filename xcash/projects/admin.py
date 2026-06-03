@@ -6,7 +6,7 @@ from django.utils.html import format_html_join
 from django.utils.translation import gettext_lazy as _
 from unfold.decorators import display
 from unfold.widgets import UnfoldAdminTextInputWidget
-from web3 import Web3
+from unfold.widgets import UnfoldAdminURLInputWidget
 
 from chains.adapters import AdapterFactory
 from chains.capabilities import ChainProductCapabilityService
@@ -20,7 +20,6 @@ from invoices.models import DifferRecipientAddress
 from invoices.models import EpayMerchant
 from projects.models import Customer
 from projects.models import Project
-from projects.vault import validate_vault_is_multisig
 
 # Register your models here.
 
@@ -31,6 +30,7 @@ class ProjectForm(forms.ModelForm):
         required=False,
         assume_scheme="https",
         help_text=_("用于本网关发送通知到商户后端"),
+        widget=UnfoldAdminURLInputWidget(),
     )
 
     class Meta:
@@ -75,10 +75,6 @@ class ProjectForm(forms.ModelForm):
         if not address:
             return None
 
-        if not Web3.is_address(address):
-            raise forms.ValidationError(_("VaultSlot 多签归集地址必须是 EVM 地址。"))
-
-        address = Web3.to_checksum_address(address)
         old_address = None
         if self.instance and self.instance.pk:
             old_address = (
@@ -87,14 +83,13 @@ class ProjectForm(forms.ModelForm):
                 .first()
             )
         if old_address:
-            if Web3.to_checksum_address(old_address) != address:
+            if old_address != address:
                 raise forms.ValidationError(
                     _("VaultSlot 多签归集地址一旦设置不可修改。")
                 )
-            return Web3.to_checksum_address(old_address)
+            return old_address
 
-        # 首次设置：复用统一的多签校验器（与内部 API 同源），不合法时抛 ValidationError。
-        return validate_vault_is_multisig(address)
+        return address
 
 
 class ProjectHmacKeyWidget(UnfoldAdminTextInputWidget):

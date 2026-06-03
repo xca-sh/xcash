@@ -1,10 +1,8 @@
 import ipaddress
 
-from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from projects.models import Project
-from projects.vault import validate_vault_is_multisig
 
 # 业务校验上下界，集中声明便于审计与调整。
 HMAC_KEY_MIN_LENGTH = 16
@@ -81,18 +79,11 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
 class ProjectVaultSetSerializer(serializers.Serializer):
     """商户首次设置收款归集地址（Vault）。
 
-    vault 是一次性写入、不可修改的多签归集地址：必须通过链上多签校验。
-    immutability（已设置则拒绝）在视图层先行拦截，此处只负责校验待写入的地址合法。
+    vault 是一次性写入、不可修改的归集地址。immutability（已设置则拒绝）
+    在视图层先行拦截；这里不做链上、多签或部署状态校验。
     """
 
     vault = serializers.CharField()
-
-    def validate_vault(self, value: str) -> str:
-        try:
-            # 统一多签校验器抛 Django 的 ValidationError，转成 DRF 的字段级错误。
-            return validate_vault_is_multisig(value)
-        except DjangoValidationError as exc:
-            raise serializers.ValidationError(exc.messages) from exc
 
 
 class ProjectDetailSerializer(serializers.ModelSerializer):

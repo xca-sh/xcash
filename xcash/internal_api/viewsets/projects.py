@@ -56,10 +56,10 @@ class ProjectViewSet(ModelViewSet):
 
         POST /projects/{appid}/vault  body: {"vault": "0x..."}
         - 已设置 → 409，明确告知不可修改；
-        - 未设置 → 通过链上多签校验后写入，返回项目详情。
+        - 未设置 → 写入后返回项目详情。
         """
         project = self.get_object()
-        # 先做无锁短路：已设置直接拒绝，避免对常见的"重复点击"白跑链上多签校验（含 RPC）。
+        # 先做无锁短路：已设置直接拒绝，避免常见的"重复点击"进入事务。
         if project.vault:
             return Response(
                 {"vault": "收款归集地址一旦设置不可修改。"},
