@@ -25,9 +25,9 @@ project_router = SimpleRouter(trailing_slash=False)
 project_router.register("invoices", InternalInvoiceViewSet, basename="internal-invoice")
 project_router.register("deposits", InternalDepositViewSet, basename="internal-deposit")
 project_router.register(
-    "recipient-addresses",
+    "differ-recipient-addresses",
     DifferRecipientAddressViewSet,
-    basename="internal-recipient-address",
+    basename="internal-differ-recipient-address",
 )
 project_router.register(
     "webhook-events", WebhookEventViewSet, basename="internal-webhook-event"
