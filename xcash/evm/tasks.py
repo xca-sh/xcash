@@ -19,6 +19,7 @@ from evm.internal_tx.routing import get_handler
 from evm.models import EvmTxTask
 from evm.models import VaultSlotCollectSchedule
 from evm.poller import EvmTaskPoller
+from evm.saas_gas_billing import notify_vault_slot_deploy_gas_fee
 from evm.scanner.rpc import EvmScannerRpcError
 from evm.scanner.service import EvmScannerService
 
@@ -157,7 +158,12 @@ def confirm_non_transfer_tx_tasks() -> None:
         if status == TxCheckStatus.SUCCEEDED:
             if not _has_required_confirmations(chain=task.chain, result=result_meta):
                 continue
-            TxTask.mark_finalized_success(chain=task.chain, tx_hash=task.tx_hash)
+            updated = TxTask.mark_finalized_success(
+                chain=task.chain,
+                tx_hash=task.tx_hash,
+            )
+            if updated and task.tx_type == TxTaskType.VaultSlotDeploy:
+                notify_vault_slot_deploy_gas_fee(tx_task=task)
         elif status == TxCheckStatus.MISSING:
             continue
         elif status == TxCheckStatus.FAILED:

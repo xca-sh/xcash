@@ -28,6 +28,7 @@ def send_internal_callback(
     sys_no: str,
     worth: str,
     currency: str,
+    detail_payload: dict | None = None,
 ) -> None:
     """
     在事务提交后异步发送内部回调给 SaaS。
@@ -43,6 +44,7 @@ def send_internal_callback(
             sys_no=sys_no,
             worth=worth,
             currency=currency,
+            detail_payload=detail_payload,
         )
     )
 
@@ -64,6 +66,7 @@ def _deliver_internal_callback(
     sys_no: str,
     worth: str,
     currency: str,
+    detail_payload: dict | None = None,
 ) -> None:
     """Celery task：向 SaaS 发送内部回调 POST 请求。"""
     if not settings.IS_SAAS:
@@ -78,6 +81,8 @@ def _deliver_internal_callback(
         "currency": currency,
         "timestamp": timezone.now().isoformat(),
     }
+    if detail_payload:
+        payload["payload"] = detail_payload
 
     try:
         with httpx.Client(timeout=10) as client:

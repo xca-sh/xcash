@@ -2,6 +2,8 @@ import threading
 import time
 from datetime import timedelta
 from types import SimpleNamespace
+from unittest.mock import Mock
+from unittest.mock import PropertyMock
 from unittest.mock import patch
 
 import pytest
@@ -450,6 +452,53 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(slot.deploy_tx_task, failed_task)
         schedule.assert_not_called()
 
+    @patch("evm.saas_gas_billing.send_internal_callback")
+    def test_confirmed_deploy_notifies_saas_gas_fee(self, send_callback_mock):
+        from evm.saas_gas_billing import notify_vault_slot_deploy_gas_fee
+
+        slot = self._create_vault_slot()
+        native_crypto = self.chain.native_coin
+        native_crypto.prices = {"USD": "2000"}
+        native_crypto.save(update_fields=["prices"])
+        ChainCryptoDeployment.objects.update_or_create(
+            crypto=native_crypto,
+            chain=self.chain,
+            defaults={"address": "", "decimals": 18},
+        )
+        tx_hash = "0x" + "ab" * 32
+        address_patch = self.patch_address_derivation()
+        w3 = SimpleNamespace(
+            eth=SimpleNamespace(
+                get_transaction_receipt=Mock(
+                    return_value={
+                        "gasUsed": 21000,
+                        "effectiveGasPrice": 1_000_000_000,
+                    }
+                ),
+                get_transaction=Mock(return_value={"gasPrice": 1_000_000_000}),
+            )
+        )
+
+        with address_patch:
+            task = VaultSlot.schedule_deploy(slot.pk)
+        task.base_task.tx_hash = tx_hash
+        task.base_task.save(update_fields=["tx_hash", "updated_at"])
+
+        with patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock:
+            w3_mock.return_value = w3
+            notify_vault_slot_deploy_gas_fee(tx_task=task.base_task)
+
+        send_callback_mock.assert_called_once()
+        kwargs = send_callback_mock.call_args.kwargs
+        self.assertEqual(kwargs["event"], "gas_fee.vault_slot_deploy.confirmed")
+        self.assertEqual(kwargs["appid"], self.project.appid)
+        self.assertEqual(kwargs["worth"], "0.042")
+        self.assertEqual(kwargs["currency"], "USDT")
+        self.assertEqual(kwargs["detail_payload"]["tx_hash"], tx_hash)
+        self.assertEqual(kwargs["detail_payload"]["gas_used"], 21000)
+        self.assertEqual(kwargs["detail_payload"]["gas_price"], 1_000_000_000)
+        self.assertEqual(kwargs["detail_payload"]["operation"], "vault_slot_deploy")
+
     def test_ensure_deposit_address_rejects_project_without_vault(self):
         Project.objects.filter(pk=self.project.pk).update(vault=None)
         self.project.refresh_from_db()
@@ -797,6 +846,70 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ).exists()
         )
         self.assertFalse(VaultSlotCollectSchedule.objects.exists())
+
+    @patch("evm.saas_gas_billing.send_internal_callback")
+    def test_confirmed_collect_transfer_notifies_saas_gas_fee(self, send_callback_mock):
+        slot = self._create_vault_slot()
+        native_crypto = self.chain.native_coin
+        native_crypto.prices = {"USD": "2000"}
+        native_crypto.save(update_fields=["prices"])
+        ChainCryptoDeployment.objects.update_or_create(
+            crypto=native_crypto,
+            chain=self.chain,
+            defaults={"address": "", "decimals": 18},
+        )
+        tx_hash = "0x" + "cd" * 32
+        transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=1,
+            block_hash="0x" + "aa" * 32,
+            hash=tx_hash,
+            crypto=self.token,
+            from_address=slot.address,
+            to_address=self.project.vault,
+            value="1000000",
+            amount=1,
+            timestamp=1,
+            datetime=timezone.now(),
+            status=TransferStatus.CONFIRMING,
+            type=TransferType.Collect,
+        )
+        with self.patch_address_derivation():
+            task = VaultSlot.create_collect_tx_task_for_slot(
+                chain=self.chain,
+                crypto=self.token,
+                slot=slot,
+                missing_token_message="missing token",
+            )
+        task.base_task.tx_hash = tx_hash
+        task.base_task.save(update_fields=["tx_hash", "updated_at"])
+        w3 = SimpleNamespace(
+            eth=SimpleNamespace(
+                get_transaction_receipt=Mock(
+                    return_value={
+                        "gasUsed": 50000,
+                        "effectiveGasPrice": 2_000_000_000,
+                    }
+                ),
+                get_transaction=Mock(return_value={"gasPrice": 2_000_000_000}),
+            )
+        )
+
+        with patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock:
+            w3_mock.return_value = w3
+            transfer.confirm()
+
+        send_callback_mock.assert_called_once()
+        kwargs = send_callback_mock.call_args.kwargs
+        self.assertEqual(kwargs["event"], "gas_fee.vault_slot_collect.confirmed")
+        self.assertEqual(kwargs["appid"], self.project.appid)
+        self.assertEqual(kwargs["worth"], "0.2")
+        self.assertEqual(kwargs["detail_payload"]["tx_hash"], tx_hash)
+        self.assertEqual(kwargs["detail_payload"]["operation"], "vault_slot_collect")
+        self.assertEqual(
+            kwargs["detail_payload"]["collected_crypto"],
+            self.token.symbol,
+        )
 
     def _create_vault_slot(self) -> VaultSlot:
         if self.project.vault is None:

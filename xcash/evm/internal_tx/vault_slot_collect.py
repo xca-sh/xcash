@@ -20,6 +20,7 @@ from evm.internal_tx.facts import MatchedTransferFact
 from evm.internal_tx.log_utils import matches_transfer_log
 from evm.internal_tx.log_utils import normalize_log_index
 from evm.models import VaultSlot
+from evm.saas_gas_billing import notify_vault_slot_collect_gas_fee
 
 _COLLECT_SELECTOR = "0x06ec16f8"
 _XCASH_COLLECTED_TOPIC0 = Web3.keccak(text="XcashCollected(address,uint256)").hex()
@@ -177,7 +178,8 @@ class VaultSlotCollectHandler:
         return True
 
     def confirm(self, transfer: Transfer) -> None:
-        """归集确认不需要额外业务动作。"""
+        """归集确认后通知 SaaS 收取系统热钱包承担的 gas 成本。"""
+        notify_vault_slot_collect_gas_fee(transfer=transfer)
 
     def drop(self, transfer: Transfer) -> None:
         """reorg 撤销时无须额外回滚。"""

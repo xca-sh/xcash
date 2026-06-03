@@ -978,7 +978,16 @@ class Transfer(models.Model):
         elif self.type == TransferType.Deposit:
             DepositService.confirm_deposit(self.deposit)
         elif self.type in {TransferType.Collect}:
-            return
+            tx_task = TxTask.resolve_by_hash(chain=self.chain, tx_hash=self.hash)
+            if tx_task is None or self.chain.type != ChainType.EVM:
+                return
+            from evm.internal_tx.routing import get_handler
+
+            try:
+                handler = get_handler(TxTaskType(tx_task.tx_type))
+            except (KeyError, ValueError):
+                return
+            handler.confirm(self)
 
     def _dispatch_business_drop(self) -> None:
         """统一按已归类的业务类型分发回退动作，drop() 专用。"""
