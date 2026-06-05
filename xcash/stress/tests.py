@@ -1218,7 +1218,8 @@ class StressWebhookTests(TestCase):
             _handle_webhook(request)
 
         self.case.refresh_from_db()
-        self.assertEqual(self.case.status, InvoiceStressCaseStatus.SUCCEEDED)
+        # webhook 验证通过只推进到 WEBHOOK_OK 中间态，SUCCEEDED 由 run 级归集验证任务后置决定。
+        self.assertEqual(self.case.status, InvoiceStressCaseStatus.WEBHOOK_OK)
         self.assertTrue(self.case.webhook_received)
 
 

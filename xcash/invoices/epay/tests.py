@@ -2,7 +2,6 @@ from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
-from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db import transaction
@@ -761,8 +760,26 @@ class EpaySubmitServiceTests(TestCase):
 
 
 class EpaySubmitRouteTests(TestCase):
+    # /epay/submit.php 的限流走 django-smart-ratelimit 的独立 Redis 后端
+    # （RATELIMIT_BACKEND="redis"），并非 Django default cache，sliding_window
+    # 算法会按 IP 维度在真实 Redis 里保留 60s 计数。Django 的 cache.clear() 清不到
+    # 这个后端，导致同一 IP 的计数在测试进程/重跑之间残留，限流断言偶发翻车。
+    # 这里在每个用例前后直接复位限流后端里相关 IP 的 key，做到真正的测试隔离。
+    _RATELIMIT_IPS = ("127.0.0.1", "203.0.113.77")
+
+    @staticmethod
+    def _reset_ratelimit():
+        from django_smart_ratelimit.backends import get_backend
+
+        backend = get_backend()
+        for ip in EpaySubmitRouteTests._RATELIMIT_IPS:
+            # key 与装饰器 key="ip" 生成的 limit_key 一致：f"ip:{client_ip}"。
+            backend.reset(f"ip:{ip}")
+
     def setUp(self):
         EpaySubmitServiceTests.setUp(self)
+        self._reset_ratelimit()
+        self.addCleanup(self._reset_ratelimit)
 
     def _signed_params(self, **overrides):
         return EpaySubmitServiceTests._signed_params(self, **overrides)
@@ -913,10 +930,9 @@ class EpaySubmitRouteTests(TestCase):
         # 测试用 override_settings 把阈值从 60/m 调到 2/m，避免真发 60 个请求。
         # 用独立 X-Forwarded-For，让计数 key 与其他测试隔离，避免 Redis 中遗留计数串扰。
         mock_initialize.side_effect = lambda invoice: invoice
+        # 限流默认信任 X-Forwarded-For，故 IP 维度 key 取 attacker_ip。
+        # 该 key 已在 setUp 复位限流后端（真实 Redis），无需再清 Django cache。
         attacker_ip = "203.0.113.77"
-        # 库会优先读 X-Forwarded-For 作为 IP 维度 key，本测试单独清一下
-        # Django cache（即使 ratelimit 走的是独立 Redis backend，也保险）。
-        cache.clear()
 
         # 前两个请求：合法签名，应当被放行。
         first = self.client.post(
