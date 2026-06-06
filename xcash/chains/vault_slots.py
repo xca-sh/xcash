@@ -230,7 +230,9 @@ def schedule_collect_for_slot(
     chain: Chain,
     crypto,
     slot: VaultSlot,
-) -> VaultSlotCollectSchedule:
+) -> VaultSlotCollectSchedule | None:
+    if not slot.project.auto_collect_enabled:
+        return None
     if not crypto.address(chain):
         raise RuntimeError(
             f"Crypto {crypto.symbol} 未部署在链 {chain.code}，无法调度 VaultSlot 归集"

@@ -73,6 +73,11 @@ class Project(models.Model):
         ),
         unique=True,
     )
+    auto_collect_enabled = models.BooleanField(
+        _("自动归集"),
+        default=True,
+        help_text=_("开启后，VaultSlot 收到代币并确认后自动调度 collect 归集。"),
+    )
 
     active = models.BooleanField(verbose_name=_("启用"), default=True)
     is_test = models.BooleanField(

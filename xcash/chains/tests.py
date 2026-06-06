@@ -25,6 +25,8 @@ from chains.models import TxHash
 from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
+from chains.models import VaultSlot
+from chains.models import VaultSlotUsage
 from chains.models import Wallet
 from chains.tasks import process_transfer
 from chains.tests_fixtures import make_evm_chain
@@ -33,6 +35,7 @@ from chains.transfer_matching import raw_amount
 from chains.transfer_matching import transfer_matches
 from currencies.models import ChainCryptoDeployment
 from currencies.models import Crypto
+from projects.models import Project
 
 
 class TransferMatchingTests(TestCase):
@@ -954,6 +957,69 @@ class TxTaskTransitionTests(TestCase):
         self.assertFalse(updated)
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, TxTaskStatus.QUEUED)
+
+
+class VaultSlotReceivedFlagTests(TestCase):
+    def setUp(self):
+        self.crypto = Crypto.objects.create(
+            name="VaultSlot Received Flag Coin",
+            symbol="VRF",
+            coingecko_id="vaultslot-received-flag",
+        )
+        self.chain = make_evm_chain(code=ChainCode.Ethereum)
+        self.project = Project.objects.create(name="VaultSlot Received Flag")
+        self.slot_address = Web3.to_checksum_address("0x" + "ab" * 20)
+        self.slot = VaultSlot.objects.create(
+            chain=self.chain,
+            usage=VaultSlotUsage.INVOICE,
+            project=self.project,
+            invoice_index=1,
+            address=self.slot_address,
+            salt=b"r" * 32,
+        )
+
+    def test_transfer_confirm_marks_vault_slot_has_received(self):
+        transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=100,
+            block_hash="0x" + "11" * 32,
+            hash="0x" + "22" * 32,
+            crypto=self.crypto,
+            from_address=Web3.to_checksum_address("0x" + "cd" * 20),
+            to_address=self.slot_address,
+            value=Decimal("1000000"),
+            amount=Decimal("1"),
+            timestamp=1_700_000_000,
+            datetime=timezone.now(),
+        )
+
+        self.slot.refresh_from_db()
+        self.assertFalse(self.slot.has_received)
+
+        transfer.confirm()
+
+        self.slot.refresh_from_db()
+        self.assertTrue(self.slot.has_received)
+
+    def test_transfer_confirm_ignores_non_vault_slot_receiver(self):
+        transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=100,
+            block_hash="0x" + "33" * 32,
+            hash="0x" + "44" * 32,
+            crypto=self.crypto,
+            from_address=Web3.to_checksum_address("0x" + "ef" * 20),
+            to_address=Web3.to_checksum_address("0x" + "12" * 20),
+            value=Decimal("1000000"),
+            amount=Decimal("1"),
+            timestamp=1_700_000_001,
+            datetime=timezone.now(),
+        )
+
+        transfer.confirm()
+
+        self.slot.refresh_from_db()
+        self.assertFalse(self.slot.has_received)
 
 
 class BlockNumberUpdatedCompensationTests(TestCase):

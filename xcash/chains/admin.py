@@ -256,6 +256,7 @@ class VaultSlotAdminBase(ReadOnlyModelAdmin):
         "address",
         "salt",
         "deploy_tx_task",
+        "has_received",
         "created_at",
     )
     usage = None
@@ -271,14 +272,28 @@ class VaultSlotAdminBase(ReadOnlyModelAdmin):
 
 @admin.register(DepositVaultSlot)
 class DepositVaultSlotAdmin(VaultSlotAdminBase):
-    list_display = ("customer", "project", "chain", "address", "created_at")
+    list_display = (
+        "customer",
+        "project",
+        "chain",
+        "address",
+        "has_received",
+        "created_at",
+    )
     search_fields = ("customer__uid", "project__name", "address")
     usage = VaultSlotUsage.DEPOSIT
 
 
 @admin.register(InvoiceVaultSlot)
 class InvoiceVaultSlotAdmin(VaultSlotAdminBase):
-    list_display = ("project", "invoice_index", "chain", "address", "created_at")
+    list_display = (
+        "project",
+        "invoice_index",
+        "chain",
+        "address",
+        "has_received",
+        "created_at",
+    )
     search_fields = ("project__name", "address")
     usage = VaultSlotUsage.INVOICE
 

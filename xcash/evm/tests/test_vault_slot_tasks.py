@@ -708,6 +708,18 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ).exists()
         )
 
+    def test_schedule_collect_for_deposit_skips_when_project_auto_collect_disabled(
+        self,
+    ):
+        Project.objects.filter(pk=self.project.pk).update(auto_collect_enabled=False)
+        slot = self._create_vault_slot()
+        deposit = self._create_deposit(slot=slot)
+
+        schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+
+        self.assertIsNone(schedule)
+        self.assertFalse(VaultSlotCollectSchedule.objects.exists())
+
     def test_schedule_collect_for_invoice_uses_contract_slot_and_token(self):
         slot = VaultSlot.objects.create(
             project=self.project,
@@ -741,6 +753,40 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(schedule.vault_slot, slot)
         self.assertEqual(schedule.crypto, self.token)
         self.assertIsNone(schedule.tx_task)
+
+    def test_schedule_collect_for_invoice_skips_when_project_auto_collect_disabled(
+        self,
+    ):
+        Project.objects.filter(pk=self.project.pk).update(auto_collect_enabled=False)
+        slot = VaultSlot.objects.create(
+            project=self.project,
+            chain=self.chain,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=0,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000a22"
+            ),
+            salt=b"\x22" * 32,
+        )
+        invoice = Invoice.objects.create(
+            project=self.project,
+            out_no="invoice-slot-collect-disabled",
+            title="Invoice slot collect disabled",
+            currency=self.token.symbol,
+            amount="10.00000000",
+            methods={self.token.symbol: [self.chain.code]},
+            crypto=self.token,
+            chain=self.chain,
+            pay_amount="10.00000000",
+            pay_address=slot.address,
+            status=InvoiceStatus.COMPLETED,
+            expires_at=timezone.now(),
+        )
+
+        schedule = VaultSlot.schedule_collect_for_invoice(invoice.pk)
+
+        self.assertIsNone(schedule)
+        self.assertFalse(VaultSlotCollectSchedule.objects.exists())
 
     def test_schedule_collect_for_deposit_is_idempotent_for_pending_schedule(self):
         slot = self._create_vault_slot()
@@ -807,6 +853,29 @@ class VaultSlotAddressSchedulingTests(TestCase):
             )
         )
         self.assertIn(self.token_address[2:].lower(), schedule.tx_task.evm_task.data)
+
+    def test_due_collect_schedule_skips_when_project_auto_collect_disabled(self):
+        slot = self._create_vault_slot()
+        deposit = self._create_deposit(slot=slot)
+        address_patch = self.patch_address_derivation()
+
+        with address_patch:
+            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+        schedule.due_at = timezone.now() - timedelta(seconds=1)
+        schedule.save(update_fields=["due_at", "updated_at"])
+        Project.objects.filter(pk=self.project.pk).update(auto_collect_enabled=False)
+
+        with address_patch:
+            created_count = VaultSlotCollectSchedule.execute_due()
+
+        self.assertEqual(created_count, 0)
+        schedule.refresh_from_db()
+        self.assertIsNone(schedule.tx_task)
+        self.assertFalse(
+            EvmTxTask.objects.filter(
+                base_task__tx_type=TxTaskType.VaultSlotCollect
+            ).exists()
+        )
 
     def test_schedule_collect_for_deposit_creates_new_schedule_after_task_bound(self):
         slot = self._create_vault_slot()

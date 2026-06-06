@@ -161,12 +161,14 @@ class ProjectAdmin(ModelAdmin):
         "webhook",
         "failed_count",
         "webhook_open",
+        "auto_collect_enabled",
         "active",
     )
     list_editable = ("active",)
     list_filter = (
         "active",
         "webhook_open",
+        "auto_collect_enabled",
         "is_test",
     )
     search_fields = ("name", "appid", "webhook")
@@ -244,7 +246,10 @@ class ProjectAdmin(ModelAdmin):
         (
             _("项目资金"),
             {
-                "fields": ("vault",),
+                "fields": (
+                    "vault",
+                    "auto_collect_enabled",
+                ),
             },
         ),
         (

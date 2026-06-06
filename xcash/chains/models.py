@@ -848,6 +848,10 @@ class VaultSlot(models.Model):
         related_name="deployed_vault_slot",
         verbose_name=_("部署交易任务"),
     )
+    has_received = models.BooleanField(
+        _("是否收到过资金"),
+        default=False,
+    )
     created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
 
     class Meta:
@@ -998,7 +1002,7 @@ class VaultSlot(models.Model):
     @staticmethod
     def schedule_collect_for_slot(
         *, chain: Chain, crypto, slot
-    ) -> VaultSlotCollectSchedule:
+    ) -> VaultSlotCollectSchedule | None:
         from chains.vault_slots import schedule_collect_for_slot
 
         return schedule_collect_for_slot(chain=chain, crypto=crypto, slot=slot)
@@ -1124,11 +1128,14 @@ class VaultSlotCollectSchedule(models.Model):
                     "chain",
                     "crypto",
                     "vault_slot",
+                    "vault_slot__project",
                 )
                 .filter(tx_task__isnull=True, due_at__lte=now)
                 .order_by("due_at", "pk")[:limit]
             )
             for schedule in schedules:
+                if not schedule.vault_slot.project.auto_collect_enabled:
+                    continue
                 if not can_create_collect_tx_task(
                     chain=schedule.chain,
                     slot=schedule.vault_slot,
@@ -1312,6 +1319,7 @@ class Transfer(models.Model):
         Transfer.objects.filter(pk=self.pk).update(status=TransferStatus.CONFIRMED)
         # 统一父任务在确认后进入稳定成功终局；业务层不需要感知广播细节。
         TxTask.mark_finalized_success(chain=self.chain, tx_hash=self.hash)
+        self._mark_vault_slot_received()
 
         self._dispatch_business_confirm()
 
@@ -1381,6 +1389,14 @@ class Transfer(models.Model):
             except (KeyError, ValueError):
                 return
             handler.confirm(self)
+
+    def _mark_vault_slot_received(self) -> None:
+        """确认后的转入事实才标记 VaultSlot 曾经收到过资金。"""
+        VaultSlot.objects.filter(
+            chain=self.chain,
+            address=self.to_address,
+            has_received=False,
+        ).update(has_received=True)
 
     def _dispatch_business_drop(self) -> None:
         """统一按已归类的业务类型分发回退动作，drop() 专用。"""
