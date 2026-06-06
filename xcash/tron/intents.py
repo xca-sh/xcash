@@ -98,7 +98,7 @@ def build_vault_slot_collect_intent(
     *,
     sender: Address,
     chain: Chain,
-    vault_slot_address: str,
+    slot_address: str,
     token_address: str,
     verify_fn: Callable[[], None] | None = None,
 ) -> TronTxIntent:
@@ -109,10 +109,45 @@ def build_vault_slot_collect_intent(
     return build_contract_call_intent(
         sender=sender,
         chain=chain,
-        contract_address=vault_slot_address,
+        contract_address=slot_address,
         function_selector_value="collect(address)",
         parameter=parameter,
         fee_limit=settings.TRON_VAULT_SLOT_FEE_LIMIT,
+        tx_type=TxTaskType.VaultSlotCollect,
+        verify_fn=verify_fn,
+    )
+
+
+def build_vault_slot_ensure_collect_intent(
+    *,
+    sender: Address,
+    chain: Chain,
+    factory_address: str,
+    vault_address: str,
+    salt: bytes,
+    token_address: str,
+    verify_fn: Callable[[], None] | None = None,
+) -> TronTxIntent:
+    if len(salt) != 32:
+        raise ValueError("salt must be 32 bytes")
+    parameter = eth_abi.encode(
+        ["address", "bytes32", "address"],
+        [
+            tron_base58_to_evm_address(vault_address),
+            salt,
+            tron_base58_to_evm_address(token_address),
+        ],
+    ).hex()
+    return build_contract_call_intent(
+        sender=sender,
+        chain=chain,
+        contract_address=factory_address,
+        function_selector_value="ensureDeployedAndCollect(address,bytes32,address)",
+        parameter=parameter,
+        fee_limit=(
+            settings.TRON_VAULT_SLOT_DEPLOY_FEE_LIMIT
+            + settings.TRON_VAULT_SLOT_FEE_LIMIT
+        ),
         tx_type=TxTaskType.VaultSlotCollect,
         verify_fn=verify_fn,
     )

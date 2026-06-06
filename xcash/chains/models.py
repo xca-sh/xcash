@@ -961,19 +961,37 @@ class VaultSlot(models.Model):
         raise ValueError(f"unsupported VaultSlot usage: {usage}")
 
     @staticmethod
-    def ensure_deposit_address(chain: Chain, customer) -> str:
+    def ensure_deposit_address(
+        chain: Chain,
+        customer,
+        *,
+        crypto=None,
+        expose_native: bool = False,
+    ) -> str:
         from chains.vault_slots import ensure_deposit_address
 
-        return ensure_deposit_address(chain=chain, customer=customer)
+        return ensure_deposit_address(
+            chain=chain,
+            customer=customer,
+            crypto=crypto,
+            expose_native=expose_native,
+        )
 
     @staticmethod
-    def ensure_invoice_address(*, project, chain: Chain, invoice_index: int) -> str:
+    def ensure_invoice_address(
+        *,
+        project,
+        chain: Chain,
+        invoice_index: int,
+        crypto=None,
+    ) -> str:
         from chains.vault_slots import ensure_invoice_address
 
         return ensure_invoice_address(
             project=project,
             chain=chain,
             invoice_index=invoice_index,
+            crypto=crypto,
         )
 
     @staticmethod
@@ -1024,6 +1042,71 @@ class VaultSlot(models.Model):
                 address__in=candidates,
             ).values_list("address", flat=True)
         )
+
+
+class VaultSlotBalance(models.Model):
+    """VaultSlot 在某条链、某个币种上的链上余额快照。
+
+    这是展示和归集决策用的状态快照，不是账本流水；更新时必须读取链上余额真值后
+    覆盖写入，避免靠 Transfer 加减推导导致 reorg、漏扫或手动归集后长期漂移。
+    """
+
+    vault_slot = models.ForeignKey(
+        VaultSlot,
+        on_delete=models.CASCADE,
+        related_name="balances",
+        verbose_name=_("收款地址"),
+    )
+    chain = models.ForeignKey("Chain", on_delete=models.CASCADE, verbose_name=_("链"))
+    crypto = models.ForeignKey(
+        "currencies.Crypto",
+        on_delete=models.PROTECT,
+        verbose_name=_("币种"),
+    )
+    value = models.DecimalField(
+        _("链上最小单位余额"),
+        max_digits=80,
+        decimal_places=0,
+        default=0,
+    )
+    amount = models.DecimalField(
+        _("余额"),
+        max_digits=80,
+        decimal_places=30,
+        default=0,
+    )
+    synced_block_number = models.PositiveIntegerField(
+        _("同步区块"),
+        null=True,
+        blank=True,
+    )
+    synced_at = models.DateTimeField(_("同步时间"), null=True, blank=True)
+    last_tx_hash = HashField(
+        verbose_name=_("最近触发交易"),
+        unique=False,
+        null=True,
+        blank=True,
+    )
+    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("chain", "vault_slot", "crypto"),
+                name="uniq_vault_slot_balance_chain_slot_crypto",
+            ),
+        ]
+        ordering = ("vault_slot_id", "crypto_id")
+        verbose_name = _("收款地址余额")
+        verbose_name_plural = verbose_name
+
+    def __str__(self) -> str:
+        return f"{self.vault_slot_id}:{self.crypto_id}:{self.amount}"
+
+    def clean(self) -> None:
+        super().clean()
+        if self.vault_slot_id and self.chain_id != self.vault_slot.chain_id:
+            raise ValidationError({"chain": _("余额所属链必须与 VaultSlot.chain 一致。")})
 
 
 class VaultSlotCollectSchedule(models.Model):
@@ -1116,6 +1199,7 @@ class VaultSlotCollectSchedule(models.Model):
 
     @classmethod
     def execute_due(cls, *, limit: int = 32) -> int:
+        from chains.vault_slot_balances import refresh_vault_slot_balance_safely
         from chains.vault_slots import can_create_collect_tx_task
 
         now = timezone.now()
@@ -1139,6 +1223,14 @@ class VaultSlotCollectSchedule(models.Model):
                     chain=schedule.chain,
                     slot=schedule.vault_slot,
                 ):
+                    continue
+                balance = refresh_vault_slot_balance_safely(
+                    slot=schedule.vault_slot,
+                    crypto=schedule.crypto,
+                    reason="before_collect",
+                )
+                if balance is not None and balance.value <= 0:
+                    schedule.delete()
                     continue
                 # 单条用 savepoint 隔离:个别计划建/绑任务失败不回滚整批归集调度。
                 try:
@@ -1319,6 +1411,7 @@ class Transfer(models.Model):
         # 统一父任务在确认后进入稳定成功终局；业务层不需要感知广播细节。
         TxTask.mark_finalized_success(chain=self.chain, tx_hash=self.hash)
         self._mark_vault_slot_received()
+        self._refresh_vault_slot_balances()
 
         self._dispatch_business_confirm()
 
@@ -1396,6 +1489,14 @@ class Transfer(models.Model):
             address=self.to_address,
             has_received=False,
         ).update(has_received=True)
+
+    def _refresh_vault_slot_balances(self) -> None:
+        """确认后按链上余额真值刷新受影响 VaultSlot 余额快照。"""
+        from chains.vault_slot_balances import (  # noqa: PLC0415
+            refresh_vault_slot_balances_for_transfer,
+        )
+
+        refresh_vault_slot_balances_for_transfer(self)
 
     def _dispatch_business_drop(self) -> None:
         """统一按已归类的业务类型分发回退动作，drop() 专用。"""

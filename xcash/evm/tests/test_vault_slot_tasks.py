@@ -1,6 +1,7 @@
 import threading
 import time
 from datetime import timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock
 from unittest.mock import PropertyMock
@@ -39,8 +40,10 @@ from deposits.models import Deposit
 from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS
 from evm.intents import DEFAULT_VAULT_SLOT_COLLECT_GAS
 from evm.intents import DEFAULT_VAULT_SLOT_DEPLOY_GAS
+from evm.intents import DEFAULT_VAULT_SLOT_ENSURE_COLLECT_GAS
 from evm.intents import build_vault_slot_collect_intent
 from evm.intents import build_vault_slot_deploy_intent
+from evm.intents import build_vault_slot_ensure_collect_intent
 from evm.models import EvmTxTask
 from evm.tests._fixtures import make_evm_chain
 from invoices.models import Invoice
@@ -94,22 +97,49 @@ def test_build_vault_slot_deploy_intent_rejects_non_32_byte_salt():
         )
 
 
-def test_build_vault_slot_collect_intent_encodes_slot_call():
-    vault_slot_address = "0x" + "c" * 40
+def test_build_vault_slot_collect_intent_encodes_direct_slot_call():
+    slot_address = "0x" + "c" * 40
     token_address = "0x" + "d" * 40
 
     intent = build_vault_slot_collect_intent(
         sender=_fake_address(),
         chain=_fake_chain(),
-        vault_slot_address=vault_slot_address,
+        slot_address=slot_address,
         token_address=token_address,
     )
 
     assert intent.tx_type == TxTaskType.VaultSlotCollect
-    assert intent.to == Web3.to_checksum_address(vault_slot_address)
+    assert intent.to == Web3.to_checksum_address(slot_address)
     assert intent.value == 0
     assert intent.gas == DEFAULT_VAULT_SLOT_COLLECT_GAS
     assert intent.data.startswith(f"0x{_selector('collect(address)')}")
+    assert Web3.to_checksum_address(token_address)[2:].lower() in intent.data
+
+
+def test_build_vault_slot_ensure_collect_intent_encodes_factory_call():
+    factory_address = "0x" + "c" * 40
+    vault_address = "0x" + "e" * 40
+    token_address = "0x" + "d" * 40
+    salt = bytes.fromhex("22" * 32)
+
+    intent = build_vault_slot_ensure_collect_intent(
+        sender=_fake_address(),
+        chain=_fake_chain(),
+        factory_address=factory_address,
+        vault_address=vault_address,
+        salt=salt,
+        token_address=token_address,
+    )
+
+    assert intent.tx_type == TxTaskType.VaultSlotCollect
+    assert intent.to == Web3.to_checksum_address(factory_address)
+    assert intent.value == 0
+    assert intent.gas == DEFAULT_VAULT_SLOT_ENSURE_COLLECT_GAS
+    assert intent.data.startswith(
+        f"0x{_selector('ensureDeployedAndCollect(address,bytes32,address)')}"
+    )
+    assert Web3.to_checksum_address(vault_address)[2:].lower() in intent.data
+    assert salt.hex() in intent.data
     assert Web3.to_checksum_address(token_address)[2:].lower() in intent.data
 
 
@@ -284,7 +314,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             side_effect=fake_get_address,
         )
 
-    def test_first_ensure_deposit_address_schedules_deploy_after_commit(self):
+    def test_first_ensure_deposit_address_delays_deploy_for_token(self):
         self.project.vault = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000f01"
         )
@@ -297,7 +327,31 @@ class VaultSlotAddressSchedulingTests(TestCase):
             self.captureOnCommitCallbacks(execute=True),
         ):
             address = VaultSlot.ensure_deposit_address(
-                chain=self.chain, customer=self.customer
+                chain=self.chain,
+                customer=self.customer,
+                crypto=self.token,
+            )
+
+        slot = VaultSlot.objects.get(chain=self.chain, customer=self.customer)
+        self.assertEqual(address, slot.address)
+        schedule.assert_not_called()
+
+    def test_first_ensure_deposit_address_schedules_deploy_for_native_after_commit(self):
+        self.project.vault = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000f01"
+        )
+        self.project.save(update_fields=["vault"])
+        address_patch = self.patch_address_derivation()
+
+        with (
+            address_patch,
+            patch.object(EvmTxTask, "schedule") as schedule,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            address = VaultSlot.ensure_deposit_address(
+                chain=self.chain,
+                customer=self.customer,
+                crypto=self.chain.native_coin,
             )
 
         slot = VaultSlot.objects.get(chain=self.chain, customer=self.customer)
@@ -631,7 +685,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             {self.chain.pk, second_chain.pk},
         )
 
-    def test_existing_slot_without_deploy_task_recovers_schedule(self):
+    def test_existing_slot_without_deploy_task_recovers_schedule_for_native(self):
         slot = self._create_vault_slot()
         address_patch = self.patch_address_derivation()
 
@@ -641,7 +695,9 @@ class VaultSlotAddressSchedulingTests(TestCase):
             self.captureOnCommitCallbacks(execute=True),
         ):
             address = VaultSlot.ensure_deposit_address(
-                chain=self.chain, customer=self.customer
+                chain=self.chain,
+                customer=self.customer,
+                crypto=self.chain.native_coin,
             )
 
         self.assertEqual(address, slot.address)
@@ -905,6 +961,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_due_collect_schedule_creates_tx_task_and_binds_it(self):
         slot = self._create_vault_slot()
+        self._mark_vault_slot_deployed(slot)
         deposit = self._create_deposit(slot=slot)
         address_patch = self.patch_address_derivation()
 
@@ -913,7 +970,13 @@ class VaultSlotAddressSchedulingTests(TestCase):
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
-        with address_patch:
+        with (
+            address_patch,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ),
+        ):
             created_count = VaultSlotCollectSchedule.execute_due()
 
         self.assertEqual(created_count, 1)
@@ -954,8 +1017,37 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ).exists()
         )
 
+    def test_due_collect_schedule_deletes_pending_schedule_when_balance_is_zero(self):
+        slot = self._create_vault_slot()
+        self._mark_vault_slot_deployed(slot)
+        deposit = self._create_deposit(slot=slot)
+        address_patch = self.patch_address_derivation()
+
+        with address_patch:
+            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+        schedule.due_at = timezone.now() - timedelta(seconds=1)
+        schedule.save(update_fields=["due_at", "updated_at"])
+
+        with (
+            address_patch,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=0),
+            ),
+        ):
+            created_count = VaultSlotCollectSchedule.execute_due()
+
+        self.assertEqual(created_count, 0)
+        self.assertFalse(VaultSlotCollectSchedule.objects.filter(pk=schedule.pk).exists())
+        self.assertFalse(
+            EvmTxTask.objects.filter(
+                base_task__tx_type=TxTaskType.VaultSlotCollect
+            ).exists()
+        )
+
     def test_schedule_collect_for_deposit_creates_new_schedule_after_task_bound(self):
         slot = self._create_vault_slot()
+        self._mark_vault_slot_deployed(slot)
         first_deposit = self._create_deposit(slot=slot, tx_hash_suffix="1")
         second_deposit = self._create_deposit(slot=slot, tx_hash_suffix="2")
         address_patch = self.patch_address_derivation()
@@ -965,7 +1057,13 @@ class VaultSlotAddressSchedulingTests(TestCase):
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
-        with address_patch:
+        with (
+            address_patch,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ),
+        ):
             VaultSlotCollectSchedule.execute_due()
             new_schedule = VaultSlot.schedule_collect_for_deposit(second_deposit.pk)
 
@@ -982,6 +1080,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_two_due_collect_schedules_same_slot_get_independent_tasks(self):
         slot = self._create_vault_slot()
+        self._mark_vault_slot_deployed(slot)
         first_deposit = self._create_deposit(slot=slot, tx_hash_suffix="1")
         second_deposit = self._create_deposit(slot=slot, tx_hash_suffix="2")
         address_patch = self.patch_address_derivation()
@@ -991,7 +1090,13 @@ class VaultSlotAddressSchedulingTests(TestCase):
         first.due_at = timezone.now() - timedelta(seconds=1)
         first.save(update_fields=["due_at", "updated_at"])
 
-        with address_patch:
+        with (
+            address_patch,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ),
+        ):
             VaultSlotCollectSchedule.execute_due()
             first.refresh_from_db()
             self.assertIsNotNone(first.tx_task_id)
@@ -1001,7 +1106,13 @@ class VaultSlotAddressSchedulingTests(TestCase):
         second.due_at = timezone.now() - timedelta(seconds=1)
         second.save(update_fields=["due_at", "updated_at"])
 
-        with address_patch:
+        with (
+            address_patch,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ),
+        ):
             created_count = VaultSlotCollectSchedule.execute_due()
 
         self.assertEqual(created_count, 1)
@@ -1022,6 +1133,67 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ).exists()
         )
         self.assertFalse(VaultSlotCollectSchedule.objects.exists())
+
+    def test_collect_matcher_decodes_factory_ensure_deployed_and_collect_call(self):
+        from evm.contracts_codec import predict_xcash_vault_slot_address
+        from evm.internal_tx.vault_slot_collect import vault_slot_collect_matcher
+
+        slot = self._create_vault_slot()
+        slot.address = predict_xcash_vault_slot_address(
+            vault=self.project.vault,
+            salt=bytes(slot.salt),
+        )
+        slot.save(update_fields=["address"])
+        intent = build_vault_slot_ensure_collect_intent(
+            sender=self.system_sender,
+            chain=self.chain,
+            factory_address=XCASH_VAULT_SLOT_FACTORY_ADDRESS,
+            vault_address=self.project.vault,
+            salt=bytes(slot.salt),
+            token_address=self.token_address,
+        )
+        evm_task = EvmTxTask.schedule(intent)
+        value = 1_230_000
+
+        def address_topic(address: str) -> str:
+            return "0x" + "0" * 24 + Web3.to_checksum_address(address)[2:].lower()
+
+        receipt = {
+            "logs": [
+                {
+                    "address": slot.address,
+                    "topics": [
+                        Web3.keccak(text="XcashCollected(address,uint256)"),
+                        address_topic(self.token_address),
+                    ],
+                    "data": hex(value),
+                    "logIndex": 5,
+                },
+                {
+                    "address": self.token_address,
+                    "topics": [
+                        Web3.keccak(text="Transfer(address,address,uint256)"),
+                        address_topic(slot.address),
+                        address_topic(self.project.vault),
+                    ],
+                    "data": hex(value),
+                    "logIndex": 6,
+                },
+            ],
+        }
+
+        fact = vault_slot_collect_matcher(
+            chain=self.chain,
+            tx_task=evm_task.base_task,
+            receipt=receipt,
+        )
+
+        self.assertIsNotNone(fact)
+        self.assertEqual(fact.from_address, slot.address)
+        self.assertEqual(fact.to_address, self.project.vault)
+        self.assertEqual(fact.crypto, self.token)
+        self.assertEqual(fact.value, Decimal(value))
+        self.assertEqual(fact.amount, Decimal("1.23"))
 
     @patch("evm.saas_gas_billing.send_internal_callback")
     def test_confirmed_collect_transfer_notifies_saas_gas_fee(self, send_callback_mock):
@@ -1103,6 +1275,11 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ),
             salt=b"\x11" * 32,
         )
+
+    @staticmethod
+    def _mark_vault_slot_deployed(slot: VaultSlot) -> None:
+        VaultSlot.objects.filter(pk=slot.pk).update(is_deployed=True)
+        slot.is_deployed = True
 
     def _create_deposit(
         self,

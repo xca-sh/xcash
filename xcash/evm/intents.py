@@ -11,6 +11,7 @@ from web3 import Web3
 from chains.models import TxTaskType
 from evm.constants import DEFAULT_VAULT_SLOT_COLLECT_GAS
 from evm.constants import DEFAULT_VAULT_SLOT_DEPLOY_GAS
+from evm.constants import DEFAULT_VAULT_SLOT_ENSURE_COLLECT_GAS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -121,11 +122,11 @@ def build_vault_slot_collect_intent(
     *,
     sender: Address,
     chain: Chain,
-    vault_slot_address: str,
+    slot_address: str,
     token_address: str,
     verify_fn: Callable[[], None] | None = None,
 ) -> EvmTxIntent:
-    vault_slot_checksum = Web3.to_checksum_address(vault_slot_address)
+    slot_checksum = Web3.to_checksum_address(slot_address)
     token_checksum = Web3.to_checksum_address(token_address)
     selector = _function_selector("collect(address)")
     encoded_args = eth_abi.encode(["address"], [token_checksum]).hex()
@@ -133,9 +134,41 @@ def build_vault_slot_collect_intent(
     return build_contract_call_intent(
         sender=sender,
         chain=chain,
-        contract_address=vault_slot_checksum,
+        contract_address=slot_checksum,
         data=f"0x{selector}{encoded_args}",
         gas=DEFAULT_VAULT_SLOT_COLLECT_GAS,
+        tx_type=TxTaskType.VaultSlotCollect,
+        verify_fn=verify_fn,
+    )
+
+
+def build_vault_slot_ensure_collect_intent(
+    *,
+    sender: Address,
+    chain: Chain,
+    factory_address: str,
+    vault_address: str,
+    salt: bytes,
+    token_address: str,
+    verify_fn: Callable[[], None] | None = None,
+) -> EvmTxIntent:
+    if len(salt) != 32:
+        raise ValueError("salt must be 32 bytes")
+    factory_checksum = Web3.to_checksum_address(factory_address)
+    vault_checksum = Web3.to_checksum_address(vault_address)
+    token_checksum = Web3.to_checksum_address(token_address)
+    selector = _function_selector("ensureDeployedAndCollect(address,bytes32,address)")
+    encoded_args = eth_abi.encode(
+        ["address", "bytes32", "address"],
+        [vault_checksum, salt, token_checksum],
+    ).hex()
+
+    return build_contract_call_intent(
+        sender=sender,
+        chain=chain,
+        contract_address=factory_checksum,
+        data=f"0x{selector}{encoded_args}",
+        gas=DEFAULT_VAULT_SLOT_ENSURE_COLLECT_GAS,
         tx_type=TxTaskType.VaultSlotCollect,
         verify_fn=verify_fn,
     )

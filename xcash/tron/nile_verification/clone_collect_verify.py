@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 
 from verification_common import emit
-from verification_common import env_int
+from verification_common import env_optional
 from verification_common import env_required
 from verification_common import nile_chain
+from verification_common import nile_vault_address
 from verification_common import setup_django
 from verification_common import sign_and_broadcast
 from verification_common import wait_tx_info
@@ -14,7 +15,8 @@ from verification_common import wait_tx_info
 def main() -> None:
     setup_django()
     from tron.client import TronHttpClient
-    from tron.intents import build_vault_slot_collect_intent
+    from tron.contracts_codec import predict_tron_vault_slot_address
+    from tron.intents import build_vault_slot_ensure_collect_intent
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--broadcast", action="store_true")
@@ -24,17 +26,33 @@ def main() -> None:
     chain = nile_chain()
     owner = env_required("TRON_NILE_OWNER_ADDRESS")
     private_key = env_required("TRON_NILE_PRIVATE_KEY")
-    slot = env_required("TRON_VAULT_SLOT_ADDRESS")
+    factory = env_required("TRON_VAULT_SLOT_FACTORY_ADDRESS")
+    template = env_required("TRON_VAULT_SLOT_TEMPLATE_ADDRESS")
+    vault = nile_vault_address(owner_address=owner)
+    salt_hex = env_required("TRON_VAULT_SLOT_SALT_HEX")
+    salt = bytes.fromhex(salt_hex.removeprefix("0x"))
+    expected_slot = predict_tron_vault_slot_address(
+        vault=vault,
+        salt=salt,
+        factory=factory,
+        vault_slot_template=template,
+    )
+    configured_slot = env_optional("TRON_VAULT_SLOT_ADDRESS")
+    if configured_slot and configured_slot != expected_slot:
+        raise SystemExit(
+            "TRON_VAULT_SLOT_ADDRESS does not match salt/vault prediction: "
+            f"{configured_slot} != {expected_slot}"
+        )
     token = env_required("TRON_USDT_CONTRACT_ADDRESS")
-    fee_limit = env_int("TRON_VAULT_SLOT_FEE_LIMIT", 0)
-    if fee_limit <= 0:
-        raise SystemExit("TRON_VAULT_SLOT_FEE_LIMIT must be > 0")
+    emit(f"expected_slot={expected_slot}")
 
     client = TronHttpClient(chain=chain)
-    intent = build_vault_slot_collect_intent(
+    intent = build_vault_slot_ensure_collect_intent(
         sender=type("Sender", (), {"address": owner})(),
         chain=chain,
-        vault_slot_address=slot,
+        factory_address=factory,
+        vault_address=vault,
+        salt=salt,
         token_address=token,
     )
     unsigned = client.trigger_smart_contract(
@@ -42,7 +60,7 @@ def main() -> None:
         contract_address=intent.to,
         function_selector=intent.function_selector,
         parameter=intent.parameter,
-        fee_limit=fee_limit,
+        fee_limit=intent.fee_limit,
     )
     tx_id = sign_and_broadcast(
         client=client,

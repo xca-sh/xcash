@@ -102,8 +102,16 @@ class DepositViewSet(viewsets.GenericViewSet):
             raise APIError(ErrorCode.INVALID_CHAIN)
         customer, _ = Customer.objects.get_or_create(project=project, uid=uid)
 
-        deposit_address = VaultSlot.ensure_deposit_address(chain, customer)
-        if settings.DEBUG and chain.type == ChainType.EVM:
+        deposit_address = VaultSlot.ensure_deposit_address(
+            chain,
+            customer,
+            crypto=crypto,
+        )
+        if (
+            settings.DEBUG
+            and chain.type == ChainType.EVM
+            and crypto.pk == chain.native_coin.pk
+        ):
             wait_deposit_address_deployed(chain=chain, address=deposit_address)
         return Response({"deposit_address": deposit_address})
 

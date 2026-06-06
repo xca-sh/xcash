@@ -18,6 +18,7 @@ from chains.models import Chain
 from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
+from chains.vault_slot_balances import refresh_vault_slot_balance_for_collect_task
 from chains.vault_slots import mark_deployed_by_task
 from chains.vault_slots import mark_deployed_if_on_chain_for_task
 from common.decorators import singleton_task
@@ -131,6 +132,8 @@ def confirm_tron_receipt_tx_tasks() -> None:
             if updated:
                 if task.tx_type == TxTaskType.VaultSlotDeploy:
                     mark_deployed_by_task(task)
+                elif task.tx_type == TxTaskType.VaultSlotCollect:
+                    refresh_vault_slot_balance_for_collect_task(task)
                 notify_gas_fee_for_receipt_task(task)
         elif status == TxCheckStatus.MISSING:
             continue

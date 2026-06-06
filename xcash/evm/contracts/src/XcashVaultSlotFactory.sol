@@ -33,4 +33,22 @@ contract XcashVaultSlotFactory {
         );
         emit XcashVaultSlotDeployed(vaultSlot, vault, salt);
     }
+
+    function ensureDeployedAndCollect(address payable vault, bytes32 salt, address token)
+        external
+        returns (address vaultSlot)
+    {
+        if (vault == address(0)) revert ZeroVault();
+        bytes memory args = abi.encodePacked(vault);
+        vaultSlot = Clones.predictDeterministicAddressWithImmutableArgs(
+            vaultSlotTemplate, args, salt
+        );
+        if (vaultSlot.code.length == 0) {
+            vaultSlot = Clones.cloneDeterministicWithImmutableArgs(
+                vaultSlotTemplate, args, salt
+            );
+            emit XcashVaultSlotDeployed(vaultSlot, vault, salt);
+        }
+        XcashVaultSlotTemplate(payable(vaultSlot)).collect(token);
+    }
 }

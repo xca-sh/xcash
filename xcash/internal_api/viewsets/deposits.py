@@ -82,5 +82,6 @@ class InternalDepositViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet)
         deposit_address = VaultSlot.ensure_deposit_address(
             chain=chain,
             customer=customer,
+            expose_native=chain.type == ChainType.EVM,
         )
         return Response({"deposit_address": deposit_address})

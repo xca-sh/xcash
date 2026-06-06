@@ -299,7 +299,15 @@ class Invoice(models.Model):
                 chain=chain,
                 crypto_amount=crypto_amount,
             ):
-                if not slot.is_deployed:
+                from chains.vault_slots import should_predeploy_on_address_exposure
+
+                if (
+                    not slot.is_deployed
+                    and should_predeploy_on_address_exposure(
+                        chain=chain,
+                        crypto=crypto,
+                    )
+                ):
                     db_transaction.on_commit(
                         lambda slot_pk=slot.pk: VaultSlot.schedule_deploy(slot_pk)
                     )
@@ -311,7 +319,10 @@ class Invoice(models.Model):
         invoice_index = 0 if latest_index is None else latest_index + 1
         try:
             VaultSlot.ensure_invoice_address(
-                project=self.project, chain=chain, invoice_index=invoice_index
+                project=self.project,
+                chain=chain,
+                invoice_index=invoice_index,
+                crypto=crypto,
             )
         except RuntimeError as exc:
             raise self.InvoiceAllocationError(str(exc)) from exc

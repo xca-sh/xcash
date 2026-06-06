@@ -1686,6 +1686,68 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         self.assertEqual(slot.project, self.project)
         self.assertEqual(slot.chain, self.chain)
         self.assertEqual(slot.usage, VaultSlotUsage.INVOICE)
+
+    def test_reusing_undeployed_contract_slot_does_not_schedule_deploy_for_token(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F16"
+        )
+        self.project.vault = vault_address
+        self.project.save(update_fields=["vault"])
+        slot = VaultSlot.objects.create(
+            project=self.project,
+            chain=self.chain,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=0,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000A16"
+            ),
+            salt=b"\x16" * 32,
+        )
+        invoice = self.create_test_invoice(out_no="contract-token-lazy-deploy")
+
+        with (
+            patch.object(VaultSlot, "schedule_deploy") as schedule_deploy,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            selected = invoice.get_vault_slot(
+                crypto=self.crypto,
+                chain=self.chain,
+                crypto_amount=Decimal("10"),
+            )
+
+        self.assertEqual(selected.pk, slot.pk)
+        schedule_deploy.assert_not_called()
+
+    def test_reusing_undeployed_contract_slot_schedules_deploy_for_native(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F17"
+        )
+        self.project.vault = vault_address
+        self.project.save(update_fields=["vault"])
+        slot = VaultSlot.objects.create(
+            project=self.project,
+            chain=self.chain,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=0,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000A17"
+            ),
+            salt=b"\x17" * 32,
+        )
+        invoice = self.create_test_invoice(out_no="contract-native-predeploy")
+
+        with (
+            patch.object(VaultSlot, "schedule_deploy") as schedule_deploy,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            selected = invoice.get_vault_slot(
+                crypto=self.chain.native_coin,
+                chain=self.chain,
+                crypto_amount=Decimal("10"),
+            )
+
+        self.assertEqual(selected.pk, slot.pk)
+        schedule_deploy.assert_called_once_with(slot.pk)
         self.assertEqual(slot.invoice_index, 0)
         self.assertIsNone(slot.customer_id)
         self.assertEqual(slot.project.vault, vault_address)

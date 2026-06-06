@@ -10,6 +10,7 @@ from chains.models import DepositVaultSlot
 from chains.models import InvoiceVaultSlot
 from chains.models import Transfer
 from chains.models import TxTask
+from chains.models import VaultSlotBalance
 from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.models import Wallet
@@ -245,8 +246,30 @@ class VaultSlotCollectScheduleInline(TabularInline):
         return super().get_queryset(request).select_related("crypto", "tx_task")
 
 
+class VaultSlotBalanceInline(TabularInline):
+    model = VaultSlotBalance
+    extra = 0
+    can_delete = False
+    fields = (
+        "crypto",
+        "amount",
+        "value",
+        "synced_block_number",
+        "synced_at",
+        "last_tx_hash",
+        "updated_at",
+    )
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("crypto")
+
+
 class VaultSlotAdminBase(ReadOnlyModelAdmin):
-    inlines = (VaultSlotCollectScheduleInline,)
+    inlines = (VaultSlotBalanceInline, VaultSlotCollectScheduleInline)
     list_filter = ("chain",)
     readonly_fields = (
         "project",

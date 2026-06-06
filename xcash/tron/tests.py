@@ -1057,10 +1057,12 @@ class TronReceiptConfirmTaskTests(TestCase):
 
     @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
     @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
     @patch("tron.tasks.AdapterFactory.get_adapter")
     def test_confirm_finalizes_collect_and_triggers_collect_gas_fee(
         self,
         get_adapter,
+        refresh_balance,
         collect_gas_fee,
         deploy_gas_fee,
     ):
@@ -1077,6 +1079,8 @@ class TronReceiptConfirmTaskTests(TestCase):
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.CONFIRMED)
+        refresh_balance.assert_called_once()
+        self.assertEqual(refresh_balance.call_args.args[0].pk, base_task.pk)
         collect_gas_fee.assert_called_once()
         self.assertEqual(
             collect_gas_fee.call_args.kwargs["tx_task"].pk, base_task.pk
@@ -1085,10 +1089,12 @@ class TronReceiptConfirmTaskTests(TestCase):
 
     @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
     @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
     @patch("tron.tasks.AdapterFactory.get_adapter")
     def test_confirm_finalizes_deploy_marks_slot_deployed_and_triggers_gas_fee(
         self,
         get_adapter,
+        refresh_balance,
         collect_gas_fee,
         deploy_gas_fee,
     ):
@@ -1107,15 +1113,18 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.slot.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.CONFIRMED)
         self.assertTrue(self.slot.is_deployed)
+        refresh_balance.assert_not_called()
         deploy_gas_fee.assert_called_once()
         self.assertEqual(deploy_gas_fee.call_args.kwargs["tx_task"].pk, base_task.pk)
         collect_gas_fee.assert_not_called()
 
     @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
     @patch("tron.tasks.AdapterFactory.get_adapter")
     def test_confirm_marks_failed_collect_without_gas_fee(
         self,
         get_adapter,
+        refresh_balance,
         collect_gas_fee,
     ):
         base_task = self.create_collect_task()
@@ -1131,10 +1140,15 @@ class TronReceiptConfirmTaskTests(TestCase):
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.FAILED)
+        refresh_balance.assert_not_called()
         collect_gas_fee.assert_not_called()
 
 
-@override_settings(TRON_VAULT_SLOT_FEE_LIMIT=150_000_000)
+@override_settings(
+    TRON_VAULT_SLOT_FACTORY_ADDRESS="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+    TRON_VAULT_SLOT_DEPLOY_FEE_LIMIT=300_000_000,
+    TRON_VAULT_SLOT_FEE_LIMIT=150_000_000,
+)
 class TronCollectScheduleExecuteTests(TestCase):
     """归集计划到期建链上任务的行为:必须确认 slot 已部署,且每个计划各建独立任务。"""
 
@@ -1157,7 +1171,10 @@ class TronCollectScheduleExecuteTests(TestCase):
             address="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
             decimals=6,
         )
-        self.project = Project.objects.create(name="Tron Execute Project")
+        self.project = Project.objects.create(
+            name="Tron Execute Project",
+            vault="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        )
         self.customer = Customer.objects.create(
             project=self.project, uid="tron-execute-customer"
         )
@@ -1203,11 +1220,21 @@ class TronCollectScheduleExecuteTests(TestCase):
 
         with patch("tron.vault_slots.SystemWallet.get_current") as get_current:
             get_current.return_value.wallet.get_address.return_value = self.sender
-            created = VaultSlotCollectSchedule.execute_due()
+            with patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ):
+                created = VaultSlotCollectSchedule.execute_due()
 
         self.assertEqual(created, 1)
         schedule.refresh_from_db()
         self.assertIsNotNone(schedule.tx_task_id)
+        self.assertEqual(
+            schedule.tx_task.tron_task.function_selector,
+            "collect(address)",
+        )
+        self.assertEqual(schedule.tx_task.tron_task.to, self.slot.address)
+        self.assertEqual(schedule.tx_task.tron_task.fee_limit, 150_000_000)
 
     @patch("tron.vault_slots.TronAdapter.is_contract", return_value=True)
     def test_two_schedules_same_slot_get_independent_tasks(self, is_contract):
@@ -1216,15 +1243,41 @@ class TronCollectScheduleExecuteTests(TestCase):
         first = self.make_pending_schedule()
         with patch("tron.vault_slots.SystemWallet.get_current") as get_current:
             get_current.return_value.wallet.get_address.return_value = self.sender
-            VaultSlotCollectSchedule.execute_due()
+            with patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ):
+                VaultSlotCollectSchedule.execute_due()
             first.refresh_from_db()
             self.assertIsNotNone(first.tx_task_id)
 
             # 第一个计划绑定任务后 uniq_pending 约束释放,可再建第二个 pending 计划。
             second = self.make_pending_schedule()
-            created = VaultSlotCollectSchedule.execute_due()
+            with patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ):
+                created = VaultSlotCollectSchedule.execute_due()
 
         self.assertEqual(created, 1)
         second.refresh_from_db()
         self.assertIsNotNone(second.tx_task_id)
         self.assertNotEqual(first.tx_task_id, second.tx_task_id)
+
+    @patch("tron.vault_slots.TronAdapter.is_contract", return_value=True)
+    def test_execute_due_deletes_pending_schedule_when_balance_is_zero(self, is_contract):
+        schedule = self.make_pending_schedule()
+
+        with (
+            patch("tron.vault_slots.SystemWallet.get_current") as get_current,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=0),
+            ),
+        ):
+            get_current.return_value.wallet.get_address.return_value = self.sender
+            created = VaultSlotCollectSchedule.execute_due()
+
+        self.assertEqual(created, 0)
+        self.assertFalse(VaultSlotCollectSchedule.objects.filter(pk=schedule.pk).exists())
+        self.assertFalse(TxTask.objects.filter(tx_type=TxTaskType.VaultSlotCollect).exists())

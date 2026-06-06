@@ -33,7 +33,9 @@
 - `TRON_VAULT_SLOT_FACTORY_ADDRESS`
 - `TRON_VAULT_SLOT_TEMPLATE_ADDRESS`
 - `TRON_VAULT_SLOT_FEE_LIMIT`
+- `TRON_VAULT_SLOT_DEPLOY_FEE_LIMIT`
 - `TRON_VAULT_SLOT_TEST_VAULT`
+- `TRON_VAULT_SLOT_SALT_HEX`
 - `TRON_USDT_CONTRACT_ADDRESS`
 
 ## 命令
@@ -62,4 +64,7 @@ cd ../../..
 .venv/bin/python xcash/tron/nile_verification/activation_create2_ab.py --case b --broadcast --wait
 ```
 
-`nile_deploy_compare.py` 需要额外提供 `TRON_VAULT_SLOT_SALT_HEX`。A/B 脚本会自行生成盐并打印预测地址。
+`nile_deploy_compare.py` 和 `clone_collect_verify.py` 需要额外提供
+`TRON_VAULT_SLOT_SALT_HEX`。`clone_collect_verify.py` 会按 factory/vault/salt 预测
+slot，并用 `ensureDeployedAndCollect(vault,salt,token)` 执行首次部署 + 归集；若同时提供
+`TRON_VAULT_SLOT_ADDRESS`，脚本会校验它与预测地址一致。A/B 脚本会自行生成盐并打印预测地址。

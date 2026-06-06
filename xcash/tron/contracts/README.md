@@ -16,6 +16,8 @@
 - `XcashVaultSlotFactory`
   - `deployVaultSlot(vault, salt)` 使用 OpenZeppelin Clones immutable args 和
     TVM CREATE2 部署 slot。
+  - `ensureDeployedAndCollect(vault, salt, token)` 在 slot 尚未部署时先部署，
+    然后调用 slot 的 `collect(token)`，用于首次 TRC20 入账后的部署 + 归集收口。
   - 不提供链上 `predict`（源码层面已删，EVM/TVM 同此一份）。Tron 地址预测必须使用
     `xcash/tron/contracts_codec.py` 的 Python `0x41` 预测器。
 

@@ -20,7 +20,7 @@ contract DeployXcashVaultSlot is Script {
     ///      evm_version / bytecode_hash / cbor_metadata 等编译参数，
     ///      以及合约源码本身——任何一项变动都会让 init_code 变、地址漂移。
     address internal constant EXPECTED_TEMPLATE = 0xBe5242D10E80b289E26B24687229e0553BD14007;
-    address internal constant EXPECTED_FACTORY = 0x58406B151BaF3c2c880a8CF89AF4cA37Afb9f5ae;
+    address internal constant EXPECTED_FACTORY = 0xb32d969ba8580B22FA1806895c7a88C9827f863B;
 
     function run() external {
         bytes32 templateInitHash = keccak256(type(XcashVaultSlotTemplate).creationCode);

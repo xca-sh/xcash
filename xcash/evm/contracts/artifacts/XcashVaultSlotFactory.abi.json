@@ -36,6 +36,35 @@
   },
   {
     "type": "function",
+    "name": "ensureDeployedAndCollect",
+    "inputs": [
+      {
+        "name": "vault",
+        "type": "address",
+        "internalType": "address payable"
+      },
+      {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "vaultSlot",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "vaultSlotTemplate",
     "inputs": [],
     "outputs": [

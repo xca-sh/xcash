@@ -26,6 +26,7 @@ from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
 from chains.models import VaultSlot
+from chains.models import VaultSlotBalance
 from chains.models import VaultSlotUsage
 from chains.models import Wallet
 from chains.tasks import process_transfer
@@ -796,6 +797,91 @@ class TransferServiceCreateObservedTests(TestCase):
         )
         enqueue_mock.assert_not_called()
 
+    @patch("chains.service.TransferService.enqueue_processing")
+    def test_token_observed_inbound_schedules_vault_slot_deploy_after_commit(
+        self,
+        enqueue_mock,
+    ):
+        from chains.service import ObservedTransferPayload
+        from chains.service import TransferService
+
+        project = Project.objects.create(name="Observed Token Deploy")
+        slot = VaultSlot.objects.create(
+            chain=self.chain,
+            project=project,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=1,
+            address=self.payload.to_address,
+            salt=b"\x01" * 32,
+        )
+        current = ObservedTransferPayload(
+            chain=self.chain,
+            block=101,
+            block_hash="0x" + "bb" * 32,
+            tx_hash="0x" + "bc" * 32,
+            from_address=self.payload.from_address,
+            to_address=slot.address,
+            crypto=self.crypto,
+            value=self.payload.value,
+            amount=self.payload.amount,
+            timestamp=self.payload.timestamp,
+            datetime=self.payload.datetime,
+            source="test-token",
+        )
+
+        with (
+            patch.object(VaultSlot, "schedule_deploy") as schedule_deploy,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            result = TransferService.create_observed_transfer(observed=current)
+
+        self.assertTrue(result.created)
+        enqueue_mock.assert_called_once()
+        schedule_deploy.assert_called_once_with(slot.pk)
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    def test_native_observed_inbound_does_not_schedule_vault_slot_deploy(
+        self,
+        enqueue_mock,
+    ):
+        from chains.service import ObservedTransferPayload
+        from chains.service import TransferService
+
+        project = Project.objects.create(name="Observed Native Deploy")
+        native_crypto = self.chain.native_coin
+        slot = VaultSlot.objects.create(
+            chain=self.chain,
+            project=project,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=2,
+            address=self.payload.to_address,
+            salt=b"\x02" * 32,
+        )
+        current = ObservedTransferPayload(
+            chain=self.chain,
+            block=102,
+            block_hash="0x" + "cc" * 32,
+            tx_hash="0x" + "cd" * 32,
+            from_address=self.payload.from_address,
+            to_address=slot.address,
+            crypto=native_crypto,
+            value=self.payload.value,
+            amount=self.payload.amount,
+            timestamp=self.payload.timestamp,
+            datetime=self.payload.datetime,
+            source="test-native",
+        )
+
+        with (
+            patch.object(VaultSlot, "schedule_deploy") as schedule_deploy,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            result = TransferService.create_observed_transfer(observed=current)
+
+        self.assertTrue(result.created)
+        enqueue_mock.assert_called_once()
+        schedule_deploy.assert_not_called()
+
 
 class TxTaskTransitionTests(TestCase):
     """验证 TxTask 封装的状态转换方法。"""
@@ -967,6 +1053,12 @@ class VaultSlotReceivedFlagTests(TestCase):
             coingecko_id="vaultslot-received-flag",
         )
         self.chain = make_evm_chain(code=ChainCode.Ethereum)
+        ChainCryptoDeployment.objects.create(
+            chain=self.chain,
+            crypto=self.crypto,
+            address=Web3.to_checksum_address("0x" + "34" * 20),
+            decimals=6,
+        )
         self.project = Project.objects.create(name="VaultSlot Received Flag")
         self.slot_address = Web3.to_checksum_address("0x" + "ab" * 20)
         self.slot = VaultSlot.objects.create(
@@ -1020,6 +1112,38 @@ class VaultSlotReceivedFlagTests(TestCase):
 
         self.slot.refresh_from_db()
         self.assertFalse(self.slot.has_received)
+
+    def test_transfer_confirm_refreshes_vault_slot_balance_from_chain(self):
+        transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=100,
+            block_hash="0x" + "55" * 32,
+            hash="0x" + "66" * 32,
+            crypto=self.crypto,
+            from_address=Web3.to_checksum_address("0x" + "cd" * 20),
+            to_address=self.slot_address,
+            value=Decimal("1000000"),
+            amount=Decimal("1"),
+            timestamp=1_700_000_002,
+            datetime=timezone.now(),
+        )
+        adapter = type("Adapter", (), {"get_balance": lambda *_args: 1_234_567})()
+
+        with patch(
+            "chains.vault_slot_balances.AdapterFactory.get_adapter",
+            return_value=adapter,
+        ):
+            transfer.confirm()
+
+        balance = VaultSlotBalance.objects.get(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+        )
+        self.assertEqual(balance.value, Decimal("1234567"))
+        self.assertEqual(balance.amount, Decimal("1.234567"))
+        self.assertEqual(balance.synced_block_number, transfer.block)
+        self.assertEqual(balance.last_tx_hash, transfer.hash)
 
 
 class BlockNumberUpdatedCompensationTests(TestCase):

@@ -16,7 +16,51 @@ from chains.models import VaultSlotUsage
 logger = structlog.get_logger()
 
 
-def ensure_deposit_address(*, chain: Chain, customer) -> str:
+def should_predeploy_on_address_exposure(
+    *,
+    chain: Chain,
+    crypto=None,
+    expose_native: bool = False,
+) -> bool:
+    """判断返回 VaultSlot 地址前是否必须部署合约。
+
+    EVM 原生币入账必须依赖 receive() emit XcashNativeReceived 才能被系统识别；
+    ERC20/TRC20 Transfer 可以先打到 CREATE2 预测地址，scanner 观察到入账后再部署。
+    """
+    if chain.type != ChainType.EVM:
+        return False
+    if expose_native:
+        return True
+    if crypto is None:
+        return False
+    return getattr(crypto, "pk", None) == chain.native_coin.pk
+
+
+def schedule_deploy_after_commit_if_needed(
+    *,
+    slot: VaultSlot,
+    chain: Chain,
+    crypto=None,
+    expose_native: bool = False,
+) -> None:
+    if slot.is_deployed:
+        return
+    if not should_predeploy_on_address_exposure(
+        chain=chain,
+        crypto=crypto,
+        expose_native=expose_native,
+    ):
+        return
+    db_transaction.on_commit(lambda slot_pk=slot.pk: VaultSlot.schedule_deploy(slot_pk))
+
+
+def ensure_deposit_address(
+    *,
+    chain: Chain,
+    customer,
+    crypto=None,
+    expose_native: bool = False,
+) -> str:
     validate_supported_chain(chain)
     backend = get_backend(chain)
     backend.validate_runtime(chain=chain)
@@ -29,10 +73,12 @@ def ensure_deposit_address(*, chain: Chain, customer) -> str:
         customer=customer,
     ).first()
     if existing is not None:
-        if not existing.is_deployed:
-            db_transaction.on_commit(
-                lambda slot_pk=existing.pk: VaultSlot.schedule_deploy(slot_pk)
-            )
+        schedule_deploy_after_commit_if_needed(
+            slot=existing,
+            chain=chain,
+            crypto=crypto,
+            expose_native=expose_native,
+        )
         return existing.address
 
     if not project.vault:
@@ -66,13 +112,22 @@ def ensure_deposit_address(*, chain: Chain, customer) -> str:
             raise exc from not_exist_exc
     else:
         if created:
-            db_transaction.on_commit(
-                lambda slot_pk=slot.pk: VaultSlot.schedule_deploy(slot_pk)
+            schedule_deploy_after_commit_if_needed(
+                slot=slot,
+                chain=chain,
+                crypto=crypto,
+                expose_native=expose_native,
             )
     return slot.address
 
 
-def ensure_invoice_address(*, project, chain: Chain, invoice_index: int) -> str:
+def ensure_invoice_address(
+    *,
+    project,
+    chain: Chain,
+    invoice_index: int,
+    crypto=None,
+) -> str:
     validate_supported_chain(chain)
     backend = get_backend(chain)
     backend.validate_runtime(chain=chain)
@@ -84,10 +139,11 @@ def ensure_invoice_address(*, project, chain: Chain, invoice_index: int) -> str:
         invoice_index=invoice_index,
     ).first()
     if existing is not None:
-        if not existing.is_deployed:
-            db_transaction.on_commit(
-                lambda slot_pk=existing.pk: VaultSlot.schedule_deploy(slot_pk)
-            )
+        schedule_deploy_after_commit_if_needed(
+            slot=existing,
+            chain=chain,
+            crypto=crypto,
+        )
         return existing.address
 
     if not project.vault:
@@ -122,8 +178,10 @@ def ensure_invoice_address(*, project, chain: Chain, invoice_index: int) -> str:
             raise exc from not_exist_exc
     else:
         if created:
-            db_transaction.on_commit(
-                lambda slot_pk=slot.pk: VaultSlot.schedule_deploy(slot_pk)
+            schedule_deploy_after_commit_if_needed(
+                slot=slot,
+                chain=chain,
+                crypto=crypto,
             )
     return slot.address
 

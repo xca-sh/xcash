@@ -122,6 +122,36 @@ class TransferService:
         TxTask.mark_pending_confirm(chain=chain, tx_hash=tx_hash)
 
     @staticmethod
+    def _schedule_deploy_after_observed_token_inbound(
+        *,
+        chain: Chain,
+        observed: ObservedTransferPayload,
+    ) -> None:
+        """token 首次打入预测 VaultSlot 后调度合约部署。
+
+        原生币入账必须在暴露地址前完成部署；能走到 scanner 的 native 日志已经来自
+        已部署合约。ERC20/TRC20 入账则可先打到 CREATE2 预测地址，命中系统 VaultSlot
+        后再部署，避免悬空地址提前消耗 gas / energy。
+        """
+        from chains.models import VaultSlot  # noqa: PLC0415
+
+        if observed.crypto.pk == chain.native_coin.pk:
+            return
+
+        slot = (
+            VaultSlot.objects.filter(
+                chain=chain,
+                address=observed.to_address,
+                is_deployed=False,
+            )
+            .only("pk")
+            .first()
+        )
+        if slot is None:
+            return
+        transaction.on_commit(lambda slot_pk=slot.pk: VaultSlot.schedule_deploy(slot_pk))
+
+    @staticmethod
     def _build_observed_transfer_kwargs(
         observed: ObservedTransferPayload,
     ) -> dict[str, object]:
@@ -213,6 +243,10 @@ class TransferService:
                         chain=chain,
                         tx_hash=observed.tx_hash,
                     )
+                    TransferService._schedule_deploy_after_observed_token_inbound(
+                        chain=chain,
+                        observed=observed,
+                    )
                     logger.debug(
                         "Observed transfer replay ignored",
                         source=observed.source,
@@ -248,6 +282,10 @@ class TransferService:
                     chain=chain,
                     tx_hash=observed.tx_hash,
                 )
+                TransferService._schedule_deploy_after_observed_token_inbound(
+                    chain=chain,
+                    observed=observed,
+                )
                 return ObservedTransferCreateResult(transfer=transfer, created=True)
             except IntegrityError:
                 existing = Transfer.objects.filter(
@@ -270,6 +308,10 @@ class TransferService:
                 TransferService._mark_tx_task_pending_confirm(
                     chain=chain,
                     tx_hash=observed.tx_hash,
+                )
+                TransferService._schedule_deploy_after_observed_token_inbound(
+                    chain=chain,
+                    observed=observed,
                 )
 
                 logger.debug(
