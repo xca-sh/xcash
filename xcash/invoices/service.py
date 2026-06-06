@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
@@ -10,6 +11,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from chains.models import Chain
+from chains.models import ChainType
 from chains.models import ConfirmMode
 from chains.models import TransferType
 from chains.models import VaultSlot
@@ -234,6 +236,64 @@ class InvoiceService:
                 ),
             },
         }
+
+    @staticmethod
+    def build_payment_uri(invoice: Invoice) -> str | None:
+        """为已分配支付指引的账单生成钱包可扫描的支付 URI（EIP-681）。
+
+        把链(chainId)、代币(合约地址/原生币)、收款地址与精确金额一并编码进
+        二维码，最大限度减少买家手输金额导致的「付款金额不符」。目前仅 EVM 链
+        有统一标准（EIP-681）：
+
+            原生币  ethereum:<收款地址>@<chainId>?value=<wei>
+            代币    ethereum:<合约>@<chainId>/transfer?address=<收款地址>&uint256=<最小单位>
+
+        非 EVM 链（如 Tron 无跨钱包标准）返回 None，由前端降级为纯地址二维码。
+
+        金额按该币在该链的 decimals 换算为最小单位整数；若换算除不尽（报价精度
+        超过链上可表示精度），返回 None 而非截断——绝不生成与账单 pay_amount
+        不一致的金额，否则扫码付款必然无法匹配，反而比不编码金额更糟。
+        """
+        if (
+            invoice.chain_id is None
+            or invoice.crypto_id is None
+            or not invoice.pay_address
+            or invoice.pay_amount is None
+        ):
+            return None
+
+        chain = invoice.chain
+        crypto = invoice.crypto
+
+        # 仅 EVM 链有 chain_id 与 EIP-681；其余链型暂不生成结构化 URI。
+        if chain.type != ChainType.EVM or chain.chain_id is None:
+            return None
+
+        # decimals 与合约地址同属一条部署记录，一次取出，避免高频 retrieve
+        # 端点对同一行重复查询。lazy import 规避潜在循环依赖。
+        from currencies.models import ChainCryptoDeployment
+
+        try:
+            deployment = ChainCryptoDeployment.objects.get(crypto=crypto, chain=chain)
+        except ChainCryptoDeployment.DoesNotExist:
+            return None
+
+        scaled = invoice.pay_amount * (Decimal(10) ** deployment.decimals)
+        if scaled != scaled.to_integral_value():
+            # 报价精度超过链上精度，无法精确编码，降级为地址二维码。
+            return None
+        base_units = int(scaled)
+
+        if crypto.is_native:
+            return f"ethereum:{invoice.pay_address}@{chain.chain_id}?value={base_units}"
+
+        if not deployment.address:
+            # 标记为非原生却查不到合约地址属配置异常，降级而非生成错误 URI。
+            return None
+        return (
+            f"ethereum:{deployment.address}@{chain.chain_id}"
+            f"/transfer?address={invoice.pay_address}&uint256={base_units}"
+        )
 
     @staticmethod
     @transaction.atomic

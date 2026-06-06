@@ -141,6 +141,7 @@ class InvoicePublicSerializer(serializers.ModelSerializer):
     # 直接透传商户配置的原始 return_url（兼容 native 协议）。
     return_url = serializers.SerializerMethodField()
     payment = TransferSerializer(source="transfer", read_only=True)
+    payment_uri = serializers.SerializerMethodField()
 
     def get_pay_url(self, obj: Invoice) -> str:
         pay_path = reverse("payment-invoice", kwargs={"sys_no": obj.sys_no})
@@ -163,6 +164,10 @@ class InvoicePublicSerializer(serializers.ModelSerializer):
                 return signed
         return obj.return_url
 
+    def get_payment_uri(self, obj: Invoice) -> str | None:
+        """EVM 账单返回 EIP-681 支付 URI；其余返回 None，前端降级为地址二维码。"""
+        return InvoiceService.build_payment_uri(obj)
+
     class Meta:
         model = Invoice
         fields = (
@@ -182,6 +187,7 @@ class InvoicePublicSerializer(serializers.ModelSerializer):
             "expires_at",
             "return_url",
             "payment",
+            "payment_uri",
             "status",
             "risk_level",
             "risk_score",

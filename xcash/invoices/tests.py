@@ -2109,3 +2109,123 @@ class TryMatchContractInvoiceTest(TestCase, InvoiceTestMixin):
         self.assertFalse(matched)
         self.invoice.refresh_from_db()
         self.assertEqual(self.invoice.status, InvoiceStatus.WAITING)
+
+
+class InvoicePaymentUriTests(InvoiceTestMixin, TestCase):
+    """InvoiceService.build_payment_uri 的 EIP-681 编码行为。
+
+    覆盖金额→最小单位换算、chainId/合约地址编码、原生币与代币两种形态，
+    以及精度溢出、非 EVM 链、未分配支付指引时的安全降级（返回 None）。
+    """
+
+    PAY_ADDRESS = Web3.to_checksum_address(
+        "0x00000000000000000000000000000000000000d1"
+    )
+
+    def setUp(self):
+        # USDT @ Ethereum，decimals=6，chainId=1。
+        self.setup_base_fixtures()
+
+    def make_invoice(self, *, crypto, chain, pay_amount, out_no="uri-order"):
+        return self.create_test_invoice(
+            out_no=out_no,
+            crypto=crypto,
+            chain=chain,
+            pay_address=self.PAY_ADDRESS,
+            pay_amount=pay_amount,
+        )
+
+    def test_erc20_token_uri_encodes_contract_recipient_and_base_units(self):
+        # 代币：target 是合约地址，/transfer 携带收款地址与最小单位金额。
+        invoice = self.make_invoice(
+            crypto=self.crypto,
+            chain=self.chain,
+            pay_amount=Decimal("12.34"),
+        )
+        contract = self.crypto.address(self.chain)
+        self.assertEqual(
+            InvoiceService.build_payment_uri(invoice),
+            f"ethereum:{contract}@1/transfer"
+            f"?address={self.PAY_ADDRESS}&uint256=12340000",
+        )
+
+    def test_native_coin_uri_encodes_value_in_wei(self):
+        # 原生币：target 即收款地址，金额走 value（18 位精度 → wei）。
+        # Ethereum 链的原生币（ETH）在建链链路中已自动登记，复用之，
+        # 避免与自动创建的 Crypto/部署撞 unique 约束。
+        eth = self.chain.native_coin
+        ChainCryptoDeployment.objects.get_or_create(
+            crypto=eth,
+            chain=self.chain,
+            defaults={"address": "", "decimals": 18},
+        )
+        invoice = self.make_invoice(
+            crypto=eth,
+            chain=self.chain,
+            pay_amount=Decimal("0.05"),
+            out_no="native-uri",
+        )
+        self.assertEqual(
+            InvoiceService.build_payment_uri(invoice),
+            f"ethereum:{self.PAY_ADDRESS}@1?value=50000000000000000",
+        )
+
+    def test_chain_id_comes_from_chain_not_hardcoded(self):
+        # 换到 BSC（chainId=56，decimals=18）验证 chainId 与精度均取自链上部署。
+        bsc = create_active_evm_test_chain(code=ChainCode.BSC)
+        ChainCryptoDeployment.objects.create(
+            crypto=self.crypto,
+            chain=bsc,
+            address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000e2"
+            ),
+            decimals=18,
+        )
+        invoice = self.make_invoice(
+            crypto=self.crypto,
+            chain=bsc,
+            pay_amount=Decimal("1.5"),
+            out_no="bsc-uri",
+        )
+        contract = self.crypto.address(bsc)
+        self.assertEqual(
+            InvoiceService.build_payment_uri(invoice),
+            f"ethereum:{contract}@56/transfer"
+            f"?address={self.PAY_ADDRESS}&uint256=1500000000000000000",
+        )
+
+    def test_precision_beyond_chain_decimals_returns_none(self):
+        # USDT 链上 6 位精度，7 位报价无法精确编码 → 降级 None，绝不截断金额。
+        invoice = self.make_invoice(
+            crypto=self.crypto,
+            chain=self.chain,
+            pay_amount=Decimal("0.1234567"),
+        )
+        self.assertIsNone(InvoiceService.build_payment_uri(invoice))
+
+    def test_non_evm_chain_returns_none(self):
+        # Tron 无跨钱包 URI 标准（chain_id 为 None）→ 不生成结构化 URI。
+        tron_chain = Chain.objects.create(
+            code=ChainCode.Tron,
+            rpc="http://tron.invalid",
+            tron_api_key="tron-key",
+            active=True,
+        )
+        ChainCryptoDeployment.objects.create(
+            crypto=self.crypto,
+            chain=tron_chain,
+            address="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+            decimals=6,
+        )
+        invoice = self.make_invoice(
+            crypto=self.crypto,
+            chain=tron_chain,
+            pay_amount=Decimal("12.34"),
+            out_no="tron-uri",
+        )
+        self.assertIsNone(InvoiceService.build_payment_uri(invoice))
+
+    def test_unallocated_invoice_returns_none(self):
+        # 尚未选择支付方式（无 crypto/chain/pay_address/pay_amount）时不生成 URI。
+        invoice = self.create_test_invoice(out_no="unallocated-uri")
+        self.assertIsNone(InvoiceService.build_payment_uri(invoice))
