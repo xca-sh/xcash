@@ -1,4 +1,4 @@
-"""SaaS 模式下，对锁定操作（deposit）和 Invoice 白名单做权限校验。
+"""SaaS 模式下，对锁定操作（deposit）做权限校验。
 
 设计原则（高可用优先，availability over consistency）：
 - IS_SAAS=False 视为未对接 SaaS（自托管），直接放行
@@ -43,27 +43,6 @@ def _refresh_lock_key(appid: str) -> str:
     return f"saas:permission:refresh_lock:{appid}"
 
 
-def _normalize_whitelist(values):
-    """SaaS 用 None/[] 表达未限制；非空列表才作为白名单。"""
-    return values or None
-
-
-def normalize_chain_whitelist(values):
-    """链 code 以小写比较，兼容 SaaS 白名单大小写漂移。"""
-    normalized = _normalize_whitelist(values)
-    if normalized is None:
-        return None
-    return {str(code).lower() for code in normalized}
-
-
-def normalize_crypto_whitelist(values):
-    """币种 symbol 以大写比较，兼容 SaaS 白名单大小写漂移。"""
-    normalized = _normalize_whitelist(values)
-    if normalized is None:
-        return None
-    return {str(symbol).upper() for symbol in normalized}
-
-
 def _schedule_refresh(appid: str) -> None:
     """派发异步刷新任务；同一 appid 在 REFRESH_AFTER 秒内只派发一次。"""
     # cache.add 是原子操作：仅当 key 不存在时写入并返回 True，避免并发请求重复派发
@@ -97,18 +76,13 @@ def check_saas_permission(
     *,
     appid: str,
     action: str,
-    chain_code: str | None = None,
-    crypto_symbol: str | None = None,
 ) -> None:
     """对锁定操作做权限校验。
 
     Args:
         appid: xcash Project appid
         action: 'deposit' 会读取 SaaS 返回的 enable_deposit；
-            'invoice' 不读取该功能锁，只用于账号冻结
-            和链币白名单校验。
-        chain_code: 可选，Chain.code。传入时会按 SaaS 返回的 allowed_chain_codes 校验
-        crypto_symbol: 可选，Crypto.symbol。传入时会按 SaaS 返回的 allowed_crypto_symbols 校验
+            'invoice' 不读取该功能锁，只用于账号冻结。
 
     Raises:
         APIError: 该 tier 未开放该功能 / 用户已 frozen / appid 缺失
@@ -136,63 +110,6 @@ def check_saas_permission(
         and not perm.get("enable_deposit", False)
     ):
         raise APIError(ErrorCode.FEATURE_NOT_ENABLED, detail=action)
-
-    allowed_chain_codes = normalize_chain_whitelist(perm.get("allowed_chain_codes"))
-    if (
-        chain_code is not None
-        and allowed_chain_codes is not None
-        and str(chain_code).lower() not in allowed_chain_codes
-    ):
-        raise APIError(ErrorCode.FEATURE_NOT_ENABLED, detail=chain_code)
-
-    allowed_crypto_symbols = normalize_crypto_whitelist(
-        perm.get("allowed_crypto_symbols")
-    )
-    if (
-        crypto_symbol is not None
-        and allowed_crypto_symbols is not None
-        and str(crypto_symbol).upper() not in allowed_crypto_symbols
-    ):
-        raise APIError(ErrorCode.FEATURE_NOT_ENABLED, detail=crypto_symbol)
-
-
-def filter_saas_allowed_methods(
-    *,
-    appid: str,
-    methods: dict[str, list[str]],
-) -> dict[str, list[str]]:
-    """按 SaaS 缓存的 Tier 链币白名单收敛可用支付方式。
-
-    与 check_saas_permission 保持同样的可用性策略：自托管、冷缓存、旧缓存缺字段时
-    fail-open；命中缓存且包含白名单时只返回交集。
-    """
-    if not settings.IS_SAAS or not appid:
-        return {symbol: list(chain_codes) for symbol, chain_codes in methods.items()}
-
-    perm = _read_saas_perm(appid)
-    if perm is None:
-        return {symbol: list(chain_codes) for symbol, chain_codes in methods.items()}
-
-    if perm.get("frozen"):
-        return {}
-
-    allowed_chain_set = normalize_chain_whitelist(perm.get("allowed_chain_codes"))
-    allowed_crypto_set = normalize_crypto_whitelist(
-        perm.get("allowed_crypto_symbols")
-    )
-
-    filtered: dict[str, list[str]] = {}
-    for symbol, chain_codes in methods.items():
-        if allowed_crypto_set is not None and symbol.upper() not in allowed_crypto_set:
-            continue
-        available_chain_codes = [
-            code
-            for code in chain_codes
-            if allowed_chain_set is None or code.lower() in allowed_chain_set
-        ]
-        if available_chain_codes:
-            filtered[symbol] = available_chain_codes
-    return filtered
 
 
 @shared_task(

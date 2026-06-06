@@ -144,8 +144,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         check_saas_permission(
             appid=invoice.project.appid,
             action="invoice",
-            chain_code=validated_data["chain"],
-            crypto_symbol=validated_data["crypto"],
         )
 
         try:

@@ -13,7 +13,6 @@ from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from common.permission_check import _refresh_saas_permission
 from common.permission_check import check_saas_permission
-from common.permission_check import filter_saas_allowed_methods
 
 
 @override_settings(
@@ -114,7 +113,7 @@ class CheckSaasPermissionTest(TestCase):
         self.assertEqual(deposit_ctx.exception.error_code, ErrorCode.FEATURE_NOT_ENABLED)
 
     def test_invoice_action_ignores_deposit_feature_flag(self):
-        """Invoice 收款不属于充币功能锁，套餐关闭充币时仍可创建/选择账单支付方式。"""
+        """Invoice 收款只校验账号状态，不读取 deposit 功能锁和链币白名单字段。"""
 
         cache.set(
             "saas:permission:XC-invoice",
@@ -128,134 +127,13 @@ class CheckSaasPermissionTest(TestCase):
             None,
         )
 
-        check_saas_permission(
-            appid="XC-invoice",
-            action="invoice",
-            chain_code="ethereum-mainnet",
-            crypto_symbol="USDT",
-        )
+        check_saas_permission(appid="XC-invoice", action="invoice")
 
-    def test_invoice_action_still_respects_chain_and_crypto_whitelist(self):
-        """Invoice 不受充币功能锁影响，但仍必须收敛在 SaaS Tier 链币白名单内。"""
+    def test_deposit_action_ignores_chain_and_crypto_whitelist_fields(self):
+        """项目默认可使用所有链和币种，SaaS 链币白名单字段不再限制 deposit。"""
 
         cache.set(
-            "saas:permission:XC-invoice-denied",
-            {
-                "frozen": False,
-                "enable_deposit": False,
-                "allowed_chain_codes": ["ethereum-mainnet"],
-                "allowed_crypto_symbols": ["USDT"],
-                "_fetched_at": time.time(),
-            },
-            None,
-        )
-
-        with self.assertRaises(APIError) as ctx:
-            check_saas_permission(
-                appid="XC-invoice-denied",
-                action="invoice",
-                chain_code="polygon-mainnet",
-                crypto_symbol="USDT",
-            )
-
-        self.assertEqual(ctx.exception.error_code, ErrorCode.FEATURE_NOT_ENABLED)
-        self.assertEqual(ctx.exception.detail["detail"], "polygon-mainnet")
-
-    def test_allowed_chain_and_crypto_pass(self):
-        """缓存里 chain/token 白名单同时命中 → 放行。"""
-
-        cache.set(
-            "saas:permission:XC-allowed",
-            {
-                "frozen": False,
-                "enable_deposit": True,
-                "allowed_chain_codes": ["ethereum-mainnet", "bsc-mainnet"],
-                "allowed_crypto_symbols": ["USDT", "USDC"],
-                "_fetched_at": time.time(),
-            },
-            None,
-        )
-
-        check_saas_permission(
-            appid="XC-allowed",
-            action="deposit",
-            chain_code="ethereum-mainnet",
-            crypto_symbol="USDT",
-        )
-
-    def test_allowed_chain_and_crypto_match_case_insensitively(self):
-        """SaaS 白名单用大小写归一比较，避免生成 methods 与复检路径漂移。"""
-
-        cache.set(
-            "saas:permission:XC-allowed-case",
-            {
-                "frozen": False,
-                "enable_deposit": True,
-                "allowed_chain_codes": ["ETHEREUM-MAINNET"],
-                "allowed_crypto_symbols": ["usdt"],
-                "_fetched_at": time.time(),
-            },
-            None,
-        )
-
-        check_saas_permission(
-            appid="XC-allowed-case",
-            action="invoice",
-            chain_code="ethereum-mainnet",
-            crypto_symbol="USDT",
-        )
-
-    def test_empty_chain_and_crypto_whitelists_mean_all_supported(self):
-        """SaaS 传空白名单时按未限制处理，兼容未设置的 Tier。"""
-
-        cache.set(
-            "saas:permission:XC-empty-whitelist",
-            {
-                "frozen": False,
-                "enable_deposit": True,
-                "allowed_chain_codes": [],
-                "allowed_crypto_symbols": [],
-                "_fetched_at": time.time(),
-            },
-            None,
-        )
-
-        check_saas_permission(
-            appid="XC-empty-whitelist",
-            action="deposit",
-            chain_code="bsc-mainnet",
-            crypto_symbol="ETH",
-        )
-
-    def test_disallowed_chain_denied(self):
-        """缓存里 chain 不在白名单 → 拒绝该 chain/token 组合。"""
-
-        cache.set(
-            "saas:permission:XC-chain-denied",
-            {
-                "frozen": False,
-                "enable_deposit": True,
-                "allowed_chain_codes": ["ethereum-mainnet"],
-                "allowed_crypto_symbols": ["USDT", "USDC"],
-                "_fetched_at": time.time(),
-            },
-            None,
-        )
-
-        with self.assertRaises(APIError) as ctx:
-            check_saas_permission(
-                appid="XC-chain-denied",
-                action="deposit",
-                chain_code="bsc-mainnet",
-                crypto_symbol="USDT",
-            )
-        self.assertEqual(ctx.exception.error_code, ErrorCode.FEATURE_NOT_ENABLED)
-
-    def test_disallowed_crypto_denied(self):
-        """缓存里 crypto 不在白名单 → 拒绝该 chain/token 组合。"""
-
-        cache.set(
-            "saas:permission:XC-crypto-denied",
+            "saas:permission:XC-deposit-all-methods",
             {
                 "frozen": False,
                 "enable_deposit": True,
@@ -266,56 +144,7 @@ class CheckSaasPermissionTest(TestCase):
             None,
         )
 
-        with self.assertRaises(APIError) as ctx:
-            check_saas_permission(
-                appid="XC-crypto-denied",
-                action="deposit",
-                chain_code="ethereum-mainnet",
-                crypto_symbol="USDC",
-            )
-        self.assertEqual(ctx.exception.error_code, ErrorCode.FEATURE_NOT_ENABLED)
-
-    def test_missing_chain_crypto_deployment_args_keeps_feature_only_check(self):
-        """未传 chain/token 时保持旧行为，只校验功能开关。"""
-
-        cache.set(
-            "saas:permission:XC-feature-only",
-            {
-                "frozen": False,
-                "enable_deposit": True,
-                "allowed_chain_codes": ["ethereum-mainnet"],
-                "allowed_crypto_symbols": ["USDT"],
-                "_fetched_at": time.time(),
-            },
-            None,
-        )
-
-        check_saas_permission(appid="XC-feature-only", action="deposit")
-
-    def test_filter_saas_allowed_methods_does_not_require_deposit(self):
-        """Invoice 可用支付方式只受账号冻结和链币白名单影响，不读取充币功能开关。"""
-
-        cache.set(
-            "saas:permission:XC-invoice-methods",
-            {
-                "frozen": False,
-                "enable_deposit": False,
-                "allowed_chain_codes": ["ethereum-mainnet"],
-                "allowed_crypto_symbols": ["USDT"],
-                "_fetched_at": time.time(),
-            },
-            None,
-        )
-
-        methods = filter_saas_allowed_methods(
-            appid="XC-invoice-methods",
-            methods={
-                "USDT": ["ethereum-mainnet", "polygon-mainnet"],
-                "USDC": ["ethereum-mainnet"],
-            },
-        )
-
-        self.assertEqual(methods, {"USDT": ["ethereum-mainnet"]})
+        check_saas_permission(appid="XC-deposit-all-methods", action="deposit")
 
     def test_single_feature_flag_allows_deposit(self):
         """deposit 读取 enable_deposit，不再要求独立开关。"""

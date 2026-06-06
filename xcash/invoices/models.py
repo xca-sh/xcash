@@ -24,7 +24,6 @@ from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
 from common.fields import AddressField
 from common.fields import SysNoField
-from common.permission_check import filter_saas_allowed_methods
 from currencies.service import CryptoService
 from currencies.service import FiatService
 from projects.models import InvoiceReceivingMode
@@ -247,14 +246,9 @@ class Invoice(models.Model):
         from projects.service import ProjectService
 
         allowed = ProjectService.invoice_receivable_methods(project)
-        methods = {
+        return {
             symbol: sorted(chain_codes) for symbol, chain_codes in allowed.items()
         }
-
-        return filter_saas_allowed_methods(
-            appid=project.appid,
-            methods=methods,
-        )
 
     def _current_payment_combo_is_occupied(
         self,

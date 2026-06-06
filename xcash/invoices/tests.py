@@ -746,9 +746,9 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
         self.assertNotIn(eth.symbol, methods)
 
     @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="xcash-saas-token")
-    def test_available_methods_filters_by_cached_saas_chain_crypto_whitelist(self):
+    def test_available_methods_ignores_cached_saas_chain_crypto_whitelist(self):
         project = Project.objects.create(
-            name="Invoice SaaS Allowed Methods Project",
+            name="Invoice SaaS All Methods Project",
         )
         eth_chain = create_active_evm_test_chain(code=ChainCode.Ethereum)
         bsc_chain = create_active_evm_test_chain(code=ChainCode.BSC)
@@ -795,84 +795,10 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
 
         methods = Invoice.available_methods(project)
 
-        self.assertEqual(set(methods), {usdt.symbol})
-        self.assertEqual(methods[usdt.symbol], [eth_chain.code])
-
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="xcash-saas-token")
-    def test_available_methods_empty_saas_whitelists_keep_all_methods(self):
-        project = Project.objects.create(
-            name="Invoice SaaS Empty Whitelist Project",
-        )
-        eth_chain = create_active_evm_test_chain(code=ChainCode.Ethereum)
-        bsc_chain = create_active_evm_test_chain(code=ChainCode.BSC)
-        usdt = Crypto.objects.create(
-            name="USDT SaaS Empty",
-            symbol="USDTSAASEM",
-            coingecko_id="usdt-saas-empty-methods",
-        )
-        ChainCryptoDeployment.objects.create(
-            crypto=usdt,
-            chain=eth_chain,
-            address="0x0000000000000000000000000000000000009921",
-            decimals=6,
-        )
-        ChainCryptoDeployment.objects.create(
-            crypto=usdt,
-            chain=bsc_chain,
-            address="0x0000000000000000000000000000000000009922",
-            decimals=6,
-        )
-        project.vault = "0x0000000000000000000000000000000000009923"
-        project.save(update_fields=["vault"])
-        cache.set(
-            f"saas:permission:{project.appid}",
-            {
-                "frozen": False,
-                "enable_deposit": True,
-                "allowed_chain_codes": [],
-                "allowed_crypto_symbols": [],
-            },
-            None,
-        )
-
-        methods = Invoice.available_methods(project)
-
+        self.assertIn(usdt.symbol, methods)
+        self.assertIn(usdc.symbol, methods)
         self.assertEqual(set(methods[usdt.symbol]), {eth_chain.code, bsc_chain.code})
-
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="xcash-saas-token")
-    def test_available_methods_saas_chain_whitelist_is_case_insensitive(self):
-        # SaaS 侧返回的链 code 大小写不保证与系统一致；归一后比对，避免组合被静默过滤。
-        project = Project.objects.create(
-            name="Invoice SaaS Case Insensitive Project",
-        )
-        eth_chain = create_active_evm_test_chain(code=ChainCode.Ethereum)
-        usdt = Crypto.objects.create(
-            name="USDT SaaS Case",
-            symbol="USDTSAASCI",
-            coingecko_id="usdt-saas-case-insensitive",
-        )
-        ChainCryptoDeployment.objects.create(
-            crypto=usdt,
-            chain=eth_chain,
-            address="0x0000000000000000000000000000000000009931",
-            decimals=6,
-        )
-        project.vault = "0x0000000000000000000000000000000000009932"
-        project.save(update_fields=["vault"])
-        cache.set(
-            f"saas:permission:{project.appid}",
-            {
-                "frozen": False,
-                "enable_deposit": True,
-                "allowed_chain_codes": [eth_chain.code.upper()],
-                "allowed_crypto_symbols": [usdt.symbol],
-            },
-            None,
-        )
-
-        methods = Invoice.available_methods(project)
-
-        self.assertEqual(methods[usdt.symbol], [eth_chain.code])
+        self.assertEqual(methods[usdc.symbol], [eth_chain.code])
 
 
 class InvoiceContractBillingValidationTests(TestCase):
@@ -1412,7 +1338,7 @@ class InvoiceCreatePermissionCheckTests(TestCase):
 
     @patch("invoices.viewsets.check_saas_permission")
     def test_create_calls_permission_check_with_correct_args(self, mock_check):
-        """账单创建时只校验 invoice 账号/白名单语义，不占用 deposit 功能锁。"""
+        """账单创建时只校验 invoice 账号状态，不占用 deposit 功能锁。"""
         serializer_stub = self._make_serializer_stub()
 
         with (
@@ -1480,8 +1406,8 @@ class InvoiceCreatePermissionCheckTests(TestCase):
         )
 
     @patch("invoices.viewsets.check_saas_permission")
-    def test_select_method_checks_selected_chain_and_crypto(self, mock_check):
-        """支付页选择支付方式时，最终选中的链币组合必须经过 SaaS 白名单校验。"""
+    def test_select_method_checks_invoice_account_status(self, mock_check):
+        """支付页选择支付方式时只复检 invoice 账号状态。"""
         invoice = Mock(
             status=InvoiceStatus.WAITING,
             expires_at=timezone.now() + timedelta(minutes=10),
@@ -1521,8 +1447,6 @@ class InvoiceCreatePermissionCheckTests(TestCase):
         mock_check.assert_called_once_with(
             appid=self.project.appid,
             action="invoice",
-            chain_code="ethereum-mainnet",
-            crypto_symbol="USDT",
         )
 
     @patch("invoices.viewsets.check_saas_permission")
