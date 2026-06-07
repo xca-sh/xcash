@@ -15,7 +15,6 @@ from chains.models import ConfirmMode
 from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
-from chains.models import TxTask
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -117,41 +116,6 @@ class TransferService:
         )
 
     @staticmethod
-    def _mark_tx_task_pending_confirm(*, chain: Chain, tx_hash: str) -> None:
-        # 一旦链上已经观察到真实交易，统一父任务就进入"确认中"阶段。
-        TxTask.mark_pending_confirm(chain=chain, tx_hash=tx_hash)
-
-    @staticmethod
-    def _schedule_deploy_after_observed_token_inbound(
-        *,
-        chain: Chain,
-        observed: ObservedTransferPayload,
-    ) -> None:
-        """token 首次打入预测 VaultSlot 后调度合约部署。
-
-        原生币入账必须在暴露地址前完成部署；能走到 scanner 的 native 日志已经来自
-        已部署合约。ERC20/TRC20 入账则可先打到 CREATE2 预测地址，命中系统 VaultSlot
-        后再部署，避免悬空地址提前消耗 gas / energy。
-        """
-        from chains.models import VaultSlot  # noqa: PLC0415
-
-        if observed.crypto.pk == chain.native_coin.pk:
-            return
-
-        slot = (
-            VaultSlot.objects.filter(
-                chain=chain,
-                address=observed.to_address,
-                is_deployed=False,
-            )
-            .only("pk")
-            .first()
-        )
-        if slot is None:
-            return
-        transaction.on_commit(lambda slot_pk=slot.pk: VaultSlot.schedule_deploy(slot_pk))
-
-    @staticmethod
     def _build_observed_transfer_kwargs(
         observed: ObservedTransferPayload,
     ) -> dict[str, object]:
@@ -239,14 +203,6 @@ class TransferService:
                     existing.block == observed.block
                     and existing.block_hash == observed.block_hash
                 ):
-                    TransferService._mark_tx_task_pending_confirm(
-                        chain=chain,
-                        tx_hash=observed.tx_hash,
-                    )
-                    TransferService._schedule_deploy_after_observed_token_inbound(
-                        chain=chain,
-                        observed=observed,
-                    )
                     logger.debug(
                         "Observed transfer replay ignored",
                         source=observed.source,
@@ -278,14 +234,6 @@ class TransferService:
                     transfer = Transfer.objects.create(**create_kwargs)
                 # 只有首次真正落库成功的观测转账才需要派发一次业务处理任务。
                 TransferService.enqueue_processing(transfer)
-                TransferService._mark_tx_task_pending_confirm(
-                    chain=chain,
-                    tx_hash=observed.tx_hash,
-                )
-                TransferService._schedule_deploy_after_observed_token_inbound(
-                    chain=chain,
-                    observed=observed,
-                )
                 return ObservedTransferCreateResult(transfer=transfer, created=True)
             except IntegrityError:
                 existing = Transfer.objects.filter(
@@ -304,15 +252,6 @@ class TransferService:
                         created=False,
                         conflict=True,
                     )
-
-                TransferService._mark_tx_task_pending_confirm(
-                    chain=chain,
-                    tx_hash=observed.tx_hash,
-                )
-                TransferService._schedule_deploy_after_observed_token_inbound(
-                    chain=chain,
-                    observed=observed,
-                )
 
                 logger.debug(
                     "Observed transfer replay ignored",

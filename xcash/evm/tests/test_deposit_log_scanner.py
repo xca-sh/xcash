@@ -129,7 +129,6 @@ class EvmLogScannerTests(TestCase):
         self.assertEqual(processor_kwargs["watch_set"], watch_set)
         self.assertIsNone(result)
 
-    @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_transaction")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
@@ -142,7 +141,6 @@ class EvmLogScannerTests(TestCase):
         get_block_timestamp_mock,
         get_transaction_mock,
         _enqueue_processing_mock,
-        _mark_pending_confirm_mock,
     ):
         get_latest_block_number_mock.return_value = 100
         get_block_timestamp_mock.return_value = 1_700_000_000

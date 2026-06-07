@@ -8,11 +8,13 @@ import structlog
 from aml.tasks import screen_invoice_aml
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import ConfirmMode
+from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
@@ -309,7 +311,7 @@ class InvoiceService:
             started_at__lte=transfer.datetime,
             expires_at__gte=transfer.datetime,
             status__in=[InvoiceStatus.WAITING, InvoiceStatus.EXPIRED],
-        )
+        ).filter(Q(transfer__isnull=True) | Q(transfer=transfer))
 
         candidate = (
             base_filter.filter(pay_amount=transfer.amount)
@@ -346,41 +348,21 @@ class InvoiceService:
             transfer, TransferType.Invoice, confirm_mode
         )
 
-        # 账单状态更新不依赖 post_save 副作用，直接 update 可避免实例整行回写。
+        # 观察到链上付款时只绑定 Transfer，账单业务状态仍保持 WAITING/EXPIRED。
+        # 真正完成、归集、webhook、AML 等业务副作用统一等 Transfer.confirm() 后执行。
         Invoice.objects.filter(pk=invoice.pk).update(
             transfer_id=transfer.pk,
-            status=InvoiceStatus.CONFIRMING,
             updated_at=timezone.now(),
         )
         invoice.refresh_from_db()
-
-        transaction.on_commit(lambda: screen_invoice_aml.delay(invoice.pk))
-
-        # EPAY_V1 为托管模式，交易即时确认，不存在链上等待区块确认的阶段，
-        # 预通知对其无意义；其完成通知由 EpaySubmitService 独立处理。
-        if (
-            invoice.project.pre_notify
-            and invoice.protocol == InvoiceProtocol.NATIVE
-            and confirm_mode == ConfirmMode.FULL
-        ):
-            # 嵌套 atomic 建立 savepoint：即便 create_event 触发 DatabaseError
-            # 把当前连接标记为 needs_rollback，回滚也只发生在 savepoint 内，
-            # 外层 invoice 匹配事务仍能成功提交。
-            try:
-                with transaction.atomic():
-                    WebhookService.create_event(
-                        project=invoice.project,
-                        payload=InvoiceService.build_webhook_payload(invoice),
-                        delivery_url=invoice.notify_url,
-                    )
-            except Exception:
-                logger.exception("发送账单预通知失败", invoice_id=invoice.pk)
 
         return True
 
     @staticmethod
     def _transfer_matches_current_payment(invoice: Invoice, transfer: Transfer) -> bool:
         if invoice.status not in [InvoiceStatus.WAITING, InvoiceStatus.EXPIRED]:
+            return False
+        if invoice.transfer_id is not None and invoice.transfer_id != transfer.pk:
             return False
         if invoice.crypto_id != transfer.crypto_id or invoice.chain_id != transfer.chain_id:
             return False
@@ -404,11 +386,20 @@ class InvoiceService:
         # of=("self",) 把锁限定在 invoices_invoice，避免连带锁 projects_project 引发死锁。
         invoice = (
             Invoice.objects.select_for_update(of=("self",))
-            .select_related("project", "chain")
+            .select_related("project", "chain", "crypto", "transfer")
             .get(pk=invoice.pk)
         )
-        if invoice.status != InvoiceStatus.CONFIRMING:
-            raise InvoiceStatusError(f"Invoice must be confirming, {invoice.sys_no}")
+        if invoice.status == InvoiceStatus.COMPLETED:
+            return
+        if invoice.status not in [InvoiceStatus.WAITING, InvoiceStatus.EXPIRED]:
+            raise InvoiceStatusError(f"Invoice must be payable, {invoice.sys_no}")
+        if invoice.protocol == InvoiceProtocol.NATIVE and invoice.transfer_id is None:
+            raise InvoiceStatusError(f"Invoice must bind transfer, {invoice.sys_no}")
+        if (
+            invoice.protocol == InvoiceProtocol.NATIVE
+            and invoice.transfer.status != TransferStatus.CONFIRMED
+        ):
+            raise InvoiceStatusError(f"Invoice transfer must be confirmed, {invoice.sys_no}")
 
         # 账单确认不依赖 save() 信号，直接 update 可减少并发覆盖面。
         Invoice.objects.filter(pk=invoice.pk).update(
@@ -418,6 +409,7 @@ class InvoiceService:
         invoice.refresh_from_db()
 
         cls.schedule_collection_if_needed(invoice)
+        transaction.on_commit(lambda: screen_invoice_aml.delay(invoice.pk))
 
         if invoice.protocol == InvoiceProtocol.EPAY_V1:
             from .epay.service import EpaySubmitService
@@ -476,70 +468,3 @@ class InvoiceService:
             chain=invoice.chain.code,
             pay_address=invoice.pay_address,
         )
-
-    @classmethod
-    @transaction.atomic
-    def drop_invoice(
-        cls,
-        invoice: Invoice,
-    ):
-        # 必须在本方法内对 Invoice 加行锁，防止 confirm_invoice 与 drop_invoice
-        # 并发执行导致状态错乱（如 drop 回退 WAITING 的同时 confirm 已推送 COMPLETED webhook）。
-        # of=("self",) 把锁限定在 invoices_invoice，避免连带锁 projects_project 引发死锁。
-        invoice = (
-            Invoice.objects.select_for_update(of=("self",))
-            .select_related("project")
-            .get(pk=invoice.pk)
-        )
-        if invoice.status != InvoiceStatus.CONFIRMING:
-            raise InvoiceStatusError("Invoice must be confirming")
-
-        if InvoiceService._current_payment_is_occupied_by_waiting_invoice(invoice):
-            # 账单确认被回退时，当前支付组合可能已经被新的 WAITING 账单复用。
-            # 此时不能重新占用旧组合，直接清空支付指引，让用户重新选择。
-            logger.warning(
-                "drop_invoice: current payment occupied, clearing payment",
-                invoice=invoice.sys_no,
-            )
-            Invoice.objects.filter(pk=invoice.pk).update(
-                crypto=None,
-                chain=None,
-                pay_address=None,
-                pay_amount=None,
-                updated_at=timezone.now(),
-            )
-
-        # 账单回退状态：若已过期则恢复为 EXPIRED 而非 WAITING，避免僵尸账单。
-        rollback_status = (
-            InvoiceStatus.EXPIRED
-            if invoice.expires_at <= timezone.now()
-            else InvoiceStatus.WAITING
-        )
-        Invoice.objects.filter(pk=invoice.pk).update(
-            status=rollback_status,
-            transfer=None,
-            updated_at=timezone.now(),
-        )
-        invoice.refresh_from_db()
-
-    @staticmethod
-    def _current_payment_is_occupied_by_waiting_invoice(invoice: Invoice) -> bool:
-        if (
-            invoice.crypto_id is None
-            or invoice.chain_id is None
-            or not invoice.pay_address
-            or invoice.pay_amount is None
-        ):
-            return False
-        # 占用判据与 uniq_invoice_active_payment 约束保持一致——只看 status=WAITING，
-        # 不叠加 expires_at 过滤：约束锁定所有 WAITING 账单的 (pay_address, pay_amount)
-        # 组合，若这里漏判"过期未翻转"的占用者，drop_invoice 把本账单回退为 WAITING 时
-        # 会命中约束抛 IntegrityError，而 drop_invoice 未捕获，账单将卡死在 CONFIRMING。
-        return Invoice.objects.filter(
-            project=invoice.project,
-            crypto=invoice.crypto,
-            chain=invoice.chain,
-            pay_address=invoice.pay_address,
-            pay_amount=invoice.pay_amount,
-            status=InvoiceStatus.WAITING,
-        ).exclude(pk=invoice.pk).exists()

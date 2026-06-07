@@ -368,13 +368,11 @@ class EvmChainScannerServiceTests(TestCase):
         self.assertEqual(order[:1], ["lock"])
 
     @patch("chains.service.Transfer.objects.create")
-    @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
-    def test_create_observed_transfer_marks_matching_tx_task_pending_confirm(
+    def test_create_observed_transfer_creates_transfer_without_tx_task_state_change(
         self,
-        mark_pending_confirm_mock,
         transfer_create_mock,
     ):
-        # 只要链上已经观察到该 EVM hash，就应推进统一父任务进入待确认。
+        # 观察到链上 Transfer 只创建 Transfer；TxTask 不再维护“确认中”中间态。
         chain = self.chain
         crypto = chain.native_coin
         transfer_create_mock.return_value = Mock()
@@ -394,7 +392,4 @@ class EvmChainScannerServiceTests(TestCase):
 
         TransferService.create_observed_transfer(observed=observed)
 
-        mark_pending_confirm_mock.assert_called_once_with(
-            chain=chain,
-            tx_hash="0x" + "2" * 64,
-        )
+        transfer_create_mock.assert_called_once()

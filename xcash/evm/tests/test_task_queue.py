@@ -227,16 +227,16 @@ class EvmTaskQueueTests(TestCase):
         broadcast_mock.assert_not_called()
 
     @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_tx_task_allows_higher_nonce_after_lower_task_enters_pending_confirm(
+    def test_tx_task_allows_higher_nonce_after_lower_task_enters_pending_chain(
         self,
         broadcast_mock,
     ):
-        # 一旦更低 nonce 已被链上观察到并进入 PENDING_CONFIRM，说明该 nonce 已消费，不应继续阻断后续 nonce。
+        # 更低 nonce 已提交到节点后进入 PENDING_CHAIN，不再作为 queued 缺口阻断高 nonce。
         from evm.tasks import _broadcast_evm_task
 
         self._create_evm_task(
             tx_hash="0x" + "11" * 32,
-            status=TxTaskStatus.PENDING_CONFIRM,
+            status=TxTaskStatus.PENDING_CHAIN,
             nonce=1,
         )
         higher_task = self._create_evm_task(
@@ -300,16 +300,16 @@ class EvmTaskQueueTests(TestCase):
         )
 
     @patch("evm.tasks._broadcast_evm_task.delay")
-    def test_dispatch_due_evm_tx_tasks_treats_pending_confirm_as_nonce_consumed(
+    def test_dispatch_due_evm_tx_tasks_treats_pending_chain_as_nonce_consumed(
         self,
         delay_mock,
     ):
-        # SQL 选取最小阻塞 nonce 时，不应把已进入 PENDING_CONFIRM 的前序任务继续当作缺口。
+        # SQL 选取最小阻塞 nonce 时，不应把已进入 PENDING_CHAIN 的前序任务继续当作 queued 缺口。
         from evm.tasks import dispatch_evm_tx_tasks
 
-        lower_confirming_task = self._create_evm_task(
+        lower_pending_task = self._create_evm_task(
             tx_hash="0x" + "13" * 32,
-            status=TxTaskStatus.PENDING_CONFIRM,
+            status=TxTaskStatus.PENDING_CHAIN,
             nonce=1,
         )
         higher_task = self._create_evm_task(
@@ -320,7 +320,7 @@ class EvmTaskQueueTests(TestCase):
 
         stale_created_at = timezone.now() - timedelta(seconds=8)
         stale_attempt_at = timezone.now() - timedelta(minutes=5)
-        EvmTxTask.objects.filter(pk=lower_confirming_task.pk).update(
+        EvmTxTask.objects.filter(pk=lower_pending_task.pk).update(
             created_at=stale_created_at,
             last_attempt_at=stale_attempt_at,
         )

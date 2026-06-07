@@ -33,7 +33,6 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
             "hmac_key",
             "ip_white_list",
             "fast_confirm_threshold",
-            "pre_notify",
         ]
         extra_kwargs = {field: {"required": False} for field in fields}
 
@@ -102,7 +101,6 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
             "ip_white_list",
             "hmac_key",
             "fast_confirm_threshold",
-            "pre_notify",
             "vault_address",
             "is_ready",
             "ready_errors",

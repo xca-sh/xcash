@@ -6,6 +6,7 @@ from django.db import transaction as db_transaction
 from django.utils import timezone
 
 from chains.models import Transfer
+from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
@@ -78,22 +79,16 @@ class DepositService:
             logger.exception("创建充币 webhook 通知失败", deposit_id=deposit.pk)
 
     @classmethod
-    def _pre_notify(cls, deposit: Deposit) -> None:
-        if deposit.customer.project.pre_notify:
-            cls._notify(deposit, confirmed=False)
-
-    @classmethod
     def notify_completed(cls, deposit: Deposit) -> None:
         cls._notify(deposit, confirmed=True)
 
     @classmethod
     def initialize_deposit(cls, deposit: Deposit) -> Deposit:
         cls.refresh_worth(deposit)
-        cls._pre_notify(deposit)
         return deposit
 
     @classmethod
-    def try_create_deposit(cls, transfer: Transfer) -> bool:
+    def try_match_deposit_transfer(cls, transfer: Transfer) -> bool:
         if not transfer.crypto.active:
             return False
 
@@ -108,14 +103,32 @@ class DepositService:
 
         transfer.type = TransferType.Deposit
         transfer.save(update_fields=["type"])
+        return True
 
-        deposit = Deposit.objects.create(
+    @classmethod
+    def create_confirmed_deposit(cls, transfer: Transfer) -> Deposit | None:
+        if transfer.status != TransferStatus.CONFIRMED:
+            raise DepositStatusError("Deposit transfer must be confirmed")
+        if not transfer.crypto.active:
+            return None
+
+        try:
+            customer = VaultSlot.objects.get(
+                chain=transfer.chain,
+                address=transfer.to_address,
+                usage=VaultSlotUsage.DEPOSIT,
+            ).customer
+        except VaultSlot.DoesNotExist:
+            return None
+
+        deposit, created = Deposit.objects.get_or_create(
             customer=customer,
             transfer=transfer,
         )
-        cls.initialize_deposit(deposit)
-        db_transaction.on_commit(lambda: screen_deposit_aml.delay(deposit.pk))
-        return True
+        if created:
+            cls.initialize_deposit(deposit)
+        cls.confirm_deposit(deposit)
+        return deposit
 
     @classmethod
     def confirm_deposit(cls, deposit: Deposit) -> None:
@@ -125,6 +138,7 @@ class DepositService:
             cls.schedule_collect_for_completed_deposit(deposit)
         except Exception:  # noqa
             logger.exception("调度 VaultSlot 归集任务失败", deposit_id=deposit.pk)
+        db_transaction.on_commit(lambda: screen_deposit_aml.delay(deposit.pk))
         cls.notify_completed(deposit)
         send_saas_callback(
             SaasCallback(
@@ -147,11 +161,3 @@ class DepositService:
             return False
 
         return VaultSlot.schedule_collect_for_deposit(deposit.pk) is not None
-
-    @classmethod
-    def drop_deposit(cls, deposit: Deposit) -> None:
-        # Deposit 经 OneToOne(on_delete=CASCADE) 绑定 Transfer，Transfer.drop 删除转账时
-        # 会级联清除未确认充值，无需在此显式删除。但已确认充值不允许随 Transfer 回退被
-        # 静默抹除（典型为确认后 reorg），抛错中断整个 drop 事务交由人工排查。
-        if deposit.confirmed:
-            raise DepositStatusError("已确认充值不可回退")

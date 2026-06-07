@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Protocol
 
 from chains.models import Chain
-from chains.models import Transfer
 from chains.models import TxTask
 from chains.models import TxTaskType
 from evm.internal_tx.facts import MatchedTransferFact
@@ -35,56 +34,11 @@ class ReceiptMatcher(Protocol):
     ) -> MatchedTransferFact | None: ...
 
 
-class InternalTransferHandler(Protocol):
-    """按 TxTaskType 推进系统内主动交易的业务生命周期。"""
-
-    def match(self, transfer: Transfer, tx_task: TxTask) -> bool: ...
-
-    def confirm(self, transfer: Transfer) -> None: ...
-
-    def drop(self, transfer: Transfer) -> None: ...
-
-    def finalize_failed(self, tx_task: TxTask) -> None: ...
-
-
-class NoopInternalTransferHandler:
-    """无业务副作用的本地主动交易生命周期 handler。"""
-
-    def match(self, transfer: Transfer, tx_task: TxTask) -> bool:
-        return True
-
-    def confirm(self, transfer: Transfer) -> None:
-        return None
-
-    def drop(self, transfer: Transfer) -> None:
-        return None
-
-    def finalize_failed(self, tx_task: TxTask) -> None:
-        return None
-
-
-from evm.internal_tx.vault_slot_collect import vault_slot_collect_handler  # noqa: E402
 from evm.internal_tx.vault_slot_collect import vault_slot_collect_matcher  # noqa: E402
-
-noop_internal_transfer_handler = NoopInternalTransferHandler()
-
-NON_TRANSFER_TX_TASK_TYPES: set[TxTaskType] = {
-    TxTaskType.VaultSlotDeploy,
-}
-
-INTERNAL_TX_HANDLERS: dict[TxTaskType, InternalTransferHandler] = {
-    TxTaskType.VaultSlotDeploy: noop_internal_transfer_handler,
-    TxTaskType.VaultSlotCollect: vault_slot_collect_handler,
-}
 
 INTERNAL_TX_MATCHERS: dict[TxTaskType, ReceiptMatcher] = {
     TxTaskType.VaultSlotCollect: vault_slot_collect_matcher,
 }
-
-
-def get_handler(tx_type: TxTaskType) -> InternalTransferHandler:
-    """按任务类型获取业务生命周期 handler；未注册类型抛 KeyError。"""
-    return INTERNAL_TX_HANDLERS[tx_type]
 
 
 def get_matcher(tx_type: TxTaskType) -> ReceiptMatcher:

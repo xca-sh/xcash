@@ -9,6 +9,7 @@ import PaymentMethodSelector from "@/components/PaymentMethodSelector"
 import PaymentAddress from "@/components/PaymentAddress"
 import WaitingPayment from "@/components/WaitingPayment"
 import { useI18n } from "@/hooks/useI18n"
+import { isPaymentConfirming } from "@/lib/invoiceStatus"
 
 function PaymentStepper({
   invoice,
@@ -31,7 +32,7 @@ function PaymentStepper({
   )
   const hasPayment = Boolean(invoice.payment)
   const isCompleted = invoice.status === "completed"
-  const isConfirming = invoice.status === "confirming"
+  const isConfirming = isPaymentConfirming(invoice)
   const isWaiting = invoice.status === "waiting"
   const isExpired = invoice.status === "expired"
   const availableMethods = invoice.methods ?? {}

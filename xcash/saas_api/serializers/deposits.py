@@ -7,6 +7,7 @@ from deposits.models import Deposit
 class SaasDepositDetailSerializer(serializers.ModelSerializer):
     tx = TransferSerializer(source="transfer", read_only=True)
     uid = serializers.CharField(source="customer.uid", read_only=True)
+    status = serializers.CharField(source="transfer.status", read_only=True)
     crypto = serializers.SlugRelatedField(
         source="transfer.crypto", slug_field="symbol", read_only=True
     )

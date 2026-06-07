@@ -15,8 +15,6 @@ from django.utils import timezone
 from eth_utils import keccak
 from web3 import Web3
 
-from chains.adapters import TxCheckResult
-from chains.adapters import TxCheckStatus
 from chains.constants import ChainCode
 from chains.models import Address
 from chains.models import AddressUsage
@@ -516,34 +514,35 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertTrue(slot.is_deployed)
         schedule.assert_not_called()
 
-    @patch("evm.tasks.notify_vault_slot_deploy_gas_fee")
-    @patch("evm.tasks.AdapterFactory.get_adapter")
+    @patch("evm.internal_tx.processor.notify_vault_slot_deploy_gas_fee")
     def test_confirmed_deploy_marks_vault_slot_deployed(
         self,
-        get_adapter,
         notify_gas_fee,
     ):
-        from evm.tasks import confirm_non_transfer_tx_tasks
+        from evm.poller import EvmTaskPoller
 
         slot = self._create_vault_slot()
         address_patch = self.patch_address_derivation()
         tx_hash = "0x" + "aa" * 32
         Chain.objects.filter(pk=self.chain.pk).update(latest_block_number=100)
         self.chain.refresh_from_db()
-        adapter = Mock()
-        adapter.tx_result.return_value = TxCheckResult(
-            status=TxCheckStatus.SUCCEEDED,
-            block_number=1,
-            block_hash="b" * 64,
-        )
-        get_adapter.return_value = adapter
 
         with address_patch:
             task = VaultSlot.schedule_deploy(slot.pk)
         task.append_tx_hash(tx_hash)
-        TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.PENDING_CONFIRM)
+        TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.PENDING_CHAIN)
 
-        confirm_non_transfer_tx_tasks()
+        evm_task = task.evm_task
+        with patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock:
+            w3_mock.return_value.eth.get_transaction.return_value = {
+                "hash": tx_hash,
+                "from": self.system_sender.address,
+            }
+            EvmTaskPoller.process_succeeded_receipt(
+                evm_task=evm_task,
+                tx_hash=tx_hash,
+                receipt={"status": 1, "blockNumber": 1},
+            )
 
         task.refresh_from_db()
         slot.refresh_from_db()
@@ -552,33 +551,109 @@ class VaultSlotAddressSchedulingTests(TestCase):
         notify_gas_fee.assert_called_once()
         self.assertEqual(notify_gas_fee.call_args.kwargs["tx_task"].pk, task.pk)
 
-    @patch("evm.tasks.notify_vault_slot_deploy_gas_fee")
-    @patch("evm.tasks.AdapterFactory.get_adapter")
-    def test_failed_deploy_marks_deployed_when_slot_has_external_code(
+    @patch("evm.internal_tx.processor.notify_vault_slot_collect_gas_fee")
+    @patch("evm.internal_tx.processor.refresh_vault_slot_balance_for_collect_task")
+    def test_confirmed_collect_finalizes_task_without_transfer(
         self,
-        get_adapter,
+        refresh_balance,
         notify_gas_fee,
     ):
-        from evm.tasks import confirm_non_transfer_tx_tasks
+        from evm.poller import EvmTaskPoller
+
+        slot = self._create_vault_slot()
+        tx_hash = "0x" + "ad" * 32
+        value = 1_230_000
+        Chain.objects.filter(pk=self.chain.pk).update(latest_block_number=100)
+        self.chain.refresh_from_db()
+        self._mark_vault_slot_deployed(slot)
+
+        with self.patch_address_derivation():
+            task = VaultSlot.create_collect_tx_task_for_slot(
+                chain=self.chain,
+                crypto=self.token,
+                slot=slot,
+            )
+        schedule = VaultSlotCollectSchedule.objects.create(
+            chain=self.chain,
+            vault_slot=slot,
+            crypto=self.token,
+            due_at=timezone.now(),
+            tx_task=task,
+        )
+        task.append_tx_hash(tx_hash)
+        TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.PENDING_CHAIN)
+
+        def address_topic(address: str) -> str:
+            return "0x" + "0" * 24 + Web3.to_checksum_address(address)[2:].lower()
+
+        receipt = {
+            "status": 1,
+            "blockNumber": 1,
+            "logs": [
+                {
+                    "address": slot.address,
+                    "topics": [
+                        Web3.keccak(text="XcashCollected(address,uint256)"),
+                        address_topic(self.token_address),
+                    ],
+                    "data": hex(value),
+                    "logIndex": 5,
+                },
+                {
+                    "address": self.token_address,
+                    "topics": [
+                        Web3.keccak(text="Transfer(address,address,uint256)"),
+                        address_topic(slot.address),
+                        address_topic(self.project.vault),
+                    ],
+                    "data": hex(value),
+                    "logIndex": 6,
+                },
+            ],
+        }
+        transfer_count = Transfer.objects.count()
+        evm_task = task.evm_task
+
+        with patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock:
+            w3_mock.return_value.eth.get_transaction.return_value = {
+                "hash": tx_hash,
+                "from": self.system_sender.address,
+            }
+            processed = EvmTaskPoller.process_succeeded_receipt(
+                evm_task=evm_task,
+                tx_hash=tx_hash,
+                receipt=receipt,
+            )
+
+        self.assertTrue(processed)
+        task.refresh_from_db()
+        self.assertEqual(task.status, TxTaskStatus.CONFIRMED)
+        self.assertEqual(Transfer.objects.count(), transfer_count)
+        refresh_balance.assert_called_once()
+        self.assertEqual(refresh_balance.call_args.args[0].pk, task.pk)
+        notify_gas_fee.assert_called_once()
+        self.assertEqual(notify_gas_fee.call_args.kwargs["tx_task"].pk, task.pk)
+        schedule.refresh_from_db()
+        self.assertEqual(schedule.tx_task_id, task.pk)
+
+    @patch("evm.internal_tx.processor.notify_vault_slot_deploy_gas_fee")
+    def test_failed_deploy_marks_deployed_when_slot_has_external_code(
+        self,
+        notify_gas_fee,
+    ):
+        from evm.poller import EvmTaskPoller
 
         slot = self._create_vault_slot()
         address_patch = self.patch_address_derivation()
         tx_hash = "0x" + "ac" * 32
-        adapter = Mock()
-        adapter.tx_result.return_value = TxCheckResult(
-            status=TxCheckStatus.FAILED,
-            block_number=1,
-            block_hash="c" * 64,
-        )
-        get_adapter.return_value = adapter
 
         with address_patch:
             task = VaultSlot.schedule_deploy(slot.pk)
         task.append_tx_hash(tx_hash)
-        TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.PENDING_CONFIRM)
+        TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.PENDING_CHAIN)
 
         with patch("evm.vault_slots.is_deployed_on_chain", return_value=True):
-            confirm_non_transfer_tx_tasks()
+            EvmTaskPoller.finalize_failed_task(evm_task=task.evm_task)
 
         task.refresh_from_db()
         slot.refresh_from_db()
@@ -1014,6 +1089,39 @@ class VaultSlotAddressSchedulingTests(TestCase):
         )
         self.assertIn(self.token_address[2:].lower(), schedule.tx_task.evm_task.data)
 
+    def test_due_collect_schedule_uses_ensure_collect_for_undeployed_token_slot(self):
+        slot = self._create_vault_slot()
+        deposit = self._create_deposit(slot=slot)
+        address_patch = self.patch_address_derivation()
+
+        with address_patch:
+            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+        schedule.due_at = timezone.now() - timedelta(seconds=1)
+        schedule.save(update_fields=["due_at", "updated_at"])
+
+        with (
+            address_patch,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ),
+        ):
+            created_count = VaultSlotCollectSchedule.execute_due()
+
+        self.assertEqual(created_count, 1)
+        schedule.refresh_from_db()
+        self.assertIsNotNone(schedule.tx_task)
+        self.assertEqual(
+            schedule.tx_task.evm_task.to,
+            Web3.to_checksum_address(XCASH_VAULT_SLOT_FACTORY_ADDRESS),
+        )
+        self.assertTrue(
+            schedule.tx_task.evm_task.data.startswith(
+                f"0x{_selector('ensureDeployedAndCollect(address,bytes32,address)')}"
+            )
+        )
+        self.assertIn(self.token_address[2:].lower(), schedule.tx_task.evm_task.data)
+
     def test_due_collect_schedule_skips_when_project_auto_collect_disabled(self):
         slot = self._create_vault_slot()
         deposit = self._create_deposit(slot=slot)
@@ -1216,7 +1324,9 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(fact.amount, Decimal("1.23"))
 
     @patch("evm.saas_gas_billing.send_saas_callback")
-    def test_confirmed_collect_transfer_notifies_saas_gas_fee(self, send_callback_mock):
+    def test_confirmed_collect_task_notifies_saas_gas_fee(self, send_callback_mock):
+        from evm.saas_gas_billing import notify_vault_slot_collect_gas_fee
+
         slot = self._create_vault_slot()
         native_crypto = self.chain.native_coin
         native_crypto.prices = {"USD": "2000"}
@@ -1227,27 +1337,20 @@ class VaultSlotAddressSchedulingTests(TestCase):
             defaults={"address": "", "decimals": 18},
         )
         tx_hash = "0x" + "cd" * 32
-        transfer = Transfer.objects.create(
-            chain=self.chain,
-            block=1,
-            block_hash="0x" + "aa" * 32,
-            hash=tx_hash,
-            crypto=self.token,
-            from_address=slot.address,
-            to_address=self.project.vault,
-            value="1000000",
-            amount=1,
-            timestamp=1,
-            datetime=timezone.now(),
-            status=TransferStatus.CONFIRMING,
-            type=TransferType.Collect,
-        )
+        self._mark_vault_slot_deployed(slot)
         with self.patch_address_derivation():
             task = VaultSlot.create_collect_tx_task_for_slot(
                 chain=self.chain,
                 crypto=self.token,
                 slot=slot,
             )
+        VaultSlotCollectSchedule.objects.create(
+            chain=self.chain,
+            vault_slot=slot,
+            crypto=self.token,
+            due_at=timezone.now(),
+            tx_task=task,
+        )
         task.tx_hash = tx_hash
         task.save(update_fields=["tx_hash", "updated_at"])
         w3 = SimpleNamespace(
@@ -1264,7 +1367,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
         with patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock:
             w3_mock.return_value = w3
-            transfer.confirm()
+            notify_vault_slot_collect_gas_fee(tx_task=task)
 
         send_callback_mock.assert_called_once()
         callback = send_callback_mock.call_args.args[0]

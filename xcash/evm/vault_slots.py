@@ -71,8 +71,12 @@ def create_collect_tx_task(*, chain: Chain, crypto, slot: VaultSlot) -> TxTask:
     return EvmTxTask.schedule(intent).base_task
 
 
-def can_create_collect_tx_task(*, chain: Chain, slot: VaultSlot) -> bool:
+def can_create_collect_tx_task(*, chain: Chain, crypto, slot: VaultSlot) -> bool:
     if slot.is_deployed:
+        return True
+    if not slot.project.vault:
+        return False
+    if getattr(crypto, "pk", None) != chain.native_coin.pk:
         return True
     try:
         deployed = is_deployed_on_chain(chain=chain, address=slot.address)

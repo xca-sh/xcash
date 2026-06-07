@@ -4,6 +4,7 @@ import LogoMark from "@/components/LogoMark"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useI18n } from "@/hooks/useI18n"
+import { getInvoiceDisplayStatus } from "@/lib/invoiceStatus"
 
 // 状态 → 原生 Badge variant 映射；不引入自定义颜色，仅用 shadcn 语义变体。
 const STATUS_VARIANT = {
@@ -22,14 +23,7 @@ function SummaryBar({ invoice, isDark, toggleTheme }) {
   const toggleLocale = () => setLocale(locale === "zh" ? "en" : "zh")
 
   const hasPayMethod = Boolean(invoice?.crypto && invoice?.pay_amount)
-  // 后端 invoice.status 真正切到 completed 还要等 worker 的 RPC 二次校验，
-  // 区块层达标到 invoice 完成之间是空窗期；前端把这段显示为 finalizing
-  // 而不是继续闪烁的 confirming，避免用户看到 100% 进度产生「卡住了」的错觉。
-  const progress = invoice?.payment?.confirm_progress?.progress ?? 0
-  const displayStatus =
-    invoice?.status === "confirming" && progress >= 100
-      ? "finalizing"
-      : invoice?.status
+  const displayStatus = getInvoiceDisplayStatus(invoice)
   const variant = STATUS_VARIANT[displayStatus] ?? "outline"
 
   return (

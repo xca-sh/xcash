@@ -3,39 +3,18 @@ from celery import shared_task
 from django.db import transaction as db_transaction
 from django.db.models import Q
 
-from chains.adapters import AdapterFactory
-from chains.adapters import TxCheckResult
-from chains.adapters import TxCheckStatus
 from chains.models import Chain
 from chains.models import ChainType
-from chains.models import TxTask
 from chains.models import TxTaskStatus
-from chains.models import TxTaskType
 from chains.tasks import dispatch_block_confirmation_checks_if_needed
-from chains.vault_slots import mark_deployed_by_task
-from chains.vault_slots import mark_deployed_if_on_chain_for_task
 from common.decorators import singleton_task
 from common.time import ago
-from evm.internal_tx.routing import NON_TRANSFER_TX_TASK_TYPES
-from evm.internal_tx.routing import get_handler
 from evm.models import EvmTxTask
 from evm.poller import EvmTaskPoller
-from evm.saas_gas_billing import notify_vault_slot_deploy_gas_fee
 from evm.scanner.rpc import EvmScannerRpcError
 from evm.scanner.service import EvmScannerService
 
 logger = structlog.get_logger()
-
-
-def _tx_check_status(result: TxCheckStatus | TxCheckResult) -> TxCheckStatus:
-    return result.status if isinstance(result, TxCheckResult) else result
-
-
-def _has_required_confirmations(*, chain: Chain, result: TxCheckResult | None) -> bool:
-    if result is None or result.block_number is None:
-        return False
-    confirmed_at_or_before = chain.latest_block_number - chain.confirm_block_count
-    return int(result.block_number) <= confirmed_at_or_before
 
 
 @shared_task(ignore_result=True)
@@ -123,60 +102,6 @@ def dispatch_evm_tx_tasks() -> None:
     for task in selected:
         task_pk = task.pk
         db_transaction.on_commit(lambda pk=task_pk: _broadcast_evm_task.delay(pk))
-
-
-@shared_task(ignore_result=True)
-@singleton_task(timeout=55)
-def confirm_non_transfer_tx_tasks() -> None:
-    """推进没有 Transfer 记录承载确认窗口的内部 EVM 任务。"""
-    tasks = (
-        TxTask.objects.select_related("chain")
-        .filter(
-            chain__type=ChainType.EVM,
-            tx_type__in=NON_TRANSFER_TX_TASK_TYPES,
-            status=TxTaskStatus.PENDING_CONFIRM,
-            tx_hash__isnull=False,
-        )
-        .exclude(tx_hash="")
-        .order_by("updated_at")[:32]
-    )
-
-    for task in tasks:
-        adapter = AdapterFactory.get_adapter(task.chain.type)
-        raw_result = adapter.tx_result(chain=task.chain, tx_hash=task.tx_hash)
-        if isinstance(raw_result, Exception):
-            logger.warning(
-                "无 Transfer 内部交易确认查询失败",
-                chain=task.chain.code,
-                tx_task_id=task.pk,
-                tx_hash=task.tx_hash,
-                error=str(raw_result),
-            )
-            continue
-
-        result_meta = raw_result if isinstance(raw_result, TxCheckResult) else None
-        status = _tx_check_status(raw_result)
-        if status == TxCheckStatus.SUCCEEDED:
-            if not _has_required_confirmations(chain=task.chain, result=result_meta):
-                continue
-            updated = TxTask.mark_finalized_success(
-                chain=task.chain,
-                tx_hash=task.tx_hash,
-            )
-            if updated and task.tx_type == TxTaskType.VaultSlotDeploy:
-                mark_deployed_by_task(task)
-                notify_vault_slot_deploy_gas_fee(tx_task=task)
-        elif status == TxCheckStatus.MISSING:
-            continue
-        elif status == TxCheckStatus.FAILED:
-            updated = TxTask.mark_finalized_failed(
-                task_id=task.pk,
-                expected_status=TxTaskStatus.PENDING_CONFIRM,
-            )
-            if updated:
-                get_handler(TxTaskType(task.tx_type)).finalize_failed(task)
-                if task.tx_type == TxTaskType.VaultSlotDeploy:
-                    mark_deployed_if_on_chain_for_task(task)
 
 
 @shared_task(ignore_result=True)

@@ -360,8 +360,12 @@ def create_collect_tx_task_for_slot(*, chain: Chain, crypto, slot: VaultSlot) ->
     return get_backend(chain).create_collect_tx_task(chain=chain, crypto=crypto, slot=slot)
 
 
-def can_create_collect_tx_task(*, chain: Chain, slot: VaultSlot) -> bool:
-    return get_backend(chain).can_create_collect_tx_task(chain=chain, slot=slot)
+def can_create_collect_tx_task(*, chain: Chain, crypto, slot: VaultSlot) -> bool:
+    return get_backend(chain).can_create_collect_tx_task(
+        chain=chain,
+        crypto=crypto,
+        slot=slot,
+    )
 
 
 def validate_supported_chain(chain: Chain) -> None:

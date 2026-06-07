@@ -1,23 +1,21 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 import structlog
 from django.db import transaction as db_transaction
-from django.utils import timezone
 from web3 import Web3
 
 from chains.models import Chain
 from chains.models import TxTask
 from chains.models import TxTaskType
-from chains.service import ObservedTransferCreateResult
-from chains.service import ObservedTransferPayload
-from chains.service import TransferService
-from evm.internal_tx.routing import NON_TRANSFER_TX_TASK_TYPES
+from chains.vault_slot_balances import refresh_vault_slot_balance_for_collect_task
+from chains.vault_slots import mark_deployed_by_task
+from chains.vault_slots import mark_deployed_if_on_chain_for_task
 from evm.internal_tx.routing import UnknownInternalBroadcastError
-from evm.internal_tx.routing import get_handler
 from evm.internal_tx.routing import get_matcher
+from evm.saas_gas_billing import notify_vault_slot_collect_gas_fee
+from evm.saas_gas_billing import notify_vault_slot_deploy_gas_fee
 
 logger = structlog.get_logger()
 
@@ -32,21 +30,6 @@ def _normalize_tx_hash(value: Any) -> str:
 def _normalize_address(value: Any) -> str:
     """转 checksum 地址。"""
     return Web3.to_checksum_address(str(value))
-
-
-def _lookup_block_timestamp(*, chain: Chain, receipt: dict) -> tuple[int, datetime]:
-    """补查 receipt 所在块的时间戳与本地化时间。"""
-    block_number = int(receipt["blockNumber"])
-    block = chain.w3.eth.get_block(block_number)
-    ts = int(block["timestamp"])
-    occurred_at = datetime.fromtimestamp(ts, tz=timezone.get_current_timezone())
-    return ts, occurred_at
-
-
-def _block_hash_from_receipt(receipt: dict) -> str:
-    """从 receipt 提取必填 block_hash。"""
-    raw = receipt["blockHash"]
-    return _normalize_tx_hash(raw)
 
 
 def _receipt_status(receipt: dict) -> int:
@@ -66,11 +49,44 @@ def _finalize_failed(*, tx_task: TxTask) -> None:
         )
         if not updated:
             return
-        try:
-            handler = get_handler(TxTaskType(tx_task.tx_type))
-        except (KeyError, ValueError):
-            return
-        handler.finalize_failed(tx_task)
+        if tx_task.tx_type == TxTaskType.VaultSlotDeploy:
+            mark_deployed_if_on_chain_for_task(tx_task)
+
+
+def _finalize_deploy_success(*, chain: Chain, tx_hash: str, tx_task: TxTask) -> bool:
+    updated = TxTask.mark_finalized_success(chain=chain, tx_hash=tx_hash)
+    if updated:
+        tx_task.refresh_from_db()
+        mark_deployed_by_task(tx_task)
+        notify_vault_slot_deploy_gas_fee(tx_task=tx_task)
+    return True
+
+
+def _finalize_collect_success(
+    *,
+    chain: Chain,
+    tx_hash: str,
+    tx_task: TxTask,
+    tx: dict,
+    receipt: dict,
+) -> bool:
+    matcher = get_matcher(TxTaskType.VaultSlotCollect)
+    fact = matcher(chain=chain, tx_task=tx_task, receipt=receipt, tx=tx)
+    if fact is None:
+        logger.warning(
+            "EVM VaultSlot 归集 receipt 成功但未找到预期资产移动事实",
+            chain=chain.code,
+            tx_hash=tx_hash,
+            tx_task_id=tx_task.pk,
+        )
+        return False
+
+    updated = TxTask.mark_finalized_success(chain=chain, tx_hash=tx_hash)
+    if updated:
+        tx_task.refresh_from_db()
+        refresh_vault_slot_balance_for_collect_task(tx_task)
+        notify_vault_slot_collect_gas_fee(tx_task=tx_task)
+    return True
 
 
 def process_internal_transaction(
@@ -78,7 +94,7 @@ def process_internal_transaction(
     chain: Chain,
     tx: dict,
     receipt: dict,
-) -> ObservedTransferCreateResult | None:
+) -> bool:
     """处理 tx.from 已识别为系统地址的 EVM 交易。"""
     tx_hash = _normalize_tx_hash(tx["hash"])
     from_address = _normalize_address(tx["from"])
@@ -94,41 +110,40 @@ def process_internal_transaction(
     status = _receipt_status(receipt)
     if status == 0:
         _finalize_failed(tx_task=tx_task)
-        return None
+        return True
 
-    if tx_task.tx_type in NON_TRANSFER_TX_TASK_TYPES:
-        TxTask.mark_pending_confirm(chain=chain, tx_hash=tx_hash)
-        return None
-
-    matcher = get_matcher(TxTaskType(tx_task.tx_type))
-    fact = matcher(chain=chain, tx_task=tx_task, receipt=receipt, tx=tx)
-    if fact is None:
+    try:
+        tx_type = TxTaskType(tx_task.tx_type)
+    except ValueError:
         logger.warning(
-            "EVM 内部交易 receipt 成功但 matcher 未找到预期 Transfer",
+            "EVM 内部交易 TxTask 类型未知，无法收口",
             chain=chain.code,
             tx_hash=tx_hash,
             tx_type=tx_task.tx_type,
             tx_task_id=tx_task.pk,
         )
-        return None
+        return False
 
-    block_number = int(receipt["blockNumber"])
-    block_timestamp, occurred_at = _lookup_block_timestamp(
-        chain=chain,
-        receipt=receipt,
-    )
-    payload = ObservedTransferPayload(
-        chain=chain,
-        block=block_number,
+    if tx_type == TxTaskType.VaultSlotDeploy:
+        return _finalize_deploy_success(
+            chain=chain,
+            tx_hash=tx_hash,
+            tx_task=tx_task,
+        )
+    if tx_type == TxTaskType.VaultSlotCollect:
+        return _finalize_collect_success(
+            chain=chain,
+            tx_hash=tx_hash,
+            tx_task=tx_task,
+            tx=tx,
+            receipt=receipt,
+        )
+
+    logger.warning(
+        "EVM 内部交易缺少成功收口逻辑",
+        chain=chain.code,
         tx_hash=tx_hash,
-        from_address=fact.from_address,
-        to_address=fact.to_address,
-        crypto=fact.crypto,
-        value=fact.value,
-        amount=fact.amount,
-        timestamp=block_timestamp,
-        datetime=occurred_at,
-        block_hash=_block_hash_from_receipt(receipt),
-        source="evm-internal-tx",
+        tx_type=tx_task.tx_type,
+        tx_task_id=tx_task.pk,
     )
-    return TransferService.create_observed_transfer(observed=payload)
+    return False

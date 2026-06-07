@@ -83,12 +83,9 @@ def refresh_vault_slot_balance_safely(
 
 def refresh_vault_slot_balance_for_transfer(transfer: Transfer) -> None:
     """Transfer 确认后刷新命中的 VaultSlot 链上余额快照。"""
-    # 当前业务模型不允许一笔 Transfer 的发送方和接收方同时都是系统内 VaultSlot；
-    # 这里仅定位唯一命中的端点，兼容外部入账(to)与 VaultSlot 转出(from)两种方向。
-    affected_addresses = {transfer.from_address, transfer.to_address}
     slot = (
         VaultSlot.objects.select_related("chain")
-        .filter(chain=transfer.chain, address__in=affected_addresses)
+        .filter(chain=transfer.chain, address__iexact=transfer.to_address)
         .order_by("pk")
         .first()
     )
@@ -105,7 +102,7 @@ def refresh_vault_slot_balance_for_transfer(transfer: Transfer) -> None:
 
 
 def refresh_vault_slot_balance_for_collect_task(tx_task: TxTask) -> VaultSlotBalance | None:
-    """Tron 等不生成 Transfer(Collect) 的归集任务确认后刷新余额。"""
+    """不生成 Transfer 的归集任务确认后刷新余额。"""
     schedule = (
         VaultSlotCollectSchedule.objects.select_related(
             "chain",

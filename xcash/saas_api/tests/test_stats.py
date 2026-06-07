@@ -116,10 +116,10 @@ class TestStatsSummaryAggregation:
         assert Decimal(body["prev_gmv_usd"]) == Decimal("50.00")
 
     def test_invoice_count_uses_started_at_all_status(self, client, project):
-        # 4 种状态的账单均在当期窗口内（按 started_at），全部计入 invoice_count
+        # 所有账单状态均在当期窗口内（按 started_at），全部计入 invoice_count
         for i, status in enumerate([
             InvoiceStatus.WAITING, InvoiceStatus.COMPLETED,
-            InvoiceStatus.EXPIRED, InvoiceStatus.CONFIRMING,
+            InvoiceStatus.EXPIRED,
         ]):
             _make_invoice(project, worth="1.00", status=status,
                           started_at=datetime(2026, 4, 2 + i, tzinfo=UTC),
@@ -130,7 +130,7 @@ class TestStatsSummaryAggregation:
                       updated_at=datetime(2026, 3, 5, tzinfo=UTC))
 
         resp = client.get(self._url(project), HTTP_AUTHORIZATION=AUTH).json()
-        assert resp["invoice_count"] == 4
+        assert resp["invoice_count"] == 3
         assert resp["prev_invoice_count"] == 1
         # completed_invoice_count 只数当期 updated_at 在窗口内的 completed 状态账单
         assert resp["completed_invoice_count"] == 1

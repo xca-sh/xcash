@@ -129,7 +129,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         invoice: Invoice = self.get_object()
 
-        if invoice.status != InvoiceStatus.WAITING:
+        if invoice.status != InvoiceStatus.WAITING or invoice.transfer_id is not None:
             raise APIError(ErrorCode.INVALID_INVOICE_STATUS)
 
         if invoice.expires_at < timezone.now():

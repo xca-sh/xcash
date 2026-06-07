@@ -616,7 +616,7 @@ class TransferServiceCreateObservedTests(TestCase):
         enqueue_mock.assert_not_called()
 
     @patch("chains.service.TransferService.enqueue_processing")
-    def test_token_observed_inbound_schedules_vault_slot_deploy_after_commit(
+    def test_token_observed_inbound_does_not_schedule_vault_slot_deploy(
         self,
         enqueue_mock,
     ):
@@ -655,7 +655,7 @@ class TransferServiceCreateObservedTests(TestCase):
 
         self.assertTrue(result.created)
         enqueue_mock.assert_called_once()
-        schedule_deploy.assert_called_once_with(slot.pk)
+        schedule_deploy.assert_not_called()
 
     @patch("chains.service.TransferService.enqueue_processing")
     def test_native_observed_inbound_does_not_schedule_vault_slot_deploy(
@@ -722,7 +722,7 @@ class TxTaskTransitionTests(TestCase):
             sender=self.addr,
             tx_type=TxTaskType.VaultSlotCollect,
             tx_hash="0x" + "dd" * 32,
-            status=TxTaskStatus.PENDING_CONFIRM,
+            status=TxTaskStatus.PENDING_CHAIN,
         )
 
     def test_mark_finalized_success_transitions_correctly(self):
@@ -732,14 +732,6 @@ class TxTaskTransitionTests(TestCase):
         self.assertTrue(updated)
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, TxTaskStatus.CONFIRMED)
-
-    def test_reset_to_pending_chain_transitions_correctly(self):
-        updated = TxTask.reset_to_pending_chain(
-            chain=self.chain, tx_hash=self.task.tx_hash
-        )
-        self.assertTrue(updated)
-        self.task.refresh_from_db()
-        self.assertEqual(self.task.status, TxTaskStatus.PENDING_CHAIN)
 
     def test_mark_finalized_success_can_resolve_old_hash(self):
         old_hash = self.task.tx_hash
@@ -756,21 +748,6 @@ class TxTaskTransitionTests(TestCase):
         self.assertEqual(self.task.status, TxTaskStatus.CONFIRMED)
         self.assertEqual(self.task.tx_hash, old_hash)
 
-    def test_reset_to_pending_chain_can_resolve_old_hash(self):
-        old_hash = self.task.tx_hash
-        self.task.append_tx_hash(old_hash)
-        self.task.append_tx_hash("0x" + "ef" * 32)
-
-        updated = TxTask.reset_to_pending_chain(
-            chain=self.chain,
-            tx_hash=old_hash,
-        )
-
-        self.assertTrue(updated)
-        self.task.refresh_from_db()
-        self.assertEqual(self.task.status, TxTaskStatus.PENDING_CHAIN)
-        self.assertEqual(self.task.tx_hash, old_hash)
-
     def test_mark_finalized_failed_transitions_correctly(self):
         updated = TxTask.mark_finalized_failed(
             task_id=self.task.pk,
@@ -782,12 +759,12 @@ class TxTaskTransitionTests(TestCase):
     def test_mark_finalized_failed_honors_expected_status(self):
         updated = TxTask.mark_finalized_failed(
             task_id=self.task.pk,
-            expected_status=TxTaskStatus.PENDING_CHAIN,
+            expected_status=TxTaskStatus.QUEUED,
         )
 
         self.assertFalse(updated)
         self.task.refresh_from_db()
-        self.assertEqual(self.task.status, TxTaskStatus.PENDING_CONFIRM)
+        self.assertEqual(self.task.status, TxTaskStatus.PENDING_CHAIN)
 
     def test_mark_finalized_success_does_not_override_failed_final_state(self):
         TxTask.mark_finalized_failed(
@@ -816,51 +793,6 @@ class TxTaskTransitionTests(TestCase):
         self.assertFalse(updated)
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, TxTaskStatus.CONFIRMED)
-
-    def test_mark_pending_confirm_skips_finalized_tasks(self):
-        # 先将任务标记为已确认终局
-        TxTask.mark_finalized_success(
-            chain=self.chain, tx_hash=self.task.tx_hash
-        )
-        # mark_pending_confirm 不应回退已终局的任务
-        updated = TxTask.mark_pending_confirm(
-            chain=self.chain, tx_hash=self.task.tx_hash
-        )
-        self.assertFalse(updated)
-        self.task.refresh_from_db()
-        self.assertEqual(self.task.status, TxTaskStatus.CONFIRMED)
-
-    def test_mark_pending_confirm_with_empty_hash_is_noop(self):
-        updated = TxTask.mark_pending_confirm(chain=self.chain, tx_hash="")
-        self.assertFalse(updated)
-
-    def test_mark_pending_confirm_can_resolve_old_hash(self):
-        old_hash = self.task.tx_hash
-        self.task.append_tx_hash(old_hash)
-        self.task.append_tx_hash("0x" + "f0" * 32)
-
-        updated = TxTask.mark_pending_confirm(
-            chain=self.chain,
-            tx_hash=old_hash,
-        )
-
-        self.assertTrue(updated)
-        self.task.refresh_from_db()
-        self.assertEqual(self.task.status, TxTaskStatus.PENDING_CONFIRM)
-        self.assertEqual(self.task.tx_hash, old_hash)
-
-    def test_reset_to_pending_chain_skips_non_pending_confirm_tasks(self):
-        TxTask.objects.filter(pk=self.task.pk).update(
-            status=TxTaskStatus.QUEUED,
-        )
-        updated = TxTask.reset_to_pending_chain(
-            chain=self.chain,
-            tx_hash=self.task.tx_hash,
-        )
-
-        self.assertFalse(updated)
-        self.task.refresh_from_db()
-        self.assertEqual(self.task.status, TxTaskStatus.QUEUED)
 
 
 class VaultSlotReceivedFlagTests(TestCase):
@@ -963,7 +895,7 @@ class VaultSlotReceivedFlagTests(TestCase):
         self.assertEqual(balance.synced_block_number, transfer.block)
         self.assertEqual(balance.last_tx_hash, transfer.hash)
 
-    def test_transfer_confirm_refreshes_source_vault_slot_balance(self):
+    def test_transfer_confirm_does_not_refresh_source_vault_slot_balance(self):
         transfer = Transfer.objects.create(
             chain=self.chain,
             block=100,
@@ -977,23 +909,20 @@ class VaultSlotReceivedFlagTests(TestCase):
             timestamp=1_700_000_003,
             datetime=timezone.now(),
         )
-        adapter = type("Adapter", (), {"get_balance": lambda *_args: 765_432})()
 
         with patch(
             "chains.vault_slot_balances.AdapterFactory.get_adapter",
-            return_value=adapter,
-        ):
+        ) as get_adapter:
             transfer.confirm()
 
-        balance = VaultSlotBalance.objects.get(
-            chain=self.chain,
-            vault_slot=self.slot,
-            crypto=self.crypto,
+        get_adapter.assert_not_called()
+        self.assertFalse(
+            VaultSlotBalance.objects.filter(
+                chain=self.chain,
+                vault_slot=self.slot,
+                crypto=self.crypto,
+            ).exists()
         )
-        self.assertEqual(balance.value, Decimal("765432"))
-        self.assertEqual(balance.amount, Decimal("0.765432"))
-        self.assertEqual(balance.synced_block_number, transfer.block)
-        self.assertEqual(balance.last_tx_hash, transfer.hash)
 
 
 class BlockNumberUpdatedCompensationTests(TestCase):

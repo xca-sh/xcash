@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 
 class InvoiceStatus(models.TextChoices):
     WAITING = "waiting", _("待支付")
-    CONFIRMING = "confirming", _("确认中")
     COMPLETED = "completed", _("已完成")
     EXPIRED = "expired", _("已超时")
 

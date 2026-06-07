@@ -35,19 +35,6 @@ from projects.models import Project
 class DepositServiceCoreTests(TestCase):
     """Deposit 不再维护独立状态机，确认状态完全取自其 Transfer。"""
 
-    def test_drop_deposit_noop_when_transfer_unconfirmed(self):
-        # 未确认充值由 Transfer.drop 的级联删除收口，drop_deposit 不抛错、不显式删除。
-        deposit = SimpleNamespace(confirmed=False)
-
-        DepositService.drop_deposit(deposit)
-
-    def test_drop_deposit_rejects_confirmed(self):
-        # 已确认充值不允许随 Transfer 回退被静默抹除，抛错中断 drop 事务。
-        deposit = SimpleNamespace(confirmed=True)
-
-        with self.assertRaises(DepositStatusError):
-            DepositService.drop_deposit(deposit)
-
     def test_content_property_handles_null_customer(self):
         transfer = SimpleNamespace(
             chain=SimpleNamespace(code="ethereum"),
@@ -80,17 +67,20 @@ class DepositCreationTests(TestCase):
             crypto=SimpleNamespace(active=False),
         )
 
-        created = DepositService.try_create_deposit(transfer)
+        created = DepositService.try_match_deposit_transfer(transfer)
 
         self.assertFalse(created)
 
     @patch.object(VaultSlot, "schedule_collect_for_deposit")
-    def test_try_create_deposit_does_not_schedule_collect(self, schedule_collect):
+    def test_try_match_deposit_transfer_does_not_create_deposit_or_schedule_collect(
+        self, schedule_collect
+    ):
         context = create_deposit_context()
 
-        created = DepositService.try_create_deposit(context.transfer)
+        created = DepositService.try_match_deposit_transfer(context.transfer)
 
         self.assertTrue(created)
+        self.assertFalse(Deposit.objects.filter(transfer=context.transfer).exists())
         schedule_collect.assert_not_called()
 
     @patch.object(VaultSlot, "schedule_collect_for_deposit")
@@ -105,14 +95,13 @@ class DepositCreationTests(TestCase):
 
         schedule_collect.assert_not_called()
 
-    def test_try_create_deposit_matches_tron_vault_slot(self):
+    def test_try_match_deposit_transfer_matches_tron_vault_slot(self):
         context = create_tron_deposit_context()
 
-        created = DepositService.try_create_deposit(context.transfer)
+        created = DepositService.try_match_deposit_transfer(context.transfer)
 
         self.assertTrue(created)
-        deposit = Deposit.objects.get(transfer=context.transfer)
-        self.assertEqual(deposit.customer, context.customer)
+        self.assertFalse(Deposit.objects.filter(transfer=context.transfer).exists())
         context.transfer.refresh_from_db()
         self.assertEqual(context.transfer.type, TransferType.Deposit)
 
@@ -141,19 +130,18 @@ class DepositNotificationTests(TestCase):
     @patch("deposits.service.send_saas_callback")
     @patch("deposits.service.WebhookService.create_event")
     @patch.object(DepositService, "schedule_collect_for_completed_deposit")
-    def test_confirm_deposit_schedules_collect_for_erc20(
+    def test_create_confirmed_deposit_creates_deposit_and_schedules_collect(
         self, schedule_collect, create_event_mock, send_saas_callback_mock
     ):
         context = create_deposit_context()
-        deposit = Deposit.objects.create(
-            customer=context.customer,
-            transfer=context.transfer,
-            worth=Decimal("1"),
-        )
 
-        DepositService.confirm_deposit(deposit)
+        deposit = DepositService.create_confirmed_deposit(context.transfer)
 
+        self.assertIsNotNone(deposit)
+        self.assertEqual(deposit.customer, context.customer)
         schedule_collect.assert_called_once_with(deposit)
+        create_event_mock.assert_called_once()
+        send_saas_callback_mock.assert_called_once()
 
     @patch("deposits.service.send_saas_callback")
     @patch("deposits.service.WebhookService.create_event")
@@ -271,7 +259,6 @@ class DepositNotificationTests(TestCase):
     ):
         project = Project.objects.create(
             name="DemoConfirm",
-            pre_notify=True,
         )
         customer = Customer.objects.create(project=project, uid="customer-confirm")
         chain = Chain.objects.create(

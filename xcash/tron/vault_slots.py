@@ -70,11 +70,15 @@ def create_collect_tx_task(*, chain: Chain, crypto, slot: VaultSlot) -> TxTask:
     return TronTxTask.schedule(intent).base_task
 
 
-def can_create_collect_tx_task(*, chain: Chain, slot: VaultSlot) -> bool:
+def can_create_collect_tx_task(*, chain: Chain, crypto, slot: VaultSlot) -> bool:
     if slot.is_deployed:
         return True
-    # TVM 对无 code 地址的合约调用会返回 success 但什么都不做；未部署则跳过本轮，
-    # 等部署确认后下一轮再建，避免把资金仍滞留误判为归集成功。
+    if not slot.project.vault:
+        return False
+    if getattr(crypto, "pk", None) != chain.native_coin.pk:
+        return True
+    # 原生币必须先有 receive() 合约才能被系统观测；若标记未部署，则先按链上 code
+    # 事实复检，不能向无 code 地址发 collect。
     if not TronAdapter().is_contract(chain, slot.address):
         return False
     VaultSlot.objects.filter(pk=slot.pk, is_deployed=False).update(is_deployed=True)

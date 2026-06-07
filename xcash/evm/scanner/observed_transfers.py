@@ -142,6 +142,8 @@ class EvmObservedTransferProcessor:
 
         if value <= 0 or slot_address not in watch_set.matched_addresses:
             return None
+        if payer in watch_set.matched_addresses:
+            return None
 
         return ParsedEvmTransferLog(
             block_number=block_number,

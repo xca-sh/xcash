@@ -96,10 +96,6 @@ evm_tasks = {
         "task": "evm.tasks.scan_active_evm_chains",
         "schedule": SCAN_DISPATCH_SCHEDULE_SECONDS,
     },
-    "confirm_non_transfer_tx_tasks": {
-        "task": "evm.tasks.confirm_non_transfer_tx_tasks",
-        "schedule": EVM_NON_TRANSFER_CONFIRM_SCHEDULE_SECONDS,
-    },
 }
 
 # ---------------------------

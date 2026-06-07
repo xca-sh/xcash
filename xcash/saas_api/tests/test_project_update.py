@@ -108,7 +108,6 @@ class TestPatchFieldWhitelist:
         payload = {
             "webhook": "https://example.com/cb",
             "webhook_open": False,
-            "pre_notify": True,
             "fast_confirm_threshold": "25.50",
         }
         response = client.patch(
@@ -122,7 +121,6 @@ class TestPatchFieldWhitelist:
         project.refresh_from_db()
         assert project.webhook == "https://example.com/cb"
         assert project.webhook_open is False
-        assert project.pre_notify is True
         assert project.fast_confirm_threshold == Decimal("25.50")
 
 

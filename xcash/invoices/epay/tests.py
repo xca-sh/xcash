@@ -11,6 +11,8 @@ from django.utils import timezone
 from web3 import Web3
 
 from chains.constants import ChainCode
+from chains.models import Transfer
+from chains.models import TransferStatus
 from chains.tests_fixtures import make_evm_chain
 from currencies.models import Crypto
 from currencies.models import CryptoOnChain
@@ -27,6 +29,7 @@ from invoices.models import EpayOrder
 from invoices.models import Invoice
 from invoices.models import InvoiceProtocol
 from invoices.models import InvoiceStatus
+from projects.models import InvoiceReceivingMode
 from projects.models import Project
 
 
@@ -344,6 +347,7 @@ class EpaySubmitServiceTests(TestCase):
     def setUp(self):
         self.project = Project.objects.create(
             name="EPay Submit Project",
+            invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
         self.merchant = EpayMerchant.objects.create(
             project=self.project,
@@ -1087,17 +1091,13 @@ class EpayNotifyTests(TestCase):
     def test_build_return_url_returns_empty_when_not_completed(
         self, mock_check, mock_initialize
     ):
-        # waiting / confirming 阶段不应把同步跳转 URL 暴露给前端：用户还没付完
+        # waiting 阶段不应把同步跳转 URL 暴露给前端：用户还没付完
         # 不能伪造 TRADE_SUCCESS 跳转回商户。
         mock_initialize.side_effect = lambda invoice: invoice
         invoice = EpaySubmitService.submit(self._signed_params())
         invoice.refresh_from_db()
 
         self.assertEqual(invoice.status, InvoiceStatus.WAITING)
-        self.assertEqual(EpaySubmitService.build_return_url(invoice), "")
-
-        Invoice.objects.filter(pk=invoice.pk).update(status=InvoiceStatus.CONFIRMING)
-        invoice.refresh_from_db()
         self.assertEqual(EpaySubmitService.build_return_url(invoice), "")
 
     @patch("invoices.epay.service.InvoiceService.initialize_invoice")
@@ -1241,7 +1241,7 @@ class EpayNotifyTests(TestCase):
         mock_initialize.side_effect = lambda invoice: invoice
         invoice = EpaySubmitService.submit(self._signed_params())
         Invoice.objects.filter(pk=invoice.pk).update(
-            status=InvoiceStatus.CONFIRMING,
+            status=InvoiceStatus.WAITING,
             crypto=self.crypto,
         )
         invoice.refresh_from_db()
@@ -1271,9 +1271,32 @@ class EpayNotifyTests(TestCase):
             methods={},
             protocol=InvoiceProtocol.NATIVE,
             expires_at=timezone.now() + timedelta(minutes=10),
-            status=InvoiceStatus.CONFIRMING,
+            status=InvoiceStatus.WAITING,
             crypto=self.crypto,
+            chain=self.chain,
+            pay_address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000E01"
+            ),
+            pay_amount=Decimal("10"),
         )
+        transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=1,
+            block_hash="0x" + "cc" * 32,
+            hash="0x" + "e1" * 32,
+            crypto=self.crypto,
+            from_address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000E02"
+            ),
+            to_address=native_invoice.pay_address,
+            value=Decimal("10000000"),
+            amount=native_invoice.pay_amount,
+            status=TransferStatus.CONFIRMED,
+            timestamp=int(timezone.now().timestamp()),
+            datetime=timezone.now(),
+        )
+        Invoice.objects.filter(pk=native_invoice.pk).update(transfer=transfer)
+        native_invoice.refresh_from_db()
 
         InvoiceService.confirm_invoice(native_invoice)
 

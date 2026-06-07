@@ -100,7 +100,7 @@ def confirm_tron_receipt_tx_tasks() -> None:
         .filter(
             chain__type=ChainType.TRON,
             tx_type__in=(TxTaskType.VaultSlotDeploy, TxTaskType.VaultSlotCollect),
-            status__in=(TxTaskStatus.PENDING_CHAIN, TxTaskStatus.PENDING_CONFIRM),
+            status=TxTaskStatus.PENDING_CHAIN,
             tx_hash__isnull=False,
         )
         .exclude(tx_hash="")
@@ -122,7 +122,6 @@ def confirm_tron_receipt_tx_tasks() -> None:
         result_meta = raw_result if isinstance(raw_result, TxCheckResult) else None
         status = tx_check_status(raw_result)
         if status == TxCheckStatus.SUCCEEDED:
-            TxTask.mark_pending_confirm(chain=task.chain, tx_hash=task.tx_hash)
             if not has_required_confirmations(chain=task.chain, result=result_meta):
                 continue
             updated = TxTask.mark_finalized_success(
@@ -140,7 +139,7 @@ def confirm_tron_receipt_tx_tasks() -> None:
         elif status == TxCheckStatus.FAILED:
             updated = TxTask.mark_finalized_failed(
                 task_id=task.pk,
-                expected_status=task.status,
+                expected_status=TxTaskStatus.PENDING_CHAIN,
             )
             if updated and task.tx_type == TxTaskType.VaultSlotDeploy:
                 mark_deployed_if_on_chain_for_task(task)

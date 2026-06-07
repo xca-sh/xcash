@@ -10,9 +10,9 @@ from web3.exceptions import TransactionNotFound
 
 from chains.constants import ChainCode
 from chains.models import Chain
-from chains.models import Transfer
 from chains.models import TxTask
 from chains.models import VaultSlot
+from chains.models import VaultSlotCollectSchedule
 from common.saas_callback import CallbackEvent
 from common.saas_callback import SaasCallback
 from common.saas_callback import send_saas_callback
@@ -123,20 +123,23 @@ def notify_vault_slot_deploy_gas_fee(*, tx_task: TxTask) -> None:
     )
 
 
-def notify_vault_slot_collect_gas_fee(*, transfer: Transfer) -> None:
+def notify_vault_slot_collect_gas_fee(*, tx_task: TxTask) -> None:
     """VaultSlot 归集确认后，通知 SaaS 对项目收取系统热钱包 gas 成本。"""
+    if not tx_task.tx_hash:
+        return
     try:
-        slot = (
-            VaultSlot.objects.select_related("project")
-            .get(chain=transfer.chain, address__iexact=transfer.from_address)
-        )
-        tx_detail = _build_tx_detail(chain=transfer.chain, tx_hash=transfer.hash)
+        schedule = VaultSlotCollectSchedule.objects.select_related(
+            "vault_slot__project",
+            "chain",
+        ).get(tx_task=tx_task)
+        slot = schedule.vault_slot
+        tx_detail = _build_tx_detail(chain=schedule.chain, tx_hash=tx_task.tx_hash)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "saas_gas_fee_callback_build_failed",
             operation="vault_slot_collect",
-            transfer_id=transfer.pk,
-            tx_hash=transfer.hash,
+            tx_task_id=tx_task.pk,
+            tx_hash=tx_task.tx_hash,
             error=str(exc),
         )
         return
@@ -145,7 +148,7 @@ def notify_vault_slot_collect_gas_fee(*, transfer: Transfer) -> None:
         SaasCallback(
             event=CallbackEvent.GAS_FEE_VAULT_SLOT_COLLECT,
             appid=slot.project.appid,
-            sys_no=f"vault-slot-collect:{transfer.pk}",
+            sys_no=f"vault-slot-collect:{tx_task.pk}",
             currency="USDT",
             tx_detail=asdict(tx_detail),
         )

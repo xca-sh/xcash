@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { getCryptoIconUrl, getChainIconUrl, getChainDisplayName } from "@/lib/cryptoIcons"
+import { getConfirmationProgress, isPaymentConfirming } from "@/lib/invoiceStatus"
 import { useI18n } from "@/hooks/useI18n"
 
 // 复制按钮：copied 命中当前字段时切换为对勾。提到组件外，避免在 render 期间创建组件。
@@ -22,9 +23,9 @@ function PaymentAddress({ invoice, onReset }) {
   const [copiedField, setCopiedField] = useState("")
 
   const hasPayment = Boolean(invoice?.payment)
-  const isConfirming = invoice?.status === "confirming"
+  const isConfirming = isPaymentConfirming(invoice)
   const isCompleted = invoice?.status === "completed"
-  const confirmingProgress = invoice?.payment?.confirm_progress || {}
+  const confirmingProgress = getConfirmationProgress(invoice)
   const progress = confirmingProgress.progress || 0
   const hasConfirmedCount = confirmingProgress.has_confirmed_count || 0
   const needConfirmedCount = confirmingProgress.need_confirmed_count || 0

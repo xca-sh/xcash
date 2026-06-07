@@ -178,12 +178,12 @@ def dispatch_block_confirmation_checks_if_needed(
     if chain.latest_block_number <= previous_latest_block:
         return
 
-    has_pending_confirmations = Transfer.objects.filter(
+    has_confirming_transfers = Transfer.objects.filter(
         chain=chain,
         status=TransferStatus.CONFIRMING,
         processed_at__isnull=False,
     ).exists()
-    if not has_pending_confirmations:
+    if not has_confirming_transfers:
         return
 
     block_number_updated.delay(chain.pk)

@@ -67,7 +67,7 @@ def _build_operational_inspection_payload(metrics):
     stalled_invoice_rows = [
         {
             "level": _("中"),
-            "title": _("账单长时间确认中"),
+            "title": _("账单长时间待链上确认"),
             "description": _("%(project)s / %(sys_no)s / %(crypto)s-%(chain)s")
             % {
                 "project": invoice.project.name,
@@ -81,11 +81,11 @@ def _build_operational_inspection_payload(metrics):
     ]
     inspection_sections.append(
         {
-            "title": _("账单确认巡检"),
-            "subtitle": _("长时间处于确认中的账单"),
+            "title": _("链上确认巡检"),
+            "subtitle": _("已观察到付款但长时间未满足确认数的账单"),
             "count": len(stalled_invoice_rows),
             "rows": stalled_invoice_rows,
-            "empty_text": _("当前没有长时间确认中的账单"),
+            "empty_text": _("当前没有长时间待链上确认的账单"),
         }
     )
     attention_items.extend(stalled_invoice_rows)
@@ -125,9 +125,9 @@ def _build_operational_inspection_summary_cards(snapshot):
     # 改动原因：独立巡检页需要先给出风险摘要，用户不必逐段滚动才能判断当前是否有异常。
     return [
         {
-            "title": _("账单确认风险"),
+            "title": _("链上确认风险"),
             "metric": snapshot["confirming_count"],
-            "subtitle": _("确认中 %(count)s 笔，临近超时 %(soon)s 笔")
+            "subtitle": _("待链上确认 %(count)s 笔，临近超时 %(soon)s 笔")
             % {
                 "count": snapshot["confirming_count"],
                 "soon": snapshot["expiring_soon_count"],
@@ -185,9 +185,9 @@ def dashboard_callback(request, context):
             "tone": "bg-amber-50",
         },
         {
-            "title": _("待确认收款"),
+            "title": _("待链上确认收款"),
             "metric": _fmt_usd(snapshot["confirming_worth"]),
-            "subtitle": _("确认中 %(count)s 笔")
+            "subtitle": _("已观察到付款 %(count)s 笔")
             % {"count": snapshot["confirming_count"]},
             "tone": "bg-orange-50",
         },
@@ -211,10 +211,10 @@ def dashboard_callback(request, context):
             "href": f"{reverse('admin:invoices_invoice_changelist')}?status__exact=waiting",
         },
         {
-            "label": _("确认中账单"),
+            "label": _("待链上确认账单"),
             "value": snapshot["confirming_count"],
             "detail": _fmt_usd(snapshot["confirming_worth"]),
-            "href": f"{reverse('admin:invoices_invoice_changelist')}?status__exact=confirming",
+            "href": f"{reverse('admin:invoices_invoice_changelist')}?status__exact=waiting",
         },
         {
             "label": _("待投递事件"),

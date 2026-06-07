@@ -1379,17 +1379,36 @@ class TronCollectScheduleExecuteTests(TestCase):
         )
 
     @patch("tron.vault_slots.TronAdapter.is_contract", return_value=False)
-    def test_execute_due_skips_until_slot_deployed(self, is_contract):
+    def test_execute_due_creates_ensure_collect_task_for_undeployed_token_slot(
+        self, is_contract
+    ):
         schedule = self.make_pending_schedule()
 
-        created = VaultSlotCollectSchedule.execute_due()
+        with patch("tron.vault_slots.SystemWallet.get_current") as get_current:
+            get_current.return_value.wallet.get_address.return_value = self.sender
+            with patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ):
+                created = VaultSlotCollectSchedule.execute_due()
 
-        self.assertEqual(created, 0)
+        self.assertEqual(created, 1)
         schedule.refresh_from_db()
-        self.assertIsNone(schedule.tx_task_id)
+        self.assertIsNotNone(schedule.tx_task_id)
+        self.assertEqual(
+            schedule.tx_task.tron_task.function_selector,
+            "ensureDeployedAndCollect(address,bytes32,address)",
+        )
+        self.assertEqual(
+            schedule.tx_task.tron_task.to,
+            "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        )
+        is_contract.assert_not_called()
 
     @patch("tron.vault_slots.TronAdapter.is_contract", return_value=True)
     def test_execute_due_creates_task_when_slot_deployed(self, is_contract):
+        VaultSlot.objects.filter(pk=self.slot.pk).update(is_deployed=True)
+        self.slot.is_deployed = True
         schedule = self.make_pending_schedule()
 
         with patch("tron.vault_slots.SystemWallet.get_current") as get_current:

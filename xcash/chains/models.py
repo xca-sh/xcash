@@ -495,13 +495,11 @@ class TransferType(models.TextChoices):
     Unmatched = "unmatched", _("未归类")
     Invoice = "invoice", _("💳 支付")
     Deposit = "deposit", "💰 充币"
-    Collect = "collect", "💰 归集"
 
 
 class TxTaskStatus(models.TextChoices):
     QUEUED = "queued", _("待广播")
     PENDING_CHAIN = "pending_chain", _("待上链")
-    PENDING_CONFIRM = "pending_confirm", _("确认中")
     CONFIRMED = "confirmed", _("已确认")
     FAILED = "failed", _("失败")
 
@@ -559,7 +557,7 @@ class TxTask(UndeletableModel):
     """跨链统一的链上任务锚点。
 
     设计原则：
-    - status 用单枚举描述上链生命周期：待广播 → 待上链 → 确认中 →（已确认 | 失败）。
+    - status 用单枚举描述上链生命周期：待广播 → 待上链 →（已确认 | 失败）。
       上链周期是固定的线性流程加末端成功/失败分叉，故无需把"阶段"与"结果"
       拆成两个字段再用跨字段约束维持一致；终局态由 TERMINAL_TX_TASK_STATUSES 判定。
     - 广播重试等实现细节继续留在各链子表，避免把"是否广播"污染到统一领域模型。
@@ -713,51 +711,6 @@ class TxTask(UndeletableModel):
                 updated_at=timezone.now(),
             )
         )
-
-    @staticmethod
-    def reset_to_pending_chain(*, chain: Chain, tx_hash: str) -> bool:
-        """将匹配的任务回退到待上链状态（用于 Transfer drop / reorg 恢复）。
-
-        使用 .update() 绕过 save()/full_clean() 以避免逐行加载；
-        只回退仍处于确认中的任务，已终局者不动。
-        按单个主键过滤，故 .update() 至多命中一条，结果收敛为布尔。
-        """
-        task = TxTask.resolve_by_hash(chain=chain, tx_hash=tx_hash)
-        if task is None:
-            return False
-        updated = TxTask.objects.filter(
-            pk=task.pk,
-            status=TxTaskStatus.PENDING_CONFIRM,
-        ).update(
-            tx_hash=tx_hash,
-            status=TxTaskStatus.PENDING_CHAIN,
-            updated_at=timezone.now(),
-        )
-        return bool(updated)
-
-    @staticmethod
-    def mark_pending_confirm(*, chain: Chain, tx_hash: str) -> bool:
-        """链上已观察到交易后，将未终结的任务推进到确认中状态。
-
-        使用 .update() 绕过 save()/full_clean() 以避免逐行加载；
-        已终局的任务不再回拨。
-        按单个主键过滤，故 .update() 至多命中一条，结果收敛为布尔。
-        """
-        if not tx_hash:
-            return False
-        task = TxTask.resolve_by_hash(chain=chain, tx_hash=tx_hash)
-        if task is None:
-            return False
-        updated = (
-            TxTask.objects.filter(pk=task.pk)
-            .exclude(status__in=TERMINAL_TX_TASK_STATUSES)
-            .update(
-                tx_hash=tx_hash,
-                status=TxTaskStatus.PENDING_CONFIRM,
-                updated_at=timezone.now(),
-            )
-        )
-        return bool(updated)
 
 
 class VaultSlotUsage(models.TextChoices):
@@ -1177,6 +1130,7 @@ class VaultSlotCollectSchedule(models.Model):
                     continue
                 if not can_create_collect_tx_task(
                     chain=schedule.chain,
+                    crypto=schedule.crypto,
                     slot=schedule.vault_slot,
                 ):
                     continue
@@ -1297,15 +1251,12 @@ class Transfer(models.Model):
         if self.processed_at:
             return
 
-        # 优先通过 TxHash 匹配内部交易任务，
-        # 一次 resolve 即可定位业务类型，避免逐一 try_match 重复查询。
+        # Transfer 只承载外部收款事实。若误落库为内部 TxTask 的 hash，直接跳过业务匹配，
+        # 避免系统归集/部署等主动交易污染 Invoice / Deposit 入账状态。
         tx_task = TxTask.resolve_by_hash(chain=self.chain, tx_hash=self.hash)
         if tx_task is not None:
-            if self._match_internal(tx_task):
-                self._mark_processed()
-                return
             logger.warning(
-                "Transfer 命中 TxTask 但内部 handler 未认领，跳过外部匹配",
+                "Transfer 命中内部 TxTask，跳过外部收款匹配",
                 transfer_id=self.pk,
                 tx_task_id=tx_task.pk,
                 tx_hash=self.hash,
@@ -1319,7 +1270,7 @@ class Transfer(models.Model):
 
         (
             InvoiceService.try_match_invoice(self)
-            or DepositService.try_create_deposit(self)
+            or DepositService.try_match_deposit_transfer(self)
         )
         self._mark_processed()
 
@@ -1331,27 +1282,6 @@ class Transfer(models.Model):
     def _mark_processed(self) -> None:
         self.processed_at = timezone.now()
         Transfer.objects.filter(pk=self.pk).update(processed_at=self.processed_at)
-
-    def _match_internal(self, tx_task: TxTask) -> bool:
-        """通过已解析的 TxTask 直接分发到对应内部业务处理器。"""
-        if self.chain.type == ChainType.EVM:
-            try:
-                from evm.internal_tx.routing import get_handler
-
-                handler = get_handler(TxTaskType(tx_task.tx_type))
-            except (KeyError, ValueError):
-                logger.warning(
-                    "EVM 内部交易缺少 handler 注册",
-                    transfer_id=self.pk,
-                    tx_type=tx_task.tx_type,
-                )
-                return False
-            return handler.match(self, tx_task)
-
-        # Tron 的归集(slot→vault)收款方是系统外 vault,不会被扫描器当作入账观测,
-        # 故 Tron 没有可被 resolve_by_hash 命中的内部 Transfer;归集任务统一由
-        # tron.tasks.confirm_tron_receipt_tx_tasks 按回执收口,不走此路径。
-        return False
 
     @db_transaction.atomic
     def confirm(self):
@@ -1384,10 +1314,6 @@ class Transfer(models.Model):
         self.refresh_from_db()
 
         self._dispatch_business_drop()
-
-        # 当确认前已观察到的交易后来又查不到时, 按"回退到待上链"处理;
-        # 让任务继续通过重广播自愈, 而不是直接进入失败终局。
-        TxTask.reset_to_pending_chain(chain=self.chain, tx_hash=self.hash)
 
         self.delete()
 
@@ -1422,21 +1348,7 @@ class Transfer(models.Model):
         if self.type == TransferType.Invoice:
             InvoiceService.confirm_invoice(self.invoice)
         elif self.type == TransferType.Deposit:
-            DepositService.confirm_deposit(self.deposit)
-        elif self.type in {TransferType.Collect}:
-            tx_task = TxTask.resolve_by_hash(chain=self.chain, tx_hash=self.hash)
-            if tx_task is None:
-                return
-            # Tron 归集不走 Transfer(Collect) 收口(见 _match_internal),此处仅处理 EVM。
-            if self.chain.type != ChainType.EVM:
-                return
-            from evm.internal_tx.routing import get_handler
-
-            try:
-                handler = get_handler(TxTaskType(tx_task.tx_type))
-            except (KeyError, ValueError):
-                return
-            handler.confirm(self)
+            DepositService.create_confirmed_deposit(self)
 
     def _mark_vault_slot_received(self) -> None:
         """确认后的转入事实才标记 VaultSlot 曾经收到过资金。"""
@@ -1456,12 +1368,3 @@ class Transfer(models.Model):
 
     def _dispatch_business_drop(self) -> None:
         """统一按已归类的业务类型分发回退动作，drop() 专用。"""
-        from deposits.service import DepositService
-        from invoices.service import InvoiceService
-
-        if self.type == TransferType.Invoice:
-            InvoiceService.drop_invoice(self.invoice)
-        elif self.type == TransferType.Deposit:
-            DepositService.drop_deposit(self.deposit)
-        elif self.type in {TransferType.Collect}:
-            return

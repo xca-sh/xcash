@@ -11,8 +11,6 @@ from eth_typing import HexStr
 from web3 import Web3
 
 from chains.models import Chain
-from chains.models import Transfer
-from chains.models import TransferType
 from chains.models import TxTask
 from chains.models import VaultSlot
 from currencies.models import Crypto
@@ -21,7 +19,6 @@ from evm.contracts_codec import predict_xcash_vault_slot_address
 from evm.internal_tx.facts import MatchedTransferFact
 from evm.internal_tx.log_utils import matches_transfer_log
 from evm.internal_tx.log_utils import normalize_log_index
-from evm.saas_gas_billing import notify_vault_slot_collect_gas_fee
 
 _COLLECT_SELECTOR = "0x06ec16f8"
 _ENSURE_DEPLOYED_AND_COLLECT_SELECTOR = Web3.keccak(
@@ -196,27 +193,3 @@ def vault_slot_collect_matcher(
         value=collected_log.value,
         amount=collected_log.value.scaleb(-crypto.get_decimals(chain)),
     )
-
-
-@dataclass
-class VaultSlotCollectHandler:
-    """VaultSlot 归集任务的生命周期 handler，仅打标无额外业务流转。"""
-
-    def match(self, transfer: Transfer, tx_task: TxTask) -> bool:
-        """把 Transfer 类型标记为 Collect。"""
-        transfer.type = TransferType.Collect
-        transfer.save(update_fields=["type"])
-        return True
-
-    def confirm(self, transfer: Transfer) -> None:
-        """归集确认后通知 SaaS 收取系统热钱包承担的 gas 成本。"""
-        notify_vault_slot_collect_gas_fee(transfer=transfer)
-
-    def drop(self, transfer: Transfer) -> None:
-        """reorg 撤销时无须额外回滚。"""
-
-    def finalize_failed(self, tx_task: TxTask) -> None:
-        """归集失败无须额外业务收尾。"""
-
-
-vault_slot_collect_handler = VaultSlotCollectHandler()

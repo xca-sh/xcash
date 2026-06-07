@@ -36,7 +36,6 @@ class ProjectForm(forms.ModelForm):
             "webhook",
             "webhook_open",
             "failed_count",
-            "pre_notify",
             "fast_confirm_threshold",
             "hmac_key",
             "vault",

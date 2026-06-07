@@ -24,6 +24,7 @@ from chains.constants import ChainCode
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import Transfer
+from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.tests_fixtures import make_evm_chain
 from core.models import SystemSettings
@@ -86,7 +87,7 @@ class AmlTestMixin:
             pay_address=self.transfer.to_address,
             worth=worth,
             transfer=self.transfer,
-            status=InvoiceStatus.CONFIRMING,
+            status=InvoiceStatus.COMPLETED,
             expires_at=timezone.now() + timedelta(minutes=10),
         )
 
@@ -642,7 +643,11 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
 @override_settings(IS_SAAS=False)
 class AmlBusinessDispatchTests(AmlTestMixin, TestCase):
     @patch("aml.tasks.screen_invoice_aml.delay")
-    def test_invoice_match_enqueues_aml_after_transaction_commit(self, delay):
+    @patch("invoices.service.send_saas_callback")
+    @patch("invoices.service.WebhookService.create_event")
+    def test_invoice_confirm_enqueues_aml_after_transaction_commit(
+        self, _create_event, _callback, delay
+    ):
         invoice = Invoice.objects.create(
             project=self.project,
             out_no="aml-match",
@@ -663,11 +668,15 @@ class AmlBusinessDispatchTests(AmlTestMixin, TestCase):
         self.transfer.datetime = timezone.now()
         self.transfer.save(update_fields=["datetime"])
 
-        with self.captureOnCommitCallbacks(execute=True):
-            matched = InvoiceService.try_match_invoice(self.transfer)
-
+        matched = InvoiceService.try_match_invoice(self.transfer)
         self.assertTrue(matched)
         invoice.refresh_from_db()
+
+        delay.assert_not_called()
+        Transfer.objects.filter(pk=self.transfer.pk).update(status=TransferStatus.CONFIRMED)
+        with self.captureOnCommitCallbacks(execute=True):
+            InvoiceService.confirm_invoice(invoice)
+
         delay.assert_called_once_with(invoice.pk)
 
 

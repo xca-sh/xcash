@@ -6,12 +6,10 @@ from unittest.mock import Mock
 from unittest.mock import patch
 
 from django.core.cache import cache
-from django.db import DatabaseError
 from django.db import IntegrityError
 from django.db import close_old_connections
 from django.db import connection
 from django.db import connections
-from django.db import transaction as db_transaction
 from django.test import TestCase
 from django.test import TransactionTestCase
 from django.test import override_settings
@@ -24,6 +22,7 @@ from chains.constants import ChainCode
 from chains.constants import ChainType
 from chains.models import Chain
 from chains.models import Transfer
+from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
@@ -132,6 +131,7 @@ class InvoicePaymentSelectionTests(TestCase):
             vault=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000A1"
             ),
+            invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
         self.crypto = Crypto.objects.create(
             name="Tether USD",
@@ -238,8 +238,9 @@ class InvoicePaymentSelectionTests(TestCase):
         self.assertIsNone(invoice.transfer_id)
         self.assertNotEqual(transfer.type, TransferType.Invoice)
 
-    def test_drop_invoice_keeps_current_payment_when_not_reused(self):
-        # 若链上观测后来被回滚，未被复用的当前支付指引可继续等待再次匹配。
+    def test_transfer_drop_clears_observed_invoice_binding(self):
+        # Invoice 不再维护 CONFIRMING/drop 状态；回滚时删除 Transfer 即可通过
+        # on_delete=SET_NULL 清理支付页观察绑定，支付指引继续保持原样。
         invoice = self.create_invoice(out_no="payment-drop")
 
         invoice.select_method(self.crypto, self.chain_a)
@@ -253,7 +254,7 @@ class InvoicePaymentSelectionTests(TestCase):
         InvoiceService.try_match_invoice(transfer)
         invoice.refresh_from_db()
 
-        InvoiceService.drop_invoice(invoice)
+        transfer.drop()
 
         invoice.refresh_from_db()
         self.assertEqual(invoice.status, InvoiceStatus.WAITING)
@@ -286,48 +287,6 @@ class InvoicePaymentSelectionTests(TestCase):
         first.refresh_from_db()
         self.assertEqual((first.pay_address, first.pay_amount), first_combo)
 
-    def test_drop_invoice_clears_payment_when_occupied_by_expired_waiting_invoice(self):
-        # 回归：账单 CONFIRMING 期间其组合脱离 uniq_invoice_active_payment 约束，可能被
-        # 新的 WAITING 账单复用。若该占用者已过 expires_at 但状态仍是 WAITING（过期任务
-        # 尚未翻转），drop_invoice 的占用判定必须仍能识别它、先清空当前支付指引再回退
-        # 状态——否则回退为 WAITING 会命中约束抛 IntegrityError，账单将卡死在 CONFIRMING。
-        confirming = self.create_invoice(out_no="drop-occupied-confirming")
-        confirming.select_method(self.crypto, self.chain_a)
-        confirming.refresh_from_db()
-        pay_address = confirming.pay_address
-        pay_amount = confirming.pay_amount
-
-        # 推进到 CONFIRMING（此时其组合脱离约束）。
-        transfer = self.create_transfer(
-            chain=self.chain_a,
-            pay_amount=pay_amount,
-            pay_address=pay_address,
-        )
-        InvoiceService.try_match_invoice(transfer)
-        confirming.refresh_from_db()
-        self.assertEqual(confirming.status, InvoiceStatus.CONFIRMING)
-
-        # 新账单合法复用同一组合（因 confirming 已不在约束内），随后过期但保持 WAITING。
-        occupant = self.create_invoice(out_no="drop-occupied-waiting")
-        Invoice.objects.filter(pk=occupant.pk).update(
-            crypto=self.crypto,
-            chain=self.chain_a,
-            pay_address=pay_address,
-            pay_amount=pay_amount,
-            expires_at=timezone.now() - timedelta(minutes=1),
-        )
-
-        # 回退 confirming：不应抛 IntegrityError，且应清空被占用的支付指引。
-        InvoiceService.drop_invoice(confirming)
-
-        confirming.refresh_from_db()
-        self.assertEqual(confirming.status, InvoiceStatus.WAITING)
-        self.assertIsNone(confirming.transfer_id)
-        self.assertIsNone(confirming.pay_address)
-        self.assertIsNone(confirming.pay_amount)
-        self.assertIsNone(confirming.crypto_id)
-        self.assertIsNone(confirming.chain_id)
-
     def test_check_expired_marks_waiting_invoice_expired(self):
         invoice = self.create_invoice(out_no="payment-expire")
         invoice.select_method(self.crypto, self.chain_a)
@@ -343,36 +302,15 @@ class InvoicePaymentSelectionTests(TestCase):
         self.assertEqual(invoice.status, InvoiceStatus.EXPIRED)
 
     @patch("invoices.service.WebhookService.create_event")
-    def test_pre_notify_enabled_emits_confirming_webhook(self, create_event_mock):
-        # 开启 pre_notify 时，try_match_invoice 应发送 confirmed=False 的预通知。
-        self.project.pre_notify = True
-        self.project.save(update_fields=["pre_notify"])
-        invoice = self.create_invoice(out_no="payment-prenotify")
+    def test_try_match_invoice_only_binds_transfer_without_webhook(
+        self, create_event_mock
+    ):
+        # 观察到链上付款时只绑定 Transfer，webhook 必须等 Transfer.confirm() 后发送。
+        invoice = self.create_invoice(out_no="payment-observed")
         Invoice.objects.filter(pk=invoice.pk).update(
-            notify_url="https://merchant.example.com/invoice-prenotify"
+            notify_url="https://merchant.example.com/invoice-observed"
         )
         invoice.refresh_from_db()
-        invoice.select_method(self.crypto, self.chain_a)
-        transfer = self.create_transfer(
-            chain=self.chain_a,
-            pay_amount=invoice.pay_amount,
-            pay_address=invoice.pay_address,
-        )
-        matched = InvoiceService.try_match_invoice(transfer)
-        self.assertTrue(matched)
-        create_event_mock.assert_called_once()
-        payload = create_event_mock.call_args.kwargs["payload"]
-        self.assertEqual(payload["type"], "invoice")
-        self.assertFalse(payload["data"]["confirmed"])
-        self.assertEqual(
-            create_event_mock.call_args.kwargs["delivery_url"],
-            "https://merchant.example.com/invoice-prenotify",
-        )
-
-    @patch("invoices.service.WebhookService.create_event")
-    def test_pre_notify_disabled_does_not_emit_webhook(self, create_event_mock):
-        # 关闭 pre_notify 时，try_match_invoice 不应发送任何 webhook。
-        invoice = self.create_invoice(out_no="payment-noprenotify")
         invoice.select_method(self.crypto, self.chain_a)
         transfer = self.create_transfer(
             chain=self.chain_a,
@@ -382,55 +320,9 @@ class InvoicePaymentSelectionTests(TestCase):
         matched = InvoiceService.try_match_invoice(transfer)
         self.assertTrue(matched)
         create_event_mock.assert_not_called()
-
-    @patch(
-        "invoices.service.WebhookService.create_event",
-        side_effect=Exception("boom"),
-    )
-    def test_pre_notify_failure_does_not_block_invoice_match(self, create_event_mock):
-        # 预通知发送异常时，invoice 匹配与状态推进不应被回滚。
-        self.project.pre_notify = True
-        self.project.save(update_fields=["pre_notify"])
-        invoice = self.create_invoice(out_no="payment-prenotify-fail")
-        invoice.select_method(self.crypto, self.chain_a)
-        transfer = self.create_transfer(
-            chain=self.chain_a,
-            pay_amount=invoice.pay_amount,
-            pay_address=invoice.pay_address,
-        )
-        matched = InvoiceService.try_match_invoice(transfer)
-        self.assertTrue(matched)
-        invoice.refresh_from_db()
-        self.assertEqual(invoice.status, InvoiceStatus.CONFIRMING)
-        self.assertEqual(invoice.transfer_id, transfer.pk)
-
-    def test_pre_notify_db_error_does_not_block_invoice_match(self):
-        # 关键回归：模拟 webhook 创建过程中触发 DatabaseError 并标记当前连接 needs_rollback；
-        # try_match_invoice 内的嵌套 savepoint 必须把回滚范围限制在 savepoint 内，
-        # 让外层 invoice 匹配事务仍能正常提交（invoice/paySlot/transfer 状态全部保留）。
-        def _simulate_db_error(*args, **kwargs):
-            # set_rollback 重现 Django 在真实 DB 错误时对连接打的回滚标记。
-            db_transaction.set_rollback(True)
-            raise DatabaseError("simulated db error")
-
-        self.project.pre_notify = True
-        self.project.save(update_fields=["pre_notify"])
-        invoice = self.create_invoice(out_no="payment-prenotify-dberror")
-        invoice.select_method(self.crypto, self.chain_a)
-        transfer = self.create_transfer(
-            chain=self.chain_a,
-            pay_amount=invoice.pay_amount,
-            pay_address=invoice.pay_address,
-        )
-        with patch(
-            "invoices.service.WebhookService.create_event",
-            side_effect=_simulate_db_error,
-        ):
-            matched = InvoiceService.try_match_invoice(transfer)
-        self.assertTrue(matched)
         invoice.refresh_from_db()
         transfer.refresh_from_db()
-        self.assertEqual(invoice.status, InvoiceStatus.CONFIRMING)
+        self.assertEqual(invoice.status, InvoiceStatus.WAITING)
         self.assertEqual(invoice.transfer_id, transfer.pk)
         self.assertEqual(transfer.type, TransferType.Invoice)
 
@@ -481,6 +373,7 @@ class InvoicePaymentSelectionTests(TestCase):
             pay_address=invoice.pay_address,
         )
         self.assertTrue(InvoiceService.try_match_invoice(transfer))
+        Transfer.objects.filter(pk=transfer.pk).update(status=TransferStatus.CONFIRMED)
         invoice.refresh_from_db()
 
         InvoiceService.confirm_invoice(invoice)
@@ -492,7 +385,10 @@ class InvoicePaymentSelectionTests(TestCase):
 
 class InvoiceFinalizeMethodsOrderingTests(TestCase):
     def test_requested_chain_codes_are_sorted_by_chain_sort_order(self):
-        project = Project.objects.create(name="Method Order Project")
+        project = Project.objects.create(
+            name="Method Order Project",
+            invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
+        )
         crypto = Crypto.objects.create(
             name="Tether Ordered",
             symbol="USDTO",
@@ -544,6 +440,7 @@ class InvoicePaymentSelectionConcurrencyTests(TransactionTestCase):
         self.user = User.objects.create(username="merchant-concurrency")
         self.project = Project.objects.create(
             name="ConcurrencyProject",
+            invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
         self.crypto = Crypto.objects.create(
             name="Tether USD Concurrency",
@@ -674,6 +571,7 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
         project = Project.objects.create(
             name="Invoice Contract Only Project",
             vault="0x0000000000000000000000000000000000008801",
+            invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
         usdt = Crypto.objects.create(
             name="Tether USD EVM",
@@ -749,6 +647,7 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
     def test_available_methods_ignores_cached_saas_chain_crypto_whitelist(self):
         project = Project.objects.create(
             name="Invoice SaaS All Methods Project",
+            invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
         eth_chain = create_active_evm_test_chain(code=ChainCode.Ethereum)
         bsc_chain = create_active_evm_test_chain(code=ChainCode.BSC)
@@ -810,6 +709,7 @@ class InvoiceContractBillingValidationTests(TestCase):
         self.project = Project.objects.create(
             name="Invoice Mixed Billing Project",
             vault="0x0000000000000000000000000000000000007801",
+            invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
         self.usdt = Crypto.objects.create(
             name="Tether USD",
@@ -983,14 +883,21 @@ class InvoiceContractBillingValidationTests(TestCase):
         )
 
 
-class InvoiceConfirmDropStatusTests(TestCase):
-    """confirm_invoice / drop_invoice 的状态前置校验测试。"""
+class InvoiceConfirmStatusTests(TestCase):
+    """confirm_invoice 的状态前置校验测试。"""
 
     def setUp(self):
         self.user = User.objects.create(username="merchant-status")
         self.project = Project.objects.create(
             name="StatusProject",
         )
+        self.crypto = Crypto.objects.create(
+            name="Status USDT",
+            symbol="STATUS-USDT",
+            prices={"USD": "1"},
+            coingecko_id="status-usdt",
+        )
+        self.chain = create_active_evm_test_chain(code=ChainCode.Ethereum)
 
     def _make_invoice(self, status):
         return Invoice.objects.create(
@@ -1004,27 +911,15 @@ class InvoiceConfirmDropStatusTests(TestCase):
             expires_at=timezone.now() + timedelta(minutes=10),
         )
 
-    def test_confirm_invoice_rejects_non_confirming_status(self):
-        # confirm_invoice 仅接受 CONFIRMING 状态，其余应抛出 InvoiceStatusError。
+    def test_confirm_invoice_rejects_unbound_payable_status(self):
+        # Invoice 只有绑定已确认 Transfer 后才能完成；WAITING/EXPIRED 本身不是可确认事实。
         for bad_status in [
             InvoiceStatus.WAITING,
-            InvoiceStatus.COMPLETED,
             InvoiceStatus.EXPIRED,
         ]:
             invoice = self._make_invoice(bad_status)
             with self.assertRaises(InvoiceStatusError):
                 InvoiceService.confirm_invoice(invoice)
-
-    def test_drop_invoice_rejects_non_confirming_status(self):
-        # drop_invoice 仅接受 CONFIRMING 状态，其余应抛出 InvoiceStatusError。
-        for bad_status in [
-            InvoiceStatus.WAITING,
-            InvoiceStatus.COMPLETED,
-            InvoiceStatus.EXPIRED,
-        ]:
-            invoice = self._make_invoice(bad_status)
-            with self.assertRaises(InvoiceStatusError):
-                InvoiceService.drop_invoice(invoice)
 
     @patch("invoices.service.send_saas_callback")
     @patch("invoices.service.WebhookService.create_event")
@@ -1033,12 +928,6 @@ class InvoiceConfirmDropStatusTests(TestCase):
     ):
         # 原生 Invoice 若配置了账单级 notify_url，最终通知应投递到该地址；
         # 为空时 WebhookEvent.delivery_url 维持默认空串，由投递层 fallback 到 Project.webhook。
-        crypto = Crypto.objects.create(
-            name="Status USDT",
-            symbol="STATUS-USDT",
-            prices={"USD": "1"},
-            coingecko_id="status-usdt",
-        )
         invoice = Invoice.objects.create(
             project=self.project,
             out_no="status-native-notify",
@@ -1046,12 +935,35 @@ class InvoiceConfirmDropStatusTests(TestCase):
             currency="USD",
             amount=Decimal("10"),
             methods={},
-            status=InvoiceStatus.CONFIRMING,
+            status=InvoiceStatus.WAITING,
             protocol=InvoiceProtocol.NATIVE,
-            crypto=crypto,
+            crypto=self.crypto,
+            chain=self.chain,
+            pay_address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000A01"
+            ),
+            pay_amount=Decimal("10"),
             notify_url="https://merchant.example.com/invoice-notify",
             expires_at=timezone.now() + timedelta(minutes=10),
         )
+        transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=1,
+            block_hash="0x" + "aa" * 32,
+            hash="0x" + "a1" * 32,
+            crypto=self.crypto,
+            from_address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000A02"
+            ),
+            to_address=invoice.pay_address,
+            value=Decimal("1000000000"),
+            amount=invoice.pay_amount,
+            status=TransferStatus.CONFIRMED,
+            timestamp=int(timezone.now().timestamp()),
+            datetime=timezone.now(),
+        )
+        Invoice.objects.filter(pk=invoice.pk).update(transfer=transfer)
+        invoice.refresh_from_db()
 
         InvoiceService.confirm_invoice(invoice)
 
@@ -1100,6 +1012,7 @@ class InvoiceExpiredMatchTests(TestCase):
         self.user = User.objects.create(username="merchant-expired-match")
         self.project = Project.objects.create(
             name="ExpiredMatchProject",
+            invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
         self.crypto = Crypto.objects.create(
             name="Tether Expired",
@@ -1170,7 +1083,7 @@ class InvoiceExpiredMatchTests(TestCase):
 
         self.assertTrue(matched)
         invoice.refresh_from_db()
-        self.assertEqual(invoice.status, InvoiceStatus.CONFIRMING)
+        self.assertEqual(invoice.status, InvoiceStatus.EXPIRED)
         self.assertEqual(invoice.transfer_id, transfer.pk)
 
 
@@ -1182,6 +1095,7 @@ class FallbackInvoiceExpiredTests(TestCase):
         self.user = User.objects.create(username="merchant-fallback")
         self.project = Project.objects.create(
             name="FallbackProject",
+            invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
         self.crypto = Crypto.objects.create(
             name="Tether Fallback",
@@ -1223,24 +1137,40 @@ class FallbackInvoiceExpiredTests(TestCase):
         invoice.refresh_from_db()
         self.assertEqual(invoice.status, InvoiceStatus.EXPIRED)
 
-    def test_fallback_skips_confirming_invoice(self):
-        # 已进入 CONFIRMING 的账单不应被 fallback 误过期。
+    def test_fallback_skips_waiting_invoice_with_observed_transfer(self):
+        # 已观察到链上付款的 WAITING 账单正在等待 Transfer 确认，不应被 fallback 误过期。
         invoice = Invoice.objects.create(
             project=self.project,
-            out_no="fallback-confirming",
-            title="Fallback confirming",
+            out_no="fallback-observed",
+            title="Fallback observed",
             currency="USDTF",
             amount=Decimal("10"),
             methods={"USDTF": [ChainCode.Ethereum]},
-            status=InvoiceStatus.CONFIRMING,
             expires_at=timezone.now() - timedelta(minutes=1),
         )
+        invoice.select_method(self.crypto, self.chain)
+        transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=1,
+            block_hash="0x" + "bb" * 32,
+            hash="0x" + "f1" * 32,
+            crypto=self.crypto,
+            from_address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000F3"
+            ),
+            to_address=invoice.pay_address,
+            value=Decimal(invoice.pay_amount * Decimal("100000000")),
+            amount=invoice.pay_amount,
+            timestamp=int(timezone.now().timestamp()),
+            datetime=timezone.now(),
+        )
+        Invoice.objects.filter(pk=invoice.pk).update(transfer=transfer)
 
         fallback_invoice_expired()
 
         invoice.refresh_from_db()
-        # 状态不变
-        self.assertEqual(invoice.status, InvoiceStatus.CONFIRMING)
+        self.assertEqual(invoice.status, InvoiceStatus.WAITING)
+        self.assertEqual(invoice.transfer_id, transfer.pk)
 
 
 class CheckExpiredAtomicityTests(TransactionTestCase):
@@ -1251,6 +1181,7 @@ class CheckExpiredAtomicityTests(TransactionTestCase):
         self.user = User.objects.create(username="merchant-atomic")
         self.project = Project.objects.create(
             name="AtomicProject",
+            invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
         self.crypto = Crypto.objects.create(
             name="Tether Atomic",
@@ -1274,8 +1205,8 @@ class CheckExpiredAtomicityTests(TransactionTestCase):
         )
 
     def test_check_expired_skips_already_matched_invoice(self):
-        # 并发场景：check_expired 执行时如果账单已被 try_match 推进到 CONFIRMING，
-        # select_for_update + status 条件应使其安全跳过，不会误过期。
+        # 并发场景：check_expired 执行时如果账单已绑定 Transfer，
+        # select_for_update + transfer 条件应使其安全跳过，不会误过期。
         invoice = Invoice.objects.create(
             project=self.project,
             out_no="atomic-order",
@@ -1305,12 +1236,15 @@ class CheckExpiredAtomicityTests(TransactionTestCase):
             datetime=now,
         )
         InvoiceService.try_match_invoice(transfer)
+        Invoice.objects.filter(pk=invoice.pk).update(
+            expires_at=timezone.now() - timedelta(seconds=1)
+        )
 
-        # check_expired 应该安全跳过已 CONFIRMING 的账单
+        # check_expired 应该安全跳过已观察到付款的账单
         check_expired(invoice.pk)
 
         invoice.refresh_from_db()
-        self.assertEqual(invoice.status, InvoiceStatus.CONFIRMING)
+        self.assertEqual(invoice.status, InvoiceStatus.WAITING)
         self.assertEqual(invoice.transfer_id, transfer.pk)
 
 
@@ -1419,6 +1353,7 @@ class InvoiceCreatePermissionCheckTests(TestCase):
         """支付页选择支付方式时只复检 invoice 账号状态。"""
         invoice = Mock(
             status=InvoiceStatus.WAITING,
+            transfer_id=None,
             expires_at=timezone.now() + timedelta(minutes=10),
             methods={"USDT": ["ethereum-mainnet"]},
             project=Mock(appid=self.project.appid),
@@ -1457,6 +1392,42 @@ class InvoiceCreatePermissionCheckTests(TestCase):
             appid=self.project.appid,
             action="invoice",
         )
+
+    @patch("invoices.viewsets.check_saas_permission")
+    def test_select_method_rejects_observed_invoice(self, mock_check):
+        """Transfer 已绑定后账单仍是 WAITING,但不再允许重选支付方式。"""
+        invoice = Mock(
+            status=InvoiceStatus.WAITING,
+            transfer_id=123,
+            expires_at=timezone.now() + timedelta(minutes=10),
+            methods={"USDT": ["ethereum-mainnet"]},
+            project=Mock(appid=self.project.appid),
+        )
+        serializer_stub = SimpleNamespace(
+            is_valid=Mock(return_value=True),
+            validated_data={"crypto": "USDT", "chain": "ethereum-mainnet"},
+            errors={},
+        )
+
+        with (
+            patch.object(
+                InvoiceViewSet, "get_serializer", return_value=serializer_stub
+            ),
+            patch.object(InvoiceViewSet, "get_object", return_value=invoice),
+        ):
+            response = InvoiceViewSet.as_view({"post": "select_method"})(
+                APIRequestFactory().post(
+                    "/v1/invoice/inv-0002/select-method",
+                    {"crypto": "USDT", "chain": "ethereum-mainnet"},
+                    format="json",
+                    HTTP_XC_APPID=self.project.appid,
+                ),
+                sys_no="inv-0002",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], ErrorCode.INVALID_INVOICE_STATUS.code)
+        mock_check.assert_not_called()
 
     @patch("invoices.viewsets.check_saas_permission")
     def test_create_does_not_use_deposit_feature_gate(self, mock_check):
@@ -1575,26 +1546,13 @@ class InvoiceSelectForUpdateLockScopeTests(InvoicePaymentSelectionTests):
             pay_address=invoice.pay_address,
         )
         InvoiceService.try_match_invoice(transfer)
+        Transfer.objects.filter(pk=transfer.pk).update(status=TransferStatus.CONFIRMED)
         invoice.refresh_from_db()
 
         with CaptureQueriesContext(connection) as captured:
             InvoiceService.confirm_invoice(invoice)
 
         self._assert_lock_scope_is_self_only(self._for_update_tails(captured))
-
-    def test_drop_invoice_locks_only_self_rows(self):
-        invoice = self.create_invoice(out_no="lock-scope-drop")
-        invoice.select_method(self.crypto, self.chain_a)
-        transfer = self.create_transfer(
-            chain=self.chain_a,
-            pay_amount=invoice.pay_amount,
-            pay_address=invoice.pay_address,
-        )
-        InvoiceService.try_match_invoice(transfer)
-        invoice.refresh_from_db()
-
-        with CaptureQueriesContext(connection):
-            InvoiceService.drop_invoice(invoice)
 
 
 class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
@@ -2124,7 +2082,8 @@ class TryMatchContractInvoiceTest(TestCase, InvoiceTestMixin):
 
         self.assertTrue(matched)
         self.invoice.refresh_from_db()
-        self.assertEqual(self.invoice.status, InvoiceStatus.CONFIRMING)
+        self.assertEqual(self.invoice.status, InvoiceStatus.WAITING)
+        self.assertEqual(self.invoice.transfer_id, transfer.pk)
 
     def test_does_not_match_when_transfer_amount_greater_than_pay_amount(self):
         transfer = self._make_transfer(Decimal("150"))
@@ -2154,7 +2113,7 @@ class TryMatchContractInvoiceTest(TestCase, InvoiceTestMixin):
         self.assertTrue(matched)
         self.invoice.refresh_from_db()
         newer_invoice.refresh_from_db()
-        self.assertEqual(self.invoice.status, InvoiceStatus.CONFIRMING)
+        self.assertEqual(self.invoice.status, InvoiceStatus.WAITING)
         self.assertEqual(self.invoice.transfer_id, transfer.pk)
         self.assertEqual(newer_invoice.status, InvoiceStatus.WAITING)
 
@@ -2169,6 +2128,7 @@ class TryMatchContractInvoiceTest(TestCase, InvoiceTestMixin):
     ):
         transfer = self._make_transfer(Decimal("100"))
         InvoiceService.try_match_invoice(transfer)
+        Transfer.objects.filter(pk=transfer.pk).update(status=TransferStatus.CONFIRMED)
         self.invoice.refresh_from_db()
 
         InvoiceService.confirm_invoice(self.invoice)

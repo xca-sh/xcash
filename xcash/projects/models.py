@@ -52,11 +52,6 @@ class Project(models.Model):
         default=0,
         verbose_name=_("连续失败次数"),
     )
-    pre_notify = models.BooleanField(
-        _("开启预通知"),
-        default=False,
-        help_text="刚出块(尚未达到区块确认数)，就发送一次预通知",
-    )
     fast_confirm_threshold = models.DecimalField(
         max_digits=10,
         decimal_places=2,

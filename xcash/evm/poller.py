@@ -8,6 +8,8 @@ from chains.adapters import TxCheckStatus
 from chains.models import Chain
 from chains.models import TxTask
 from chains.models import TxTaskStatus
+from chains.models import TxTaskType
+from chains.vault_slots import mark_deployed_if_on_chain_for_task
 from common.time import ago
 from evm.constants import EVM_PENDING_REBROADCAST_TIMEOUT
 from evm.constants import EVM_PENDING_RECEIPT_POLL_DELAY
@@ -20,7 +22,7 @@ class EvmTaskPoller:
     """轮询内部 EVM 任务的链上终局状态。
 
     对 PENDING_CHAIN 超过短轮询延迟仍未终局的任务，遍历所有历史 tx_hash 查询 receipt：
-    - 查到 receipt (status=1) -> 交给内部交易处理器按 TxTask 收口
+    - 查到 receipt (status=1) 且确认数达标 -> 交给内部交易处理器按 TxTask 收口
     - 查到 receipt (status=0) -> 标记失败终局
     - 所有 hash 均无 receipt 且超过重播阈值 -> 交易可能已被 mempool 丢弃，重新广播
     """
@@ -55,6 +57,11 @@ class EvmTaskPoller:
             if status == TxCheckStatus.SUCCEEDED:
                 assert tx_hash is not None  # SUCCEEDED 分支一定携带命中的 hash
                 assert receipt is not None
+                if not cls._has_required_confirmations(
+                    chain=evm_task.chain,
+                    receipt=receipt,
+                ):
+                    continue
                 try:
                     cls.process_succeeded_receipt(
                         evm_task=evm_task,
@@ -137,24 +144,35 @@ class EvmTaskPoller:
         return TxCheckStatus.MISSING, None, None
 
     @staticmethod
+    def _has_required_confirmations(*, chain: Chain, receipt: dict) -> bool:
+        block_number = receipt.get("blockNumber")
+        if block_number is None:
+            return False
+        confirmed_at_or_before = chain.latest_block_number - chain.confirm_block_count
+        return int(block_number) <= confirmed_at_or_before
+
+    @staticmethod
     def process_succeeded_receipt(
         *,
         evm_task: EvmTxTask,
         tx_hash: str,
         receipt: dict,
-    ) -> None:
-        """轮询命中成功 receipt 时，把交易交给内部处理器统一推进。"""
+    ) -> bool:
+        """成功 receipt 达到确认数后，把交易交给内部处理器统一推进。"""
         from evm.internal_tx.processor import process_internal_transaction
 
         chain = evm_task.chain
+        if not EvmTaskPoller._has_required_confirmations(
+            chain=chain,
+            receipt=receipt,
+        ):
+            return False
         tx = chain.w3.eth.get_transaction(tx_hash)
-        process_internal_transaction(chain=chain, tx=dict(tx), receipt=receipt)
+        return process_internal_transaction(chain=chain, tx=dict(tx), receipt=receipt)
 
     @staticmethod
     @db_transaction.atomic
     def finalize_failed_task(*, evm_task: EvmTxTask) -> bool:
-        from evm.internal_tx.routing import get_handler
-
         locked_task = EvmTxTask.objects.select_for_update().get(pk=evm_task.pk)
 
         base_task = locked_task.base_task
@@ -168,14 +186,6 @@ class EvmTaskPoller:
         if not updated:
             return False
 
-        try:
-            handler = get_handler(base_task.tx_type)
-        except KeyError:
-            logger.warning(
-                "poller 收口失败但 handler 未注册",
-                tx_type=base_task.tx_type,
-                base_task_id=base_task.pk,
-            )
-            return True
-        handler.finalize_failed(base_task)
+        if base_task.tx_type == TxTaskType.VaultSlotDeploy:
+            mark_deployed_if_on_chain_for_task(base_task)
         return True

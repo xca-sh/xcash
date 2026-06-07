@@ -241,7 +241,6 @@ class EvmErc20ScannerTests(TestCase):
             active=True,
         )
 
-    @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
@@ -252,7 +251,6 @@ class EvmErc20ScannerTests(TestCase):
         get_logs_mock,
         _get_block_timestamp_mock,
         _enqueue_processing_mock,
-        _mark_pending_confirm_mock,
     ):
         # 首次创建统一日志游标时从首个批次开始推进。
         get_latest_block_number_mock.return_value = 100
@@ -265,7 +263,6 @@ class EvmErc20ScannerTests(TestCase):
         )
         self.assertEqual(cursor.last_scanned_block, 32)
 
-    @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_transaction")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
@@ -278,7 +275,6 @@ class EvmErc20ScannerTests(TestCase):
         get_block_timestamp_mock,
         get_transaction_mock,
         _enqueue_processing_mock,
-        _mark_pending_confirm_mock,
     ):
         # 命中的 ERC20 Transfer 应落到统一 Transfer 表；首扫会直接对齐链头附近窗口。
         get_latest_block_number_mock.return_value = 100
@@ -650,7 +646,6 @@ class EvmErc20ScannerTests(TestCase):
         rpc_client.get_transaction_receipt.assert_not_called()
         self.assertEqual(Transfer.objects.count(), 0)
 
-    @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_transaction")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
@@ -663,7 +658,6 @@ class EvmErc20ScannerTests(TestCase):
         get_block_timestamp_mock,
         get_transaction_mock,
         _enqueue_processing_mock,
-        _mark_pending_confirm_mock,
     ):
         # 手动重扫同一区间会重复看到同一日志，但统一唯一键必须保证不会重复落库。
         get_latest_block_number_mock.return_value = 100
@@ -693,7 +687,6 @@ class EvmErc20ScannerTests(TestCase):
         "currencies.models.Crypto.get_decimals",
         side_effect=AssertionError("scanner should use prefetched token decimals"),
     )
-    @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_transaction")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
@@ -706,7 +699,6 @@ class EvmErc20ScannerTests(TestCase):
         get_block_timestamp_mock,
         get_transaction_mock,
         _enqueue_processing_mock,
-        _mark_pending_confirm_mock,
         _crypto_get_decimals_mock,
     ):
         # ERC20 扫描已持有 CryptoOnChain 行数据，应直接复用链特定精度，避免逐条日志额外查库。

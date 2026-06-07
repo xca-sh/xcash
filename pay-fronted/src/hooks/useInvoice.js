@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { getInvoice } from "@/lib/api"
+import { isPaymentConfirming } from "@/lib/invoiceStatus"
 import en from "@/locales/en.json"
 import zh from "@/locales/zh.json"
 
@@ -65,7 +66,7 @@ export function useInvoice(sysNo) {
     fetchInvoice()
   }, [fetchInvoice])
 
-  // 自动轮询 - 在待支付(已选择支付方式)或确认中状态
+  // 自动轮询 - 在待支付(已选择支付方式)或 Transfer 确认中状态
   useEffect(() => {
     if (!invoice) return
 
@@ -74,7 +75,7 @@ export function useInvoice(sysNo) {
     )
     const shouldPoll =
       ((invoice.status === "waiting" && hasPaymentMethod) ||
-        invoice.status === "confirming") &&
+        isPaymentConfirming(invoice)) &&
       invoice.status !== "expired" &&
       invoice.status !== "completed"
 

@@ -78,19 +78,26 @@ def build_dashboard_metrics() -> dict:
     completed_30d_count = int(rolling_30d["count"] or 0)
 
     active_invoice_metrics = invoice_queryset.aggregate(
-        waiting_count=Count("id", filter=Q(status=InvoiceStatus.WAITING)),
+        waiting_count=Count(
+            "id",
+            filter=Q(status=InvoiceStatus.WAITING, transfer__isnull=True),
+        ),
         waiting_worth=Coalesce(
-            Sum("worth", filter=Q(status=InvoiceStatus.WAITING)),
+            Sum("worth", filter=Q(status=InvoiceStatus.WAITING, transfer__isnull=True)),
             ZERO_DECIMAL,
         ),
-        confirming_count=Count("id", filter=Q(status=InvoiceStatus.CONFIRMING)),
+        confirming_count=Count(
+            "id",
+            filter=Q(status=InvoiceStatus.WAITING, transfer__isnull=False),
+        ),
         confirming_worth=Coalesce(
-            Sum("worth", filter=Q(status=InvoiceStatus.CONFIRMING)),
+            Sum("worth", filter=Q(status=InvoiceStatus.WAITING, transfer__isnull=False)),
             ZERO_DECIMAL,
         ),
     )
     expiring_soon_count = invoice_queryset.filter(
         status=InvoiceStatus.WAITING,
+        transfer__isnull=True,
         expires_at__gte=now,
         expires_at__lte=now + timedelta(minutes=30),
     ).count()
@@ -145,8 +152,14 @@ def build_dashboard_metrics() -> dict:
                 Sum("worth", filter=Q(status=InvoiceStatus.COMPLETED)),
                 ZERO_DECIMAL,
             ),
-            waiting_orders=Count("id", filter=Q(status=InvoiceStatus.WAITING)),
-            confirming_orders=Count("id", filter=Q(status=InvoiceStatus.CONFIRMING)),
+            waiting_orders=Count(
+                "id",
+                filter=Q(status=InvoiceStatus.WAITING, transfer__isnull=True),
+            ),
+            confirming_orders=Count(
+                "id",
+                filter=Q(status=InvoiceStatus.WAITING, transfer__isnull=False),
+            ),
         )
         .order_by("-gmv", "-completed_orders")[:5]
     )
@@ -172,7 +185,8 @@ def build_dashboard_metrics() -> dict:
     )
     recent_stalled_invoices = list(
         invoice_queryset.filter(
-            status=InvoiceStatus.CONFIRMING,
+            status=InvoiceStatus.WAITING,
+            transfer__isnull=False,
             updated_at__lte=now - timedelta(minutes=30),
         )
         .select_related("project", "crypto", "chain")

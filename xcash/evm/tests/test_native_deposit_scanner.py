@@ -109,12 +109,10 @@ class EvmLogScannerTests(TestCase):
             "transactionHash": bytes.fromhex("cd" * 32),
         }
 
-    @patch("chains.service.TransferService._mark_tx_task_pending_confirm")
     @patch("chains.service.TransferService.enqueue_processing")
     def test_scan_range_creates_native_transfer_from_deposit_event(
         self,
         _enqueue_processing_mock,
-        _mark_pending_confirm_mock,
     ):
         rpc_client = type(
             "Rpc",
@@ -143,6 +141,46 @@ class EvmLogScannerTests(TestCase):
         self.assertEqual(transfer.amount, Decimal("1"))
         self.assertEqual(transfer.hash, "0x" + "cd" * 32)
         self.assertEqual(transfer.block_hash, "0x" + "22" * 32)
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    def test_scan_range_skips_native_event_from_system_observed_address(
+        self,
+        enqueue_processing_mock,
+    ):
+        system_payer = Web3.to_checksum_address("0x" + "bc" * 20)
+        system_customer = Customer.objects.create(
+            project=self.project,
+            uid="native-scanner-system-customer",
+        )
+        VaultSlot.objects.create(
+            customer=system_customer,
+            usage=VaultSlotUsage.DEPOSIT,
+            chain=self.chain,
+            address=system_payer,
+            salt=b"\x02" * 32,
+        )
+        rpc_client = type(
+            "Rpc",
+            (),
+            {
+                "get_logs": lambda *_args, **_kwargs: [
+                    self._build_native_log(payer=system_payer)
+                ],
+                "get_transaction": lambda *_args, **_kwargs: {"to": self.slot.address},
+                "get_block_timestamp": lambda *_args, **_kwargs: 1_700_000_000,
+            },
+        )()
+
+        EvmLogScanner.scan_range(
+            chain=self.chain,
+            rpc_client=rpc_client,
+            watch_set=self.watch_set,
+            from_block=120,
+            to_block=120,
+        )
+
+        self.assertFalse(Transfer.objects.exists())
+        enqueue_processing_mock.assert_not_called()
 
     @patch("evm.scanner.observed_transfers.TransferService.create_observed_transfer")
     def test_scan_range_builds_observed_payload_for_native_event(

@@ -180,6 +180,8 @@ class EvmLogScanner:
             if topic0 == XCASH_NATIVE_RECEIVED_TOPIC0.lower():
                 if address := cls._normalize_address(log.get("address")):
                     candidates.add(address)
+                if len(topics) >= 2 and (payer := cls._topic_to_address(topics[1])):
+                    candidates.add(payer)
                 continue
             if topic0 == ERC20_TRANSFER_TOPIC0.lower() and len(topics) >= 3:
                 for topic in topics[1:3]:

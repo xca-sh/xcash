@@ -99,7 +99,7 @@ def notify_vault_slot_collect_gas_fee(*, tx_task: TxTask) -> None:
 
     归集交易的资金接收方是系统外的商户 vault,不会被扫描器当作入账观测;
     因此 slot/project 经归集计划(VaultSlotCollectSchedule.tx_task)反查,
-    而非依赖一笔 Collect 类型的 Transfer。sys_no 以 tx_task.pk 收敛,保证一次
+    而非依赖归集 Transfer。sys_no 以 tx_task.pk 收敛,保证一次
     归集任务恰好计费一次。
     """
     if not tx_task.tx_hash:
