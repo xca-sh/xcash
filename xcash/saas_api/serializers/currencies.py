@@ -13,7 +13,7 @@ class CryptoOnChainSerializer(serializers.ModelSerializer):
         fields = ["chain", "address", "decimals"]
 
 
-class InternalCryptoSerializer(serializers.ModelSerializer):
+class SaasCryptoSerializer(serializers.ModelSerializer):
     crypto_on_chains = CryptoOnChainSerializer(many=True, read_only=True)
 
     class Meta:
@@ -28,7 +28,7 @@ class InternalCryptoSerializer(serializers.ModelSerializer):
         ]
 
 
-class InternalChainSerializer(serializers.ModelSerializer):
+class SaasChainSerializer(serializers.ModelSerializer):
     native_coin = serializers.SerializerMethodField()
 
     class Meta:

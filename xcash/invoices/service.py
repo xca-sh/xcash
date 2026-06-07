@@ -20,9 +20,9 @@ from chains.service import ChainService
 from chains.service import TransferService
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
-from common.internal_callback import CallbackEvent
-from common.internal_callback import InternalCallback
-from common.internal_callback import send_internal_callback
+from common.saas_callback import CallbackEvent
+from common.saas_callback import SaasCallback
+from common.saas_callback import send_saas_callback
 from common.utils.math import format_decimal_stripped
 from currencies.service import CryptoService
 from currencies.service import FiatService
@@ -432,8 +432,8 @@ class InvoiceService:
         # 设计决策：开源版本不计算内部手续费或月成交量统计，
         # 账单状态机在 COMPLETED 即为终局，无需后续财务核算步骤。
 
-        send_internal_callback(
-            InternalCallback(
+        send_saas_callback(
+            SaasCallback(
                 event=CallbackEvent.INVOICE_CONFIRMED,
                 appid=invoice.project.appid,
                 sys_no=invoice.sys_no,

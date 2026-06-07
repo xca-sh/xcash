@@ -4,7 +4,7 @@ from chains.serializers import TransferSerializer
 from deposits.models import Deposit
 
 
-class InternalDepositDetailSerializer(serializers.ModelSerializer):
+class SaasDepositDetailSerializer(serializers.ModelSerializer):
     tx = TransferSerializer(source="transfer", read_only=True)
     uid = serializers.CharField(source="customer.uid", read_only=True)
     crypto = serializers.SlugRelatedField(

@@ -4,7 +4,7 @@ from chains.serializers import TransferSerializer
 from invoices.models import Invoice
 
 
-class InternalInvoiceDetailSerializer(serializers.ModelSerializer):
+class SaasInvoiceDetailSerializer(serializers.ModelSerializer):
     tx = TransferSerializer(source="transfer", read_only=True)
     crypto = serializers.SlugRelatedField(slug_field="symbol", read_only=True)
     chain = serializers.SlugRelatedField(slug_field="code", read_only=True)

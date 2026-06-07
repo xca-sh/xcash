@@ -1,9 +1,9 @@
-from internal_api.authentication import InternalTokenAuthentication
-from internal_api.serializers.epay import EpayMerchantDetailSerializer
-from internal_api.serializers.epay import EpayMerchantUpdateSerializer
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from saas_api.authentication import SaasTokenAuthentication
+from saas_api.serializers.epay import EpayMerchantDetailSerializer
+from saas_api.serializers.epay import EpayMerchantUpdateSerializer
 
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
@@ -20,7 +20,7 @@ class EpayMerchantView(APIView):
     不暴露 DELETE — 每个项目必须始终具备 EPay 商户身份。
     """
 
-    authentication_classes = [InternalTokenAuthentication]
+    authentication_classes = [SaasTokenAuthentication]
     permission_classes = [IsAuthenticated]
     http_method_names = ["get", "patch", "head", "options"]
 

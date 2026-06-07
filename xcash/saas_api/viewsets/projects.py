@@ -1,21 +1,21 @@
 from django.db import transaction as db_transaction
-from internal_api.authentication import InternalTokenAuthentication
-from internal_api.serializers.projects import ProjectCreateSerializer
-from internal_api.serializers.projects import ProjectDetailSerializer
-from internal_api.serializers.projects import ProjectUpdateSerializer
-from internal_api.serializers.projects import ProjectVaultSetSerializer
 from rest_framework import status as drf_status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
+from saas_api.authentication import SaasTokenAuthentication
+from saas_api.serializers.projects import ProjectCreateSerializer
+from saas_api.serializers.projects import ProjectDetailSerializer
+from saas_api.serializers.projects import ProjectUpdateSerializer
+from saas_api.serializers.projects import ProjectVaultSetSerializer
 
 from invoices.models import EpayMerchant
 from projects.models import Project
 
 
 class ProjectViewSet(ModelViewSet):
-    authentication_classes = [InternalTokenAuthentication]
+    authentication_classes = [SaasTokenAuthentication]
     permission_classes = [IsAuthenticated]
     # Project 模型本身未在 Meta 里声明 ordering，启用全局分页后必须显式排序，
     # 否则 DRF 分页器会警告翻页结果可能重复/缺失。按创建时间倒序是列表页直觉顺序。

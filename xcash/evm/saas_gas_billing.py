@@ -13,9 +13,9 @@ from chains.models import Chain
 from chains.models import Transfer
 from chains.models import TxTask
 from chains.models import VaultSlot
-from common.internal_callback import CallbackEvent
-from common.internal_callback import InternalCallback
-from common.internal_callback import send_internal_callback
+from common.saas_callback import CallbackEvent
+from common.saas_callback import SaasCallback
+from common.saas_callback import send_saas_callback
 
 logger = structlog.get_logger()
 
@@ -112,8 +112,8 @@ def notify_vault_slot_deploy_gas_fee(*, tx_task: TxTask) -> None:
         )
         return
 
-    send_internal_callback(
-        InternalCallback(
+    send_saas_callback(
+        SaasCallback(
             event=CallbackEvent.GAS_FEE_VAULT_SLOT_DEPLOY,
             appid=slot.project.appid,
             sys_no=f"vault-slot-deploy:{tx_task.pk}",
@@ -141,8 +141,8 @@ def notify_vault_slot_collect_gas_fee(*, transfer: Transfer) -> None:
         )
         return
 
-    send_internal_callback(
-        InternalCallback(
+    send_saas_callback(
+        SaasCallback(
             event=CallbackEvent.GAS_FEE_VAULT_SLOT_COLLECT,
             appid=slot.project.appid,
             sys_no=f"vault-slot-collect:{transfer.pk}",

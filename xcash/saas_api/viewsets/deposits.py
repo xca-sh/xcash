@@ -1,13 +1,13 @@
 import re
 
-from internal_api.authentication import InternalTokenAuthentication
-from internal_api.serializers.deposits import InternalDepositDetailSerializer
 from rest_framework.decorators import action
 from rest_framework.mixins import ListModelMixin
 from rest_framework.mixins import RetrieveModelMixin
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
+from saas_api.authentication import SaasTokenAuthentication
+from saas_api.serializers.deposits import SaasDepositDetailSerializer
 
 from chains.capabilities import ChainProductCapabilityService
 from chains.constants import ChainType
@@ -23,10 +23,10 @@ from projects.models import Project
 UID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,128}$")
 
 
-class InternalDepositViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
-    authentication_classes = [InternalTokenAuthentication]
+class SaasDepositViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
+    authentication_classes = [SaasTokenAuthentication]
     permission_classes = [IsAuthenticated]
-    serializer_class = InternalDepositDetailSerializer
+    serializer_class = SaasDepositDetailSerializer
     lookup_field = "sys_no"
 
     def get_queryset(self):

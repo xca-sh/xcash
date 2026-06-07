@@ -1,4 +1,4 @@
-"""POST /internal/v1/projects/{appid}/vault 的行为契约测试。
+"""POST /saas/v1/projects/{appid}/vault 的行为契约测试。
 
 覆盖：set-once 写入、不可变性（已设置则 409）、鉴权。
 """
@@ -7,7 +7,7 @@ import pytest
 
 from projects.models import Project
 
-AUTH_HEADER = "Bearer test-internal-token"
+AUTH_HEADER = "Bearer test-saas-token"
 VALID_VAULT = "0x52908400098527886E0F7030069857D2E4169EE7"
 
 
@@ -17,7 +17,7 @@ def project(db):
 
 
 def _url(project):
-    return f"/internal/v1/projects/{project.appid}/vault"
+    return f"/saas/v1/projects/{project.appid}/vault"
 
 
 @pytest.mark.django_db

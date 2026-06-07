@@ -2,20 +2,20 @@ import pytest
 
 from projects.models import Project
 
-AUTH_HEADER = "Bearer test-internal-token"
+AUTH_HEADER = "Bearer test-saas-token"
 
 
 @pytest.mark.django_db
-class TestInternalDepositEndpoint:
+class TestSaasDepositEndpoint:
 
     def test_unknown_chain_code_still_returns_invalid_chain(self, client, settings):
-        settings.INTERNAL_API_TOKEN = "test-internal-token"
+        settings.SAAS_API_TOKEN = "test-saas-token"
         project = Project.objects.create(
-            name="internal-deposit-project-2",
+            name="saas-deposit-project-2",
         )
 
         response = client.get(
-            f"/internal/v1/projects/{project.appid}/deposits/address",
+            f"/saas/v1/projects/{project.appid}/deposits/address",
             {"uid": "user-1", "chain": "missing-chain"},
             HTTP_AUTHORIZATION=AUTH_HEADER,
         )

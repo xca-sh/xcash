@@ -15,7 +15,7 @@ import pytest
 from projects.models import InvoiceReceivingMode
 from projects.models import Project
 
-AUTH_HEADER = "Bearer test-internal-token"
+AUTH_HEADER = "Bearer test-saas-token"
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def project(db):
 
 
 def _url(project):
-    return f"/internal/v1/projects/{project.appid}"
+    return f"/saas/v1/projects/{project.appid}"
 
 
 # ---------- HTTP 方法拦截 ----------

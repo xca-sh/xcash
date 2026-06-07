@@ -1227,7 +1227,7 @@ class EpayNotifyTests(TestCase):
         )
         enqueue_mock.assert_called_once_with(event)
 
-    @patch("invoices.service.send_internal_callback")
+    @patch("invoices.service.send_saas_callback")
     @patch("invoices.epay.service.EpaySubmitService.enqueue_paid_notify")
     @patch("webhooks.service.WebhookService.create_event")
     @patch("invoices.epay.service.InvoiceService.initialize_invoice")
@@ -1251,7 +1251,7 @@ class EpayNotifyTests(TestCase):
         epay_notify_mock.assert_called_once()
         native_webhook_mock.assert_not_called()
 
-    @patch("invoices.service.send_internal_callback")
+    @patch("invoices.service.send_saas_callback")
     @patch("invoices.epay.service.EpaySubmitService.enqueue_paid_notify")
     @patch("invoices.service.WebhookService.create_event")
     @patch("invoices.epay.service.InvoiceService.initialize_invoice")

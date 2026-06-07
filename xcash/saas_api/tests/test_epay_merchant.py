@@ -1,4 +1,4 @@
-"""EpayMerchant internal_api 单例资源接口的回归测试。
+"""EpayMerchant saas_api 单例资源接口的回归测试。
 
 行为契约：
 - 系统级 lazy create：GET 永远返回 200，没有"未配置"概念
@@ -13,7 +13,7 @@ import pytest
 from invoices.models import EpayMerchant
 from projects.models import Project
 
-AUTH_HEADER = "Bearer test-internal-token"
+AUTH_HEADER = "Bearer test-saas-token"
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def _other_project(name: str = "other-project") -> Project:
 
 
 def _url(project):
-    return f"/internal/v1/projects/{project.appid}/epay-merchant"
+    return f"/saas/v1/projects/{project.appid}/epay-merchant"
 
 
 VALID_NEW_SECRET = "user-rotated-secret-key-32chars-x"
@@ -180,13 +180,13 @@ class TestEpayMerchantSafety:
         assert response.status_code == 405
         assert EpayMerchant.objects.filter(project=project).exists()
 
-    def test_requires_internal_token(self, client, project):
+    def test_requires_saas_token(self, client, project):
         response = client.get(_url(project))
         assert response.status_code == 401
 
     def test_returns_404_for_unknown_appid(self, client):
         response = client.get(
-            "/internal/v1/projects/unknown-appid/epay-merchant",
+            "/saas/v1/projects/unknown-appid/epay-merchant",
             HTTP_AUTHORIZATION=AUTH_HEADER,
         )
         assert response.status_code == 404
@@ -195,10 +195,10 @@ class TestEpayMerchantSafety:
 @pytest.mark.django_db
 class TestProjectCreateAutoProvisions:
     def test_project_create_auto_provisions_epay_merchant(self, client):
-        # 通过 internal_api 创建 Project，应自动配套创建 EpayMerchant。
+        # 通过 saas_api 创建 Project，应自动配套创建 EpayMerchant。
         # Wallet.generate 在主系统内部完成助记词生成与加密，无需 mock 外部 signer。
         response = client.post(
-            "/internal/v1/projects",
+            "/saas/v1/projects",
             data={"name": "auto-provision-project"},
             content_type="application/json",
             HTTP_AUTHORIZATION=AUTH_HEADER,

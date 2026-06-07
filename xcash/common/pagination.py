@@ -1,6 +1,6 @@
 """通用分页类。
 
-historical：internal_api 的 List 端点此前直接返回裸数组，
+historical：saas_api 的 List 端点此前直接返回裸数组，
 导致 xcash-saas 前端无法依赖 {count, next, previous, results} 渲染分页。
 此处提供统一的 page/size 分页器，通过 settings.REST_FRAMEWORK 全局启用，
 覆盖所有使用 GenericAPIView 的 ViewSet（currencies/chains 显式设

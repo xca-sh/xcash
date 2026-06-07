@@ -21,7 +21,7 @@ _RETRY_BACKOFF = (8, 60, 300, 600, 1800, 3600)
 
 
 class CallbackEvent(models.TextChoices):
-    """xcash → SaaS 内部回调的事件枚举，限定 event 可选值。
+    """xcash → SaaS 回调的事件枚举，限定 event 可选值。
 
     命名空间即业务大类（invoice.* / deposit.* / gas_fee.*），SaaS 据此路由。
     """
@@ -39,8 +39,8 @@ class CallbackEvent(models.TextChoices):
 
 
 @dataclass(frozen=True, kw_only=True)
-class InternalCallback:
-    """xcash → SaaS 内部回调的统一数据结构（契约的单一定义处）。
+class SaasCallback:
+    """xcash → SaaS 回调的统一数据结构（契约的单一定义处）。
 
     业务大类由 event 命名空间表达（invoice.* / deposit.* / gas_fee.*），SaaS 按 event 路由。
     金额按 event 大类二选一、且必有其一（由 __post_init__ 强约束，杜绝
@@ -84,16 +84,16 @@ def _retry_countdown(retries: int) -> int:
     return _RETRY_BACKOFF[min(retries, len(_RETRY_BACKOFF) - 1)]
 
 
-def send_internal_callback(callback: InternalCallback) -> None:
+def send_saas_callback(callback: SaasCallback) -> None:
     """
-    在事务提交后异步发送内部回调给 SaaS。
+    在事务提交后异步发送回调给 SaaS。
     IS_SAAS=False 视为未对接 SaaS，直接跳过（没 token 也过不了 SaaS 的鉴权）。
     """
     if not settings.IS_SAAS:
         return
 
     transaction.on_commit(
-        lambda: _deliver_internal_callback.delay(payload=callback.to_payload())
+        lambda: _deliver_saas_callback.delay(payload=callback.to_payload())
     )
 
 
@@ -106,10 +106,10 @@ def send_internal_callback(callback: InternalCallback) -> None:
     acks_late=True,
     reject_on_worker_lost=True,
 )
-def _deliver_internal_callback(self, *, payload: dict) -> None:
-    """Celery task：向 SaaS 发送内部回调 POST 请求。
+def _deliver_saas_callback(self, *, payload: dict) -> None:
+    """Celery task：向 SaaS 发送回调 POST 请求。
 
-    入参是已序列化好的 payload（InternalCallback.to_payload()），保持 JSON 可序列化，
+    入参是已序列化好的 payload（SaasCallback.to_payload()），保持 JSON 可序列化，
     兼容 broker 里的在途消息。
     """
     if not settings.IS_SAAS:
@@ -122,14 +122,14 @@ def _deliver_internal_callback(self, *, payload: dict) -> None:
                 url,
                 json=payload,
                 headers={
-                    "Authorization": f"Bearer {settings.INTERNAL_API_TOKEN}",
+                    "Authorization": f"Bearer {settings.SAAS_API_TOKEN}",
                     "Content-Type": "application/json",
                 },
             )
             resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
-            "internal_callback_failed",
+            "saas_callback_failed",
             url=url,
             callback_event=payload.get("event"),
             appid=payload.get("appid"),

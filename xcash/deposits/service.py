@@ -9,9 +9,9 @@ from chains.models import Transfer
 from chains.models import TransferType
 from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
-from common.internal_callback import CallbackEvent
-from common.internal_callback import InternalCallback
-from common.internal_callback import send_internal_callback
+from common.saas_callback import CallbackEvent
+from common.saas_callback import SaasCallback
+from common.saas_callback import send_saas_callback
 from common.utils.math import format_decimal_stripped
 from deposits.exceptions import DepositStatusError
 from deposits.models import Deposit
@@ -126,8 +126,8 @@ class DepositService:
         except Exception:  # noqa
             logger.exception("调度 VaultSlot 归集任务失败", deposit_id=deposit.pk)
         cls.notify_completed(deposit)
-        send_internal_callback(
-            InternalCallback(
+        send_saas_callback(
+            SaasCallback(
                 event=CallbackEvent.DEPOSIT_CONFIRMED,
                 appid=deposit.customer.project.appid,
                 sys_no=deposit.sys_no,

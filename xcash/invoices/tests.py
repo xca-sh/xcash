@@ -463,14 +463,14 @@ class InvoicePaymentSelectionTests(TestCase):
         self.assertEqual(first.pay_amount, Decimal("10.00"))
         self.assertEqual(second.pay_amount, Decimal("10.01"))
 
-    @patch("invoices.service.send_internal_callback")
+    @patch("invoices.service.send_saas_callback")
     @patch("invoices.service.WebhookService.create_event")
     @patch("invoices.service.VaultSlot.schedule_collect_for_invoice")
     def test_confirm_differ_invoice_does_not_schedule_collect(
         self,
         schedule_collect_mock,
         _create_event_mock,
-        _send_internal_callback_mock,
+        _send_saas_callback_mock,
     ):
         self.enable_differ_mode()
         invoice = self.create_invoice(out_no="payment-differ-confirm")
@@ -745,7 +745,7 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
 
         self.assertNotIn(eth.symbol, methods)
 
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="xcash-saas-token")
+    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="xcash-saas-token")
     def test_available_methods_ignores_cached_saas_chain_crypto_whitelist(self):
         project = Project.objects.create(
             name="Invoice SaaS All Methods Project",
@@ -1026,7 +1026,7 @@ class InvoiceConfirmDropStatusTests(TestCase):
             with self.assertRaises(InvoiceStatusError):
                 InvoiceService.drop_invoice(invoice)
 
-    @patch("invoices.service.send_internal_callback")
+    @patch("invoices.service.send_saas_callback")
     @patch("invoices.service.WebhookService.create_event")
     def test_confirm_native_invoice_uses_invoice_notify_url(
         self, create_event_mock, _callback_mock
@@ -2159,12 +2159,12 @@ class TryMatchContractInvoiceTest(TestCase, InvoiceTestMixin):
         self.assertEqual(newer_invoice.status, InvoiceStatus.WAITING)
 
     @patch("chains.models.VaultSlot.schedule_collect_for_invoice")
-    @patch("invoices.service.send_internal_callback")
+    @patch("invoices.service.send_saas_callback")
     @patch("invoices.service.WebhookService.create_event")
     def test_confirm_contract_invoice_schedules_erc20_slot_collection(
         self,
         _create_event_mock,
-        _send_internal_callback_mock,
+        _send_saas_callback_mock,
         schedule_collect_mock,
     ):
         transfer = self._make_transfer(Decimal("100"))

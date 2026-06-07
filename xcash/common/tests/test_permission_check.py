@@ -17,7 +17,7 @@ from common.permission_check import check_saas_permission
 
 @override_settings(
     IS_SAAS=True,
-    INTERNAL_API_TOKEN="xcash-saas-token",
+    SAAS_API_TOKEN="xcash-saas-token",
     SAAS_CALLBACK_URL="http://saas",
 )
 class CheckSaasPermissionTest(TestCase):
@@ -186,7 +186,7 @@ class CheckSaasPermissionTest(TestCase):
 
 @override_settings(
     IS_SAAS=True,
-    INTERNAL_API_TOKEN="xcash-saas-token",
+    SAAS_API_TOKEN="xcash-saas-token",
     SAAS_CALLBACK_URL="http://saas",
 )
 class RefreshSaasPermissionTaskTest(TestCase):

@@ -1,4 +1,4 @@
-"""internal_api /projects/{appid}/stats/ 路由与鉴权。"""
+"""saas_api /projects/{appid}/stats/ 路由与鉴权。"""
 import itertools
 from datetime import UTC
 from datetime import datetime
@@ -11,7 +11,7 @@ from invoices.models import Invoice
 from invoices.models import InvoiceStatus
 from projects.models import Project
 
-AUTH = "Bearer test-internal-token"
+AUTH = "Bearer test-saas-token"
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ def project(db):
 @pytest.mark.django_db
 class TestStatsRouting:
     def _url(self, project, action):
-        return f"/internal/v1/projects/{project.appid}/stats/{action}"
+        return f"/saas/v1/projects/{project.appid}/stats/{action}"
 
     def test_summary_requires_auth(self, client, project):
         resp = client.get(
@@ -90,7 +90,7 @@ class TestStatsSummaryAggregation:
             f"?cur_start={self.CUR_START}&cur_end={self.CUR_END}"
             f"&prev_start={self.PREV_START}&prev_end={self.PREV_END}"
         )
-        return f"/internal/v1/projects/{project.appid}/stats/summary{qs}"
+        return f"/saas/v1/projects/{project.appid}/stats/summary{qs}"
 
     def test_gmv_sums_completed_invoices_in_window(self, client, project):
         # 当期 4 月 completed → 计入
@@ -149,7 +149,7 @@ class TestStatsSummaryAggregation:
 
     def test_invalid_timestamp_returns_400(self, client, project):
         url = (
-            f"/internal/v1/projects/{project.appid}/stats/summary"
+            f"/saas/v1/projects/{project.appid}/stats/summary"
             "?cur_start=not-a-date&cur_end=2026-04-18T00:00:00Z"
             "&prev_start=2026-03-01T00:00:00Z&prev_end=2026-03-18T00:00:00Z"
         )
@@ -158,7 +158,7 @@ class TestStatsSummaryAggregation:
 
     def test_missing_timestamp_returns_400(self, client, project):
         url = (
-            f"/internal/v1/projects/{project.appid}/stats/summary"
+            f"/saas/v1/projects/{project.appid}/stats/summary"
             "?cur_end=2026-04-18T00:00:00Z"
             "&prev_start=2026-03-01T00:00:00Z&prev_end=2026-03-18T00:00:00Z"
         )
@@ -167,7 +167,7 @@ class TestStatsSummaryAggregation:
 
     def test_unknown_project_returns_not_found(self, client):
         url = (
-            "/internal/v1/projects/nonexistent-appid/stats/summary"
+            "/saas/v1/projects/nonexistent-appid/stats/summary"
             "?cur_start=2026-04-01T00:00:00Z&cur_end=2026-04-18T00:00:00Z"
             "&prev_start=2026-03-01T00:00:00Z&prev_end=2026-03-18T00:00:00Z"
         )
@@ -181,7 +181,7 @@ class TestStatsSummaryAggregation:
 @pytest.mark.django_db
 class TestStatsDaily:
     def _url(self, project, days):
-        return f"/internal/v1/projects/{project.appid}/stats/daily?days={days}&metric=gmv"
+        return f"/saas/v1/projects/{project.appid}/stats/daily?days={days}&metric=gmv"
 
     def test_rejects_unknown_days(self, client, project):
         resp = client.get(self._url(project, 42), HTTP_AUTHORIZATION=AUTH)
@@ -189,7 +189,7 @@ class TestStatsDaily:
 
     def test_rejects_unknown_metric(self, client, project):
         resp = client.get(
-            f"/internal/v1/projects/{project.appid}/stats/daily?days=7&metric=foo",
+            f"/saas/v1/projects/{project.appid}/stats/daily?days=7&metric=foo",
             HTTP_AUTHORIZATION=AUTH,
         )
         assert resp.status_code == 400

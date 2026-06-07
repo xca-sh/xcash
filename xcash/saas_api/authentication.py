@@ -4,18 +4,18 @@ from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 
 
-class InternalServiceUser(AnonymousUser):
-    """内网 API 调用方的虚拟用户，不对应数据库记录。"""
+class SaasServiceUser(AnonymousUser):
+    """SaaS API 调用方的虚拟用户，不对应数据库记录。"""
 
     @property
     def is_authenticated(self):
         return True
 
 
-class InternalTokenAuthentication(BaseAuthentication):
-    """基于静态 Token 的内网 API 认证。
+class SaasTokenAuthentication(BaseAuthentication):
+    """基于静态 Token 的 SaaS API 认证。
 
-    读取 Authorization: Bearer <token> 头，与 settings.INTERNAL_API_TOKEN 比对。
+    读取 Authorization: Bearer <token> 头，与 settings.SAAS_API_TOKEN 比对。
     """
 
     keyword = "Bearer"
@@ -29,7 +29,7 @@ class InternalTokenAuthentication(BaseAuthentication):
             return None
 
         token = auth_header[len(self.keyword) + 1 :]
-        if token != settings.INTERNAL_API_TOKEN:
-            raise AuthenticationFailed("Invalid internal API token.")
+        if token != settings.SAAS_API_TOKEN:
+            raise AuthenticationFailed("Invalid SaaS API token.")
 
-        return (InternalServiceUser(), None)
+        return (SaasServiceUser(), None)

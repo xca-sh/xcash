@@ -19,8 +19,8 @@ from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
 from chains.models import Wallet
 from chains.tests_fixtures import make_evm_chain
-from common.internal_callback import CallbackEvent
-from common.internal_callback import InternalCallback
+from common.saas_callback import CallbackEvent
+from common.saas_callback import SaasCallback
 from currencies.models import Crypto
 from currencies.models import CryptoOnChain
 from deposits.exceptions import DepositStatusError
@@ -138,11 +138,11 @@ class DepositAddressDebugWaitTests(SimpleTestCase):
 
 
 class DepositNotificationTests(TestCase):
-    @patch("deposits.service.send_internal_callback")
+    @patch("deposits.service.send_saas_callback")
     @patch("deposits.service.WebhookService.create_event")
     @patch.object(DepositService, "schedule_collect_for_completed_deposit")
     def test_confirm_deposit_schedules_collect_for_erc20(
-        self, schedule_collect, create_event_mock, send_internal_callback_mock
+        self, schedule_collect, create_event_mock, send_saas_callback_mock
     ):
         context = create_deposit_context()
         deposit = Deposit.objects.create(
@@ -155,7 +155,7 @@ class DepositNotificationTests(TestCase):
 
         schedule_collect.assert_called_once_with(deposit)
 
-    @patch("deposits.service.send_internal_callback")
+    @patch("deposits.service.send_saas_callback")
     @patch("deposits.service.WebhookService.create_event")
     @patch.object(
         DepositService,
@@ -163,7 +163,7 @@ class DepositNotificationTests(TestCase):
         side_effect=RuntimeError("collect failed"),
     )
     def test_confirm_deposit_still_notifies_when_collect_schedule_fails(
-        self, schedule_collect, create_event_mock, send_internal_callback_mock
+        self, schedule_collect, create_event_mock, send_saas_callback_mock
     ):
         context = create_deposit_context()
         deposit = Deposit.objects.create(
@@ -178,12 +178,12 @@ class DepositNotificationTests(TestCase):
         self.assertTrue(deposit.confirmed)
         schedule_collect.assert_called_once_with(deposit)
         create_event_mock.assert_called_once()
-        send_internal_callback_mock.assert_called_once()
+        send_saas_callback_mock.assert_called_once()
 
-    @patch("deposits.service.send_internal_callback")
+    @patch("deposits.service.send_saas_callback")
     @patch("deposits.service.WebhookService.create_event")
     def test_confirm_deposit_does_not_create_collect_task_for_native(
-        self, create_event_mock, send_internal_callback_mock
+        self, create_event_mock, send_saas_callback_mock
     ):
         context = create_deposit_context(native=True)
         deposit = Deposit.objects.create(
@@ -226,14 +226,14 @@ class DepositNotificationTests(TestCase):
         self.assertFalse(scheduled)
         schedule_collect.assert_not_called()
 
-    @patch("deposits.service.send_internal_callback")
+    @patch("deposits.service.send_saas_callback")
     @patch("deposits.service.WebhookService.create_event")
     @patch.object(VaultSlot, "schedule_collect_for_deposit")
     def test_confirm_deposit_dispatches_tron_collect_scheduler(
         self,
         schedule_collect,
         create_event_mock,
-        send_internal_callback_mock,
+        send_saas_callback_mock,
     ):
         context = create_tron_deposit_context()
         deposit = Deposit.objects.create(
@@ -246,7 +246,7 @@ class DepositNotificationTests(TestCase):
 
         schedule_collect.assert_called_once_with(deposit.pk)
         create_event_mock.assert_called_once()
-        send_internal_callback_mock.assert_called_once()
+        send_saas_callback_mock.assert_called_once()
 
     @patch.object(VaultSlot, "schedule_collect_for_deposit")
     def test_schedule_collect_for_completed_deposit_rejects_unconfirmed(
@@ -263,11 +263,11 @@ class DepositNotificationTests(TestCase):
 
         schedule_collect.assert_not_called()
 
-    @patch("deposits.service.send_internal_callback")
+    @patch("deposits.service.send_saas_callback")
     @patch("deposits.service.WebhookService.create_event")
     @patch.object(VaultSlot, "schedule_collect_for_deposit")
     def test_confirm_deposit_emits_completed_webhook(
-        self, schedule_collect, create_event_mock, send_internal_callback_mock
+        self, schedule_collect, create_event_mock, send_saas_callback_mock
     ):
         project = Project.objects.create(
             name="DemoConfirm",
@@ -318,8 +318,8 @@ class DepositNotificationTests(TestCase):
         self.assertEqual(payload["data"]["sys_no"], deposit.sys_no)
         self.assertEqual(payload["data"]["uid"], customer.uid)
         self.assertTrue(payload["data"]["confirmed"])
-        send_internal_callback_mock.assert_called_once_with(
-            InternalCallback(
+        send_saas_callback_mock.assert_called_once_with(
+            SaasCallback(
                 event=CallbackEvent.DEPOSIT_CONFIRMED,
                 appid=project.appid,
                 sys_no=deposit.sys_no,

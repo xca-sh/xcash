@@ -2,28 +2,28 @@ from decimal import Decimal
 
 from django.test import SimpleTestCase
 from django.utils import timezone
-from internal_api.serializers.invoices import InternalInvoiceDetailSerializer
-from internal_api.viewsets.invoices import InternalInvoiceViewSet
+from saas_api.serializers.invoices import SaasInvoiceDetailSerializer
+from saas_api.viewsets.invoices import SaasInvoiceViewSet
 
 from invoices.models import Invoice
 from invoices.models import InvoiceProtocol
 
 
-class InternalInvoiceCreateDeprecatedTests(SimpleTestCase):
+class SaasInvoiceCreateDeprecatedTests(SimpleTestCase):
     """内部 API 不再承担 Invoice 创建职责。"""
 
-    def test_internal_invoice_api_disables_post(self):
-        self.assertNotIn("post", InternalInvoiceViewSet.http_method_names)
+    def test_saas_invoice_api_disables_post(self):
+        self.assertNotIn("post", SaasInvoiceViewSet.http_method_names)
 
 
-class InternalInvoiceDetailSerializerTests(SimpleTestCase):
+class SaasInvoiceDetailSerializerTests(SimpleTestCase):
     """内部 API 账单详情字段测试。"""
 
     def test_detail_includes_protocol(self):
         invoice = Invoice(
             sys_no="INV-test",
-            out_no="internal-detail-order",
-            title="Internal detail",
+            out_no="saas-detail-order",
+            title="SaaS detail",
             currency="USD",
             amount=Decimal("10"),
             methods={},
@@ -31,6 +31,6 @@ class InternalInvoiceDetailSerializerTests(SimpleTestCase):
             protocol=InvoiceProtocol.EPAY_V1,
         )
 
-        data = InternalInvoiceDetailSerializer(invoice).data
+        data = SaasInvoiceDetailSerializer(invoice).data
 
         self.assertEqual(data["protocol"], InvoiceProtocol.EPAY_V1)

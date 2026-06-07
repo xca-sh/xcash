@@ -62,8 +62,8 @@ class ErrorCode(Enum):
     INVOICE_NOT_EXIST = ErrorInfo("5011", _("账单不存在"), 400)
     INVOICE_EXPIRED = ErrorInfo("5012", _("账单已过期"), 400)
 
-    # Internal API
-    INVALID_INTERNAL_TOKEN = ErrorInfo("6000", _("内部API令牌无效"), 401)
+    # SaaS API
+    INVALID_SAAS_TOKEN = ErrorInfo("6000", _("SaaS API 令牌无效"), 401)
     PROJECT_NOT_FOUND = ErrorInfo("6002", _("项目不存在"), 404)
     FEATURE_NOT_ENABLED = ErrorInfo("6003", _("该功能未开放"), 403)
     ACCOUNT_FROZEN = ErrorInfo("6004", _("账户已冻结"), 403)

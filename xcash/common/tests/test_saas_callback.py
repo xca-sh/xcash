@@ -4,19 +4,19 @@ from django.test import TestCase
 from django.test import override_settings
 
 
-class InternalCallbackTest(TestCase):
+class SaasCallbackTest(TestCase):
     @override_settings(
         IS_SAAS=True,
-        INTERNAL_API_TOKEN="test-token",
+        SAAS_API_TOKEN="test-token",
         SAAS_CALLBACK_URL="http://saas.local",
     )
-    @patch("common.internal_callback.httpx.Client")
+    @patch("common.saas_callback.httpx.Client")
     def test_deliver_sends_post_with_bearer_token(self, mock_client_cls):
-        from common.internal_callback import _deliver_internal_callback
+        from common.saas_callback import _deliver_saas_callback
 
         mock_client = mock_client_cls.return_value.__enter__.return_value
 
-        _deliver_internal_callback(
+        _deliver_saas_callback(
             payload={
                 "event": "invoice.confirmed",
                 "appid": "XC-test",
@@ -37,11 +37,11 @@ class InternalCallbackTest(TestCase):
         assert payload["worth"] == "100.00"
 
     @override_settings(IS_SAAS=False)
-    @patch("common.internal_callback.httpx.Client")
+    @patch("common.saas_callback.httpx.Client")
     def test_deliver_skips_when_token_missing(self, mock_client_cls):
-        from common.internal_callback import _deliver_internal_callback
+        from common.saas_callback import _deliver_saas_callback
 
-        _deliver_internal_callback(
+        _deliver_saas_callback(
             payload={
                 "event": "invoice.confirmed",
                 "appid": "XC-test",
@@ -55,14 +55,14 @@ class InternalCallbackTest(TestCase):
 
     @override_settings(
         IS_SAAS=True,
-        INTERNAL_API_TOKEN="test-token",
+        SAAS_API_TOKEN="test-token",
         SAAS_CALLBACK_URL="http://saas.local",
     )
-    @patch("common.internal_callback.httpx.Client")
+    @patch("common.saas_callback.httpx.Client")
     def test_deliver_retries_on_http_error(self, mock_client_cls):
         import httpx
 
-        from common.internal_callback import _deliver_internal_callback
+        from common.saas_callback import _deliver_saas_callback
 
         mock_client = mock_client_cls.return_value.__enter__.return_value
         mock_response = httpx.Response(
@@ -77,7 +77,7 @@ class InternalCallbackTest(TestCase):
         )
 
         with self.assertRaises(httpx.HTTPStatusError):
-            _deliver_internal_callback(
+            _deliver_saas_callback(
                 payload={
                     "event": "invoice.confirmed",
                     "appid": "XC-test",
@@ -88,11 +88,11 @@ class InternalCallbackTest(TestCase):
             )
 
     def test_to_payload_emits_type_specific_amount_field(self):
-        from common.internal_callback import CallbackEvent
-        from common.internal_callback import InternalCallback
+        from common.saas_callback import CallbackEvent
+        from common.saas_callback import SaasCallback
 
         # invoice/deposit：带 worth，不带 tx_detail
-        worth_payload = InternalCallback(
+        worth_payload = SaasCallback(
             event=CallbackEvent.INVOICE_CONFIRMED,
             appid="XC-test",
             sys_no="INV-001",
@@ -105,7 +105,7 @@ class InternalCallbackTest(TestCase):
         assert "timestamp" in worth_payload
 
         # gas_fee：带 tx_detail，不带 worth
-        gas_payload = InternalCallback(
+        gas_payload = SaasCallback(
             event=CallbackEvent.GAS_FEE_VAULT_SLOT_DEPLOY,
             appid="XC-test",
             sys_no="vault-slot-deploy:1",
@@ -119,10 +119,10 @@ class InternalCallbackTest(TestCase):
     def test_invalid_event_value_is_rejected(self):
         import pytest
 
-        from common.internal_callback import InternalCallback
+        from common.saas_callback import SaasCallback
 
         with pytest.raises(ValueError, match=r"invoice\.paid"):
-            InternalCallback(
+            SaasCallback(
                 event="invoice.paid",  # 不在 CallbackEvent 内
                 appid="XC-test",
                 sys_no="INV-001",
@@ -133,12 +133,12 @@ class InternalCallbackTest(TestCase):
     def test_amount_field_must_match_event_family(self):
         import pytest
 
-        from common.internal_callback import CallbackEvent
-        from common.internal_callback import InternalCallback
+        from common.saas_callback import CallbackEvent
+        from common.saas_callback import SaasCallback
 
         # invoice/deposit 缺 worth → 报错
         with pytest.raises(ValueError, match="必须且只能带 worth"):
-            InternalCallback(
+            SaasCallback(
                 event=CallbackEvent.INVOICE_CONFIRMED,
                 appid="XC-test",
                 sys_no="INV-001",
@@ -146,7 +146,7 @@ class InternalCallbackTest(TestCase):
             )
         # gas_fee 缺 tx_detail（误用 worth）→ 报错
         with pytest.raises(ValueError, match="gas_fee 回调必须且只能带 tx_detail"):
-            InternalCallback(
+            SaasCallback(
                 event=CallbackEvent.GAS_FEE_VAULT_SLOT_DEPLOY,
                 appid="XC-test",
                 sys_no="vault-slot-deploy:1",
@@ -155,7 +155,7 @@ class InternalCallbackTest(TestCase):
             )
 
     def test_retry_countdown_is_monotonic_and_capped(self):
-        from common.internal_callback import _retry_countdown
+        from common.saas_callback import _retry_countdown
 
         retry_delays = [_retry_countdown(retries) for retries in range(6)]
         assert retry_delays == sorted(retry_delays)

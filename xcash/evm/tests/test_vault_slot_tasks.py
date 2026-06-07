@@ -586,7 +586,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertTrue(slot.is_deployed)
         notify_gas_fee.assert_not_called()
 
-    @patch("evm.saas_gas_billing.send_internal_callback")
+    @patch("evm.saas_gas_billing.send_saas_callback")
     def test_confirmed_deploy_notifies_saas_gas_fee(self, send_callback_mock):
         from evm.saas_gas_billing import notify_vault_slot_deploy_gas_fee
 
@@ -1215,7 +1215,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(fact.value, Decimal(value))
         self.assertEqual(fact.amount, Decimal("1.23"))
 
-    @patch("evm.saas_gas_billing.send_internal_callback")
+    @patch("evm.saas_gas_billing.send_saas_callback")
     def test_confirmed_collect_transfer_notifies_saas_gas_fee(self, send_callback_mock):
         slot = self._create_vault_slot()
         native_crypto = self.chain.native_coin

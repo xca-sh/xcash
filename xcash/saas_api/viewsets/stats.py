@@ -1,4 +1,4 @@
-"""internal_api 聚合端点：/projects/{appid}/stats/
+"""saas_api 聚合端点：/projects/{appid}/stats/
 
 - summary: 当期 + 上期两个窗口的 GMV 与账单数聚合
 - daily:   最近 N 天的每日 GMV 时序
@@ -16,11 +16,11 @@ from django.db.models import Sum
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from internal_api.authentication import InternalTokenAuthentication
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
+from saas_api.authentication import SaasTokenAuthentication
 
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
@@ -42,7 +42,7 @@ def _parse_iso(value: str | None, name: str):
 
 
 class StatsViewSet(GenericViewSet):
-    authentication_classes = [InternalTokenAuthentication]
+    authentication_classes = [SaasTokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _project(self):

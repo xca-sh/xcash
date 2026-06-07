@@ -1,17 +1,17 @@
-from internal_api.authentication import InternalTokenAuthentication
-from internal_api.serializers.webhooks import DeliveryAttemptSerializer
-from internal_api.serializers.webhooks import WebhookEventSerializer
 from rest_framework.mixins import ListModelMixin
 from rest_framework.mixins import RetrieveModelMixin
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import GenericViewSet
+from saas_api.authentication import SaasTokenAuthentication
+from saas_api.serializers.webhooks import DeliveryAttemptSerializer
+from saas_api.serializers.webhooks import WebhookEventSerializer
 
 from webhooks.models import DeliveryAttempt
 from webhooks.models import WebhookEvent
 
 
 class WebhookEventViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
-    authentication_classes = [InternalTokenAuthentication]
+    authentication_classes = [SaasTokenAuthentication]
     permission_classes = [IsAuthenticated]
     serializer_class = WebhookEventSerializer
 
@@ -22,7 +22,7 @@ class WebhookEventViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
 
 
 class DeliveryAttemptViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
-    authentication_classes = [InternalTokenAuthentication]
+    authentication_classes = [SaasTokenAuthentication]
     permission_classes = [IsAuthenticated]
     serializer_class = DeliveryAttemptSerializer
 

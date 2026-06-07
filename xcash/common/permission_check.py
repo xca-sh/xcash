@@ -143,7 +143,7 @@ def _fetch_from_saas(appid: str) -> dict:
             url,
             json={"appid": appid},
             headers={
-                "Authorization": f"Bearer {settings.INTERNAL_API_TOKEN}",
+                "Authorization": f"Bearer {settings.SAAS_API_TOKEN}",
                 "Content-Type": "application/json",
             },
         )

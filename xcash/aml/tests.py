@@ -457,7 +457,7 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         assessment = RiskAssessment.objects.get(invoice=invoice)
         self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
 
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="t")
+    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_invoice_saas_permission_granted_screens(self, score):
         """SaaS 模式 + 缓存命中 + enable_aml_screening=True → 正常筛查。"""
@@ -479,7 +479,7 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         assessment = RiskAssessment.objects.get(invoice=invoice)
         self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
 
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="t")
+    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_invoice_saas_permission_denied_does_not_create_assessment(self, score):
         """SaaS 模式 + 缓存命中 + enable_aml_screening=False → 直接 return，不写记录。"""
@@ -497,7 +497,7 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         invoice.refresh_from_db()
         self.assertIsNone(invoice.risk_level)
 
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="t")
+    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_invoice_saas_cold_cache_fails_closed(self, score):
         """SaaS 模式 + 冷缓存 → fail-closed → 直接 return，不调 MistTrack 也不写记录。"""
@@ -525,7 +525,7 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         assessment = RiskAssessment.objects.get(deposit=deposit)
         self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
 
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="t")
+    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_deposit_saas_permission_granted_screens(self, score):
         deposit = self.make_deposit(worth=Decimal("500"))
@@ -546,7 +546,7 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         assessment = RiskAssessment.objects.get(deposit=deposit)
         self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
 
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="t")
+    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_deposit_saas_permission_denied_does_not_create_assessment(self, score):
         deposit = self.make_deposit(worth=Decimal("500"))
@@ -561,7 +561,7 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         score.assert_not_called()
         self.assertFalse(RiskAssessment.objects.filter(deposit=deposit).exists())
 
-    @override_settings(IS_SAAS=True, INTERNAL_API_TOKEN="t")
+    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_deposit_saas_cold_cache_fails_closed(self, score):
         deposit = self.make_deposit(worth=Decimal("500"))
