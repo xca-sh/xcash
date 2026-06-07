@@ -183,6 +183,15 @@ class TronHttpClient:
         )
         return response.json()
 
+    def get_account_resource(self, *, address: str) -> dict:
+        response = self._request_with_retry(
+            method="POST",
+            url=f"{self.base_url}/wallet/getaccountresource",
+            request_label="failed to fetch account resource",
+            json_body={"address": address, "visible": True},
+        )
+        return response.json()
+
     def get_contract(self, *, address: str) -> dict:
         response = self._request_with_retry(
             method="POST",

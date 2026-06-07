@@ -241,6 +241,34 @@ class TronHttpClientTests(SimpleTestCase):
         _, kwargs = post_mock.call_args
         self.assertEqual(kwargs["json"], {"value": "a" * 64})
 
+    @patch("tron.client.httpx.post")
+    def test_get_account_resource_posts_visible_address(self, post_mock):
+        post_mock.return_value.json.return_value = {"EnergyLimit": 1000}
+        post_mock.return_value.raise_for_status.return_value = None
+
+        chain = SimpleNamespace(
+            rpc="https://api.trongrid.io",
+            chain="tron-mainnet",
+            tron_api_key="tron-key",
+        )
+        payload = TronHttpClient(chain=chain).get_account_resource(
+            address="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb"
+        )
+
+        self.assertEqual(payload["EnergyLimit"], 1000)
+        call_args, kwargs = post_mock.call_args
+        self.assertEqual(
+            call_args[0],
+            "https://api.trongrid.io/wallet/getaccountresource",
+        )
+        self.assertEqual(
+            kwargs["json"],
+            {
+                "address": "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+                "visible": True,
+            },
+        )
+
     @patch("tron.client.httpx.get")
     def test_list_confirmed_trc20_history_sends_contract_filter_and_fingerprint(
         self,
@@ -383,6 +411,152 @@ class TronHttpClientTests(SimpleTestCase):
 
         # 永久错误必须只调一次；不应触发重试。
         self.assertEqual(get_mock.call_count, 1)
+
+
+@override_settings(
+    TRON_RESOURCE_SAFETY_MARGIN_BPS=10_000,
+    TRON_BANDWIDTH_SAFETY_BYTES=0,
+)
+class TronTxTaskBroadcastResourceGuardTests(TestCase):
+    def setUp(self):
+        self.chain = Chain.objects.create(
+            code=ChainCode.Tron,
+            rpc="https://api.trongrid.io",
+            tron_api_key="tron-key",
+            active=True,
+        )
+        self.wallet = Wallet.objects.create()
+        self.sender = Address.objects.create(
+            wallet=self.wallet,
+            chain_type=ChainType.TRON,
+            usage=AddressUsage.HotWallet,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
+            address_index=0,
+            address="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        )
+
+    def make_task(self) -> TronTxTask:
+        base_task = TxTask.objects.create(
+            chain=self.chain,
+            sender=self.sender,
+            tx_type=TxTaskType.VaultSlotCollect,
+            status=TxTaskStatus.QUEUED,
+        )
+        return TronTxTask.objects.create(
+            base_task=base_task,
+            sender=self.sender,
+            chain=self.chain,
+            to="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+            function_selector="collect(address)",
+            parameter="00" * 32,
+            fee_limit=150_000_000,
+        )
+
+    @staticmethod
+    def signed_payload() -> SimpleNamespace:
+        return SimpleNamespace(
+            tx_hash="a" * 64,
+            raw_transaction={
+                "raw_data_hex": "0a02abcd",
+                "raw_data": {"expiration": 123},
+                "signature": ["b" * 130],
+            },
+        )
+
+    @patch("tron.models.TronHttpClient")
+    @patch("chains.models.Address.sign_tron_transaction")
+    def test_broadcast_stops_before_sign_when_energy_is_insufficient(
+        self,
+        sign_transaction,
+        client_class,
+    ):
+        task = self.make_task()
+        client = client_class.return_value
+        client.trigger_constant_contract.return_value = {
+            "result": {"result": True},
+            "energy_used": 1_000,
+        }
+        client.get_account_resource.return_value = {
+            "EnergyLimit": 999,
+            "EnergyUsed": 0,
+            "freeNetLimit": 10_000,
+        }
+
+        with self.assertRaisesMessage(TronClientError, "tron energy insufficient"):
+            task.broadcast()
+
+        client.trigger_smart_contract.assert_not_called()
+        sign_transaction.assert_not_called()
+        client.broadcast_transaction.assert_not_called()
+        task.base_task.refresh_from_db()
+        self.assertEqual(task.base_task.status, TxTaskStatus.QUEUED)
+        self.assertIsNone(task.base_task.tx_hash)
+
+    @patch("tron.models.TronHttpClient")
+    @patch("chains.models.Address.sign_tron_transaction")
+    def test_broadcast_stops_after_sign_when_bandwidth_is_insufficient(
+        self,
+        sign_transaction,
+        client_class,
+    ):
+        task = self.make_task()
+        client = client_class.return_value
+        client.trigger_constant_contract.return_value = {
+            "result": {"result": True},
+            "energy_used": 1_000,
+        }
+        client.get_account_resource.side_effect = [
+            {"EnergyLimit": 2_000, "EnergyUsed": 0, "freeNetLimit": 0},
+            {"EnergyLimit": 2_000, "EnergyUsed": 0, "freeNetLimit": 0},
+        ]
+        client.trigger_smart_contract.return_value = {
+            "transaction": {
+                "raw_data_hex": "0a02abcd",
+                "raw_data": {"expiration": 123},
+            }
+        }
+        sign_transaction.return_value = self.signed_payload()
+
+        with self.assertRaisesMessage(TronClientError, "tron bandwidth insufficient"):
+            task.broadcast()
+
+        client.broadcast_transaction.assert_not_called()
+        task.base_task.refresh_from_db()
+        self.assertEqual(task.base_task.status, TxTaskStatus.QUEUED)
+        self.assertIsNone(task.base_task.tx_hash)
+
+    @patch("tron.models.TronHttpClient")
+    @patch("chains.models.Address.sign_tron_transaction")
+    def test_broadcast_continues_when_energy_and_bandwidth_are_sufficient(
+        self,
+        sign_transaction,
+        client_class,
+    ):
+        task = self.make_task()
+        client = client_class.return_value
+        client.trigger_constant_contract.return_value = {
+            "result": {"result": True},
+            "energy_used": 1_000,
+        }
+        client.get_account_resource.side_effect = [
+            {"EnergyLimit": 2_000, "EnergyUsed": 0, "freeNetLimit": 10_000},
+            {"EnergyLimit": 2_000, "EnergyUsed": 0, "freeNetLimit": 10_000},
+        ]
+        client.trigger_smart_contract.return_value = {
+            "transaction": {
+                "raw_data_hex": "0a02abcd",
+                "raw_data": {"expiration": 123},
+            }
+        }
+        sign_transaction.return_value = self.signed_payload()
+        client.broadcast_transaction.return_value = {"result": True}
+
+        task.broadcast()
+
+        client.broadcast_transaction.assert_called_once()
+        task.base_task.refresh_from_db()
+        self.assertEqual(task.base_task.status, TxTaskStatus.PENDING_CHAIN)
+        self.assertEqual(task.base_task.tx_hash, "a" * 64)
 
 
 class TronWatchCursorTests(TestCase):

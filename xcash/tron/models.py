@@ -10,6 +10,8 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from tron.client import TronClientError
 from tron.client import TronHttpClient
+from tron.resources import require_bandwidth_for_signed_transaction
+from tron.resources import require_energy_for_contract_call
 
 from chains.models import TxTask
 from chains.models import TxTaskStatus
@@ -127,6 +129,13 @@ class TronTxTask(UndeletableModel):
         self.record_broadcast_attempt()
         self.validate_fee_limit()
         client = TronHttpClient(chain=self.chain)
+        resource_quote = require_energy_for_contract_call(
+            client=client,
+            owner_address=self.sender.address,
+            contract_address=self.to,
+            function_selector=self.function_selector,
+            parameter=self.parameter,
+        )
         unsigned = client.trigger_smart_contract(
             owner_address=self.sender.address,
             contract_address=self.to,
@@ -139,6 +148,12 @@ class TronTxTask(UndeletableModel):
             raise TronClientError(f"invalid trigger transaction from {self.chain.code}")
 
         signed = self.sender.sign_tron_transaction(unsigned_transaction=transaction)
+        require_bandwidth_for_signed_transaction(
+            client=client,
+            owner_address=self.sender.address,
+            transaction=signed.raw_transaction,
+            quote=resource_quote,
+        )
         self.persist_signed_payload(signed_payload=signed.raw_transaction, tx_id=signed.tx_hash)
 
         response = client.broadcast_transaction(transaction=signed.raw_transaction)
