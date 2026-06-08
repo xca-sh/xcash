@@ -40,10 +40,12 @@ class ParsedTronTransferEvent:
 
 
 class TronTrc20Scanner:
-    """按链扫描本链全部 TRC20（CryptoOnChain）的 Transfer 入账事件。
+    """按链扫描本链 TRC20 与原生 TRX 的入账事件（名称暂留，已不止扫 TRC20）。
 
-    与 EVM 扫描器对齐：代币集合来自 CryptoOnChain（不写死 USDT/地址），
-    每条 Tron 链一个游标，逐块对每个代币合约拉取 Transfer 事件后统一匹配观察地址。
+    与 EVM 扫描器对齐：代币集合来自 CryptoOnChain（不写死 USDT/地址），每条 Tron 链一个
+    游标，逐块对每个代币合约拉取 Transfer 事件后统一匹配观察地址。原生 TRX 走
+    TransferContract、不 emit 事件，故在同一游标循环内额外逐块读整块交易、按 to_address
+    匹配（见 _collect_block_native_transfers）；停用原生币 CryptoOnChain 即关闭原生扫描。
     """
 
     _debug_bootstrapped_cursors: set[int] = set()
@@ -54,6 +56,7 @@ class TronTrc20Scanner:
             raise ValueError(f"仅支持 Tron 链扫描，当前链为 {chain.code}")
 
         tokens_by_address = cls._load_crypto_on_chains(chain=chain)
+        native_on_chain = cls._load_native_on_chain(chain=chain)
         cursor = cls._get_or_create_cursor(chain=chain)
         client = TronHttpClient(chain=chain)
         previous_latest_block = chain.latest_block_number
@@ -90,6 +93,13 @@ class TronTrc20Scanner:
                         block_number=block_number,
                         tokens_by_address=tokens_by_address,
                     )
+                    if native_on_chain is not None:
+                        parsed_events += cls._collect_block_native_transfers(
+                            client=client,
+                            chain=chain,
+                            block_number=block_number,
+                            native_on_chain=native_on_chain,
+                        )
                     matched_addresses_seen.update(
                         event.observed.to_address for event in parsed_events
                     )
@@ -153,6 +163,150 @@ class TronTrc20Scanner:
             .exclude(address="")
         )
         return {token.address: token for token in token_rows}
+
+    @staticmethod
+    def _load_native_on_chain(*, chain: Chain) -> CryptoOnChain | None:
+        """本链已启用的原生币 CryptoOnChain（address=""）；未启用则跳过原生扫描。
+
+        原生币入账是可按链开关的资产：停用其 CryptoOnChain 即关闭原生 TRX 扫描，
+        省掉逐块整块拉取的带宽开销。
+        """
+        return (
+            CryptoOnChain.objects.select_related("crypto")
+            .filter(
+                chain=chain,
+                crypto__is_native=True,
+                crypto__active=True,
+                active=True,
+                address="",
+            )
+            .first()
+        )
+
+    @classmethod
+    def _collect_block_native_transfers(
+        cls,
+        *,
+        client: TronHttpClient,
+        chain: Chain,
+        block_number: int,
+        native_on_chain: CryptoOnChain,
+    ) -> list[ParsedTronTransferEvent]:
+        """扫描单块内的原生 TRX TransferContract，产出命中收款地址的入账事件。
+
+        Tron 上原生 TRX 转账走 TransferContract、不进 TVM、不 emit 事件，无法复用 TRC20
+        的事件接口，必须逐块读整块交易、按 to_address 匹配收款地址。成本为每块一次整块
+        拉取，O(blocks) 恒定、与收款地址数量无关。
+        """
+        payload = client.get_solid_block(block_number=block_number)
+        # 生产环境 getblockbynum 必返回 dict；非 dict 只会出现在 mock 场景，按"无交易"处理，
+        # 既不误扫，也不必为原生扫描给每个既有扫描器单测额外打桩。
+        if not isinstance(payload, dict):
+            return []
+        transactions = payload.get("transactions") or []
+        if not isinstance(transactions, list) or not transactions:
+            return []
+        block_hash = cls._extract_block_id(payload=payload, chain=chain)
+        block_timestamp_ms = cls._extract_block_timestamp_ms(payload=payload, chain=chain)
+        candidates: list[ParsedTronTransferEvent] = []
+        for tx in transactions:
+            event = cls._parse_native_transfer(
+                chain=chain,
+                tx=tx,
+                block_number=block_number,
+                block_hash=block_hash,
+                block_timestamp_ms=block_timestamp_ms,
+                crypto=native_on_chain.crypto,
+                decimals=native_on_chain.decimals,
+            )
+            if event is not None:
+                candidates.append(event)
+        return cls.filter_matched_events(chain=chain, candidates=candidates)
+
+    @classmethod
+    def _parse_native_transfer(
+        cls,
+        *,
+        chain: Chain,
+        tx: dict,
+        block_number: int,
+        block_hash: str,
+        block_timestamp_ms: int,
+        crypto,
+        decimals: int,
+    ) -> ParsedTronTransferEvent | None:
+        """单笔 TransferContract → 入账事件；非 TransferContract / 执行失败 / 金额非正一律跳过。"""
+        if not isinstance(tx, dict):
+            return None
+        tx_id = str(tx.get("txID") or "")
+        if not tx_id:
+            return None
+        # 仅接受执行成功的交易：TransferContract 入块通常即成功，但仍以 ret.contractRet 为准。
+        ret = tx.get("ret") or []
+        if isinstance(ret, list) and ret and isinstance(ret[0], dict):
+            contract_ret = ret[0].get("contractRet")
+            if contract_ret not in (None, "", "SUCCESS"):
+                return None
+        contracts = (tx.get("raw_data") or {}).get("contract") or []
+        if not isinstance(contracts, list) or not contracts:
+            return None
+        contract = contracts[0]
+        if not isinstance(contract, dict) or contract.get("type") != "TransferContract":
+            return None
+        value_obj = ((contract.get("parameter") or {}).get("value")) or {}
+        if not isinstance(value_obj, dict):
+            return None
+        try:
+            value = Decimal(int(value_obj.get("amount")))
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        try:
+            from_address = cls._event_address_to_base58(value_obj.get("owner_address"))
+            to_address = cls._event_address_to_base58(value_obj.get("to_address"))
+        except ValueError:
+            return None
+        occurred_at = datetime.fromtimestamp(
+            block_timestamp_ms / 1000,
+            tz=timezone.get_current_timezone(),
+        )
+        return ParsedTronTransferEvent(
+            observed=ObservedTransferPayload(
+                chain=chain,
+                block=block_number,
+                tx_hash=tx_id,
+                from_address=from_address,
+                to_address=to_address,
+                crypto=crypto,
+                value=value,
+                amount=value.scaleb(-decimals),
+                timestamp=block_timestamp_ms // 1000,
+                datetime=occurred_at,
+                block_hash=block_hash,
+                source="tron-native-scan",
+            )
+        )
+
+    @staticmethod
+    def _extract_block_id(*, payload: dict, chain: Chain) -> str:
+        block_id = str(payload.get("blockID") or "").strip().lower()
+        if len(block_id) != 64:
+            raise TronClientError(f"invalid solid block id from {chain.code}")
+        return block_id
+
+    @staticmethod
+    def _extract_block_timestamp_ms(*, payload: dict, chain: Chain) -> int:
+        raw = ((payload.get("block_header") or {}).get("raw_data") or {}).get(
+            "timestamp"
+        )
+        try:
+            timestamp_ms = int(raw or 0)
+        except (TypeError, ValueError):
+            timestamp_ms = 0
+        if timestamp_ms <= 0:
+            raise TronClientError(f"invalid solid block timestamp from {chain.code}")
+        return timestamp_ms
 
     @classmethod
     def _get_or_create_cursor(cls, *, chain: Chain) -> TronWatchCursor:

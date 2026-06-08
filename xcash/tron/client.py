@@ -165,6 +165,16 @@ class TronHttpClient:
             raise TronClientError(f"invalid solid block id from {self.chain.code}")
         return block_id
 
+    def get_solid_block(self, *, block_number: int) -> dict:
+        """拉取已固化（BFT 不可逆）整块，含 transactions，用于原生 TRX TransferContract 扫描。"""
+        response = self._request_with_retry(
+            method="POST",
+            url=f"{self.base_url}/walletsolidity/getblockbynum",
+            request_label="failed to fetch solid block",
+            json_body={"num": block_number},
+        )
+        return response.json()
+
     def get_transaction_info_by_id(self, tx_hash: str) -> dict:
         response = self._request_with_retry(
             method="POST",

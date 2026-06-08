@@ -1097,6 +1097,149 @@ class TronTrc20ScannerTests(TestCase):
         self.assertEqual(transfer.amount, Decimal("1.234567"))
         enqueue_processing_mock.assert_called_once()
 
+    def _native_tx(
+        self,
+        *,
+        to_hex: str,
+        from_hex: str,
+        contract_type: str = "TransferContract",
+        contract_ret: str = "SUCCESS",
+        amount: int = 1_000_000,
+        tx_id: str = "f" * 64,
+    ) -> dict:
+        return {
+            "txID": tx_id,
+            "ret": [{"contractRet": contract_ret}],
+            "raw_data": {
+                "contract": [
+                    {
+                        "type": contract_type,
+                        "parameter": {
+                            "value": {
+                                "amount": amount,
+                                "owner_address": from_hex,
+                                "to_address": to_hex,
+                            }
+                        },
+                    }
+                ],
+            },
+        }
+
+    def test_parse_native_transfer_accepts_transfer_contract_skips_others(self):
+        # 原生 TRX 解析核心：合法 TransferContract→入账事件；非 TransferContract/执行失败/
+        # 金额非正一律跳过。hex41 地址须正确还原为收款 base58 地址。
+        from tron.codec import TronAddressCodec
+        from tron.scanner import TronTrc20Scanner
+
+        to_hex = TronAddressCodec.base58_to_hex41(self.watch_address)
+        from_hex = TronAddressCodec.base58_to_hex41(self.sender_address)
+
+        def parse(tx):
+            return TronTrc20Scanner._parse_native_transfer(
+                chain=self.chain,
+                tx=tx,
+                block_number=123,
+                block_hash="a" * 64,
+                block_timestamp_ms=1_700_000_000_000,
+                crypto=self.trx,
+                decimals=6,
+            )
+
+        event = parse(self._native_tx(to_hex=to_hex, from_hex=from_hex))
+        self.assertIsNotNone(event)
+        self.assertEqual(event.observed.to_address, self.watch_address)
+        self.assertEqual(event.observed.from_address, self.sender_address)
+        self.assertEqual(event.observed.crypto, self.trx)
+        self.assertEqual(event.observed.value, Decimal("1000000"))
+        self.assertEqual(event.observed.amount, Decimal("1"))
+
+        self.assertIsNone(
+            parse(
+                self._native_tx(
+                    to_hex=to_hex,
+                    from_hex=from_hex,
+                    contract_type="TriggerSmartContract",
+                )
+            )
+        )
+        self.assertIsNone(
+            parse(
+                self._native_tx(to_hex=to_hex, from_hex=from_hex, contract_ret="REVERT")
+            )
+        )
+        self.assertIsNone(
+            parse(self._native_tx(to_hex=to_hex, from_hex=from_hex, amount=0))
+        )
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    @patch("tron.scanner.TronHttpClient")
+    def test_scan_chain_matches_native_trx_transfer_contract(
+        self,
+        client_cls,
+        enqueue_processing_mock,
+    ):
+        # 端到端：块内一笔打给收款地址的原生 TRX TransferContract → 落库一条 TRX Transfer。
+        from tron.codec import TronAddressCodec
+        from tron.scanner import TronTrc20Scanner
+
+        VaultSlot.objects.create(
+            chain=self.chain,
+            project=self.project,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=0,
+            address=self.watch_address,
+            salt=b"n" * 32,
+        )
+        self._set_cursor_block(last_scanned_block=123455)
+        to_hex = TronAddressCodec.base58_to_hex41(self.watch_address)
+        from_hex = TronAddressCodec.base58_to_hex41(self.sender_address)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = 123456
+        client.get_solid_block_id.return_value = "0" * 64
+        client.list_confirmed_contract_events.return_value = {"data": [], "meta": {}}
+        client.get_solid_block.return_value = {
+            "blockID": "a" * 64,
+            "block_header": {"raw_data": {"timestamp": 1_700_000_000_000}},
+            "transactions": [
+                self._native_tx(to_hex=to_hex, from_hex=from_hex, amount=1_500_000)
+            ],
+        }
+
+        summary = TronTrc20Scanner.scan_chain(chain=self.chain)
+
+        self.assertEqual(summary.events_seen, 1)
+        self.assertEqual(summary.filter_addresses, 1)
+        transfer = Transfer.objects.get(hash="f" * 64)
+        self.assertEqual(transfer.to_address, self.watch_address)
+        self.assertEqual(transfer.crypto, self.trx)
+        self.assertEqual(transfer.value, Decimal("1500000"))
+        self.assertEqual(transfer.amount, Decimal("1.5"))
+        enqueue_processing_mock.assert_called_once()
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    @patch("tron.scanner.TronHttpClient")
+    def test_scan_chain_skips_native_when_native_coin_inactive(
+        self,
+        client_cls,
+        _enqueue_processing_mock,
+    ):
+        # 停用原生币 CryptoOnChain → 关闭原生扫描，不再逐块拉整块。
+        from tron.scanner import TronTrc20Scanner
+
+        CryptoOnChain.objects.filter(chain=self.chain, crypto=self.trx).update(
+            active=False
+        )
+        self._set_cursor_block(last_scanned_block=123455)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = 123456
+        client.get_solid_block_id.return_value = "0" * 64
+        client.list_confirmed_contract_events.return_value = {"data": [], "meta": {}}
+
+        TronTrc20Scanner.scan_chain(chain=self.chain)
+
+        client.get_solid_block.assert_not_called()
+
 
 class TronTaskTests(TestCase):
     @patch("tron.tasks.logger.info")
