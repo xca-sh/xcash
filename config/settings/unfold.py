@@ -138,14 +138,16 @@ SIDEBAR_UNFOLD = {
                 "collapsible": False,
                 "items": [
                     {
-                        "title": _("账单收款记录"),
+                        "title": _("账单记录"),
                         "icon": "receipt_long",
                         "link": reverse_lazy("admin:invoices_invoice_changelist"),
                     },
                     {
-                        "title": _("账单收款地址"),
+                        "title": _("账单地址"),
                         "icon": "add_card",
-                        "link": reverse_lazy("admin:chains_invoicevaultslot_changelist"),
+                        "link": reverse_lazy(
+                            "admin:chains_invoicevaultslot_changelist"
+                        ),
                     },
                 ],
             },
@@ -154,14 +156,16 @@ SIDEBAR_UNFOLD = {
                 "collapsible": False,
                 "items": [
                     {
-                        "title": _("账户充值记录"),
+                        "title": _("充值记录"),
                         "icon": "download",
                         "link": reverse_lazy("admin:deposits_deposit_changelist"),
                     },
                     {
-                        "title": _("账户充值地址"),
+                        "title": _("充值地址"),
                         "icon": "add_card",
-                        "link": reverse_lazy("admin:chains_depositvaultslot_changelist"),
+                        "link": reverse_lazy(
+                            "admin:chains_depositvaultslot_changelist"
+                        ),
                     },
                 ],
             },

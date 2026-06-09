@@ -193,14 +193,46 @@ class SystemWalletAdmin(ModelAdmin):
 
     @display(description=_("钱包地址"))
     def display_wallet_address(self, instance: SystemWallet):
-        address, error = self.resolve_chain_type_address(instance, ChainType.EVM)
-        if error:
-            return error
-        if address is None:
-            return "-"
+        rows = []
+        for chain_type in (ChainType.EVM, ChainType.TRON):
+            address, error = self.resolve_chain_type_address(instance, chain_type)
+            rows.append(
+                (
+                    chain_type.label,
+                    error
+                    if error
+                    else format_html(
+                        '<span class="font-mono break-all">{}</span>',
+                        address or "-",
+                    ),
+                )
+            )
+
+        body = format_html_join(
+            "",
+            (
+                "<tr>"
+                '<td class="px-3 py-2 font-medium whitespace-nowrap">{}</td>'
+                '<td class="px-3 py-2">{}</td>'
+                "</tr>"
+            ),
+            rows,
+        )
         return format_html(
-            '<div class="font-mono text-base break-all">{}</div>',
-            address,
+            '<div class="overflow-auto">'
+            '<table class="w-auto min-w-[520px] divide-y divide-base-200 text-sm">'
+            "<thead>"
+            "<tr>"
+            '<th class="px-3 py-2 text-left">{}</th>'
+            '<th class="px-3 py-2 text-left">{}</th>'
+            "</tr>"
+            "</thead>"
+            "<tbody>{}</tbody>"
+            "</table>"
+            "</div>",
+            _("链类型"),
+            _("地址"),
+            body,
         )
 
     @display(description=_("各链余额"))
