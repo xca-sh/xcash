@@ -157,6 +157,17 @@ class TxTaskTxHashHistoryTests(TestCase):
             [item.hash for item in history], ["0x" + "e1" * 32, "0x" + "e2" * 32]
         )
 
+    def test_append_existing_hash_for_same_task_updates_current_tx_hash(self):
+        old_hash = self.task.tx_hash
+        self.task.append_tx_hash(old_hash)
+        self.task.append_tx_hash("0x" + "e2" * 32)
+
+        appended = self.task.append_tx_hash(old_hash)
+
+        self.task.refresh_from_db()
+        self.assertEqual(appended.tx_task_id, self.task.pk)
+        self.assertEqual(self.task.tx_hash, old_hash)
+
     def test_resolve_tx_task_by_old_hash(self):
         self.task.append_tx_hash(self.task.tx_hash)
         self.task.append_tx_hash("0x" + "e2" * 32)
@@ -455,6 +466,56 @@ class TransferServiceCreateObservedTests(TestCase):
         self.assertFalse(second.conflict)
         self.assertEqual(first.transfer.pk, second.transfer.pk)
         # 只有首次创建才触发 enqueue
+        enqueue_mock.assert_called_once()
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    def test_same_tx_different_event_index_creates_independent_transfers(
+        self,
+        enqueue_mock,
+    ):
+        from chains.service import ObservedTransferPayload
+        from chains.service import TransferService
+
+        first = ObservedTransferPayload(
+            **{**self.payload.__dict__, "event_index": 0}
+        )
+        second = ObservedTransferPayload(
+            **{
+                **self.payload.__dict__,
+                "event_index": 1,
+                "to_address": Web3.to_checksum_address(
+                    "0x00000000000000000000000000000000000000a3"
+                ),
+            }
+        )
+
+        first_result = TransferService.create_observed_transfer(observed=first)
+        second_result = TransferService.create_observed_transfer(observed=second)
+
+        self.assertTrue(first_result.created)
+        self.assertTrue(second_result.created)
+        self.assertNotEqual(first_result.transfer.pk, second_result.transfer.pk)
+        self.assertEqual(
+            Transfer.objects.filter(chain=self.chain, hash=self.payload.tx_hash).count(),
+            2,
+        )
+        self.assertEqual(enqueue_mock.call_count, 2)
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    def test_same_tx_same_event_index_is_idempotent(self, enqueue_mock):
+        from chains.service import ObservedTransferPayload
+        from chains.service import TransferService
+
+        observed = ObservedTransferPayload(
+            **{**self.payload.__dict__, "event_index": 0}
+        )
+
+        first = TransferService.create_observed_transfer(observed=observed)
+        second = TransferService.create_observed_transfer(observed=observed)
+
+        self.assertTrue(first.created)
+        self.assertFalse(second.created)
+        self.assertEqual(first.transfer.pk, second.transfer.pk)
         enqueue_mock.assert_called_once()
 
     @patch("chains.service.TransferService.enqueue_processing")

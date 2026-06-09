@@ -278,7 +278,7 @@ def schedule_collect_for_deposit(deposit_pk: int) -> VaultSlotCollectSchedule | 
     chain = transfer.chain
     crypto = transfer.crypto
 
-    if crypto == chain.native_coin:
+    if crypto == chain.native_coin and chain.type != ChainType.TRON:
         return None
 
     try:
@@ -312,7 +312,7 @@ def schedule_collect_for_invoice(invoice_pk: int) -> VaultSlotCollectSchedule | 
 
     chain = invoice.chain
     crypto = invoice.crypto
-    if crypto == chain.native_coin:
+    if crypto == chain.native_coin and chain.type != ChainType.TRON:
         return None
 
     try:

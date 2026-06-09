@@ -624,6 +624,16 @@ class TxTask(UndeletableModel):
         # 若已存在则视为幂等，直接返回。
         existing = TxHash.objects.filter(chain=locked_task.chain, hash=tx_hash).first()
         if existing:
+            if existing.tx_task_id != locked_task.pk:
+                raise IntegrityError(
+                    "TxHash 已归属其他 TxTask："
+                    f"chain_id={locked_task.chain_id} hash={tx_hash} "
+                    f"existing_task_id={existing.tx_task_id} current_task_id={locked_task.pk}"
+                )
+            TxTask.objects.filter(pk=locked_task.pk).update(
+                tx_hash=tx_hash,
+                updated_at=timezone.now(),
+            )
             self.tx_hash = tx_hash
             return existing
         max_version = (
@@ -1206,6 +1216,12 @@ class Transfer(models.Model):
         unique=False,
     )
     hash = HashField(unique=False, verbose_name=_("哈希"))
+    event_index = models.PositiveIntegerField(
+        _("交易内事件序号"),
+        null=True,
+        blank=True,
+        help_text=_("同一笔链上交易内第几条入账事件；旧数据或手工记录可为空。"),
+    )
 
     crypto = models.ForeignKey(
         "currencies.Crypto", on_delete=models.CASCADE, verbose_name=_("加密货币")
@@ -1246,8 +1262,8 @@ class Transfer(models.Model):
         verbose_name_plural = _("转账")
         constraints = [
             models.UniqueConstraint(
-                fields=("chain", "hash"),
-                name="uniq_transfer_chain_hash",
+                fields=("chain", "hash", "event_index"),
+                name="uniq_transfer_chain_hash_event_index",
             ),
         ]
 
@@ -1314,7 +1330,7 @@ class Transfer(models.Model):
     def drop(self):
         """删除 Transfer 记录。
 
-        删除记录以释放唯一约束 (chain, hash),
+        删除记录以释放唯一约束 (chain, hash, event_index),
         使 reorg 后同一笔 tx 被重新打包时, 扫描器可以自然重建 Transfer。
         """
         # 先加行锁，防止并发处理；已删除的 Transfer 直接跳过。

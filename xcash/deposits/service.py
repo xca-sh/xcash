@@ -5,6 +5,7 @@ from aml.tasks import screen_deposit_aml
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
+from chains.models import ChainType
 from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
@@ -92,13 +93,11 @@ class DepositService:
         if not transfer.crypto.active:
             return False
 
-        try:
-            customer = VaultSlot.objects.get(
-                chain=transfer.chain,
-                address=transfer.to_address,
-                usage=VaultSlotUsage.DEPOSIT,
-            ).customer
-        except VaultSlot.DoesNotExist:
+        if not VaultSlot.objects.filter(
+            chain=transfer.chain,
+            address=transfer.to_address,
+            usage=VaultSlotUsage.DEPOSIT,
+        ).exists():
             return False
 
         transfer.type = TransferType.Deposit
@@ -157,7 +156,10 @@ class DepositService:
             raise DepositStatusError("Deposit transfer must be confirmed")
 
         transfer = deposit.transfer
-        if transfer.crypto_id == transfer.chain.native_coin.pk:
+        if (
+            transfer.crypto_id == transfer.chain.native_coin.pk
+            and transfer.chain.type != ChainType.TRON
+        ):
             return False
 
         return VaultSlot.schedule_collect_for_deposit(deposit.pk) is not None

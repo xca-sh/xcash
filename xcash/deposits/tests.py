@@ -214,6 +214,21 @@ class DepositNotificationTests(TestCase):
         self.assertFalse(scheduled)
         schedule_collect.assert_not_called()
 
+    @patch.object(VaultSlot, "schedule_collect_for_deposit")
+    def test_schedule_collect_for_completed_deposit_allows_tron_native(
+        self, schedule_collect
+    ):
+        context = create_tron_deposit_context(native=True)
+        deposit = Deposit.objects.create(
+            customer=context.customer,
+            transfer=context.transfer,
+        )
+
+        scheduled = DepositService.schedule_collect_for_completed_deposit(deposit)
+
+        self.assertTrue(scheduled)
+        schedule_collect.assert_called_once_with(deposit.pk)
+
     @patch("deposits.service.send_saas_callback")
     @patch("deposits.service.WebhookService.create_event")
     @patch.object(VaultSlot, "schedule_collect_for_deposit")
@@ -392,7 +407,7 @@ def create_deposit_context(*, native: bool = False, confirmed: bool = True):
     )
 
 
-def create_tron_deposit_context():
+def create_tron_deposit_context(*, native=False):
     wallet = Wallet.objects.create()
     project = Project.objects.create(name="TronDepositTestProject")
     customer = Customer.objects.create(project=project, uid="tron-deposit-customer")
@@ -402,17 +417,20 @@ def create_tron_deposit_context():
         tron_api_key="tron-key",
         active=True,
     )
-    crypto = Crypto.objects.create(
-        name="Tron Deposit USDT",
-        symbol="USDT",
-        coingecko_id="tron-deposit-usdt",
-    )
-    CryptoOnChain.objects.create(
-        crypto=crypto,
-        chain=chain,
-        address="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
-        decimals=6,
-    )
+    if native:
+        crypto = chain.native_coin
+    else:
+        crypto = Crypto.objects.create(
+            name="Tron Deposit USDT",
+            symbol="USDT",
+            coingecko_id="tron-deposit-usdt",
+        )
+        CryptoOnChain.objects.create(
+            crypto=crypto,
+            chain=chain,
+            address="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+            decimals=6,
+        )
     slot_address = "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb"
     VaultSlot.objects.create(
         customer=customer,
@@ -425,7 +443,7 @@ def create_tron_deposit_context():
         chain=chain,
         block=1,
         block_hash="b" * 64,
-        hash="3" * 64,
+        hash=("4" if native else "3") * 64,
         crypto=crypto,
         from_address="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
         to_address=slot_address,

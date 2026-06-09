@@ -28,6 +28,7 @@ class ParsedEvmTransferLog:
     block_number: int
     block_hash: str
     tx_hash: str
+    event_index: int | None
     from_address: str
     to_address: str
     crypto: Any
@@ -142,6 +143,7 @@ class EvmObservedTransferProcessor:
             block_number = cls._parse_int(log["blockNumber"])
             block_hash = cls._normalize_required_hash(log["blockHash"])
             tx_hash = cls._normalize_required_hash(log["transactionHash"])
+            event_index = cls._parse_optional_int(log.get("logIndex"))
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             logger.warning(
                 "EVM 原生币充值日志解析失败，已跳过",
@@ -159,6 +161,7 @@ class EvmObservedTransferProcessor:
             block_number=block_number,
             block_hash=block_hash,
             tx_hash=tx_hash,
+            event_index=event_index,
             from_address=payer,
             to_address=slot_address,
             crypto=chain.native_coin,
@@ -202,6 +205,7 @@ class EvmObservedTransferProcessor:
             block_number = cls._parse_int(log["blockNumber"])
             block_hash = cls._normalize_required_hash(log["blockHash"])
             tx_hash = cls._normalize_required_hash(log["transactionHash"])
+            event_index = cls._parse_optional_int(log.get("logIndex"))
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             logger.warning(
                 "EVM ERC20 Transfer 日志解析失败，已跳过",
@@ -218,6 +222,7 @@ class EvmObservedTransferProcessor:
             block_number=block_number,
             block_hash=block_hash,
             tx_hash=tx_hash,
+            event_index=event_index,
             from_address=from_address,
             to_address=to_address,
             crypto=token.crypto,
@@ -260,6 +265,7 @@ class EvmObservedTransferProcessor:
                     chain=chain,
                     block=log.block_number,
                     tx_hash=log.tx_hash,
+                    event_index=log.event_index,
                     from_address=log.from_address,
                     to_address=log.to_address,
                     crypto=log.crypto,
@@ -319,6 +325,12 @@ class EvmObservedTransferProcessor:
         if value.startswith(("0x", "0X")):
             return int(value, 16)
         return int(value) if value else 0
+
+    @classmethod
+    def _parse_optional_int(cls, raw_value: Any) -> int | None:
+        if raw_value in (None, ""):
+            return None
+        return cls._parse_int(raw_value)
 
     @staticmethod
     def _normalize_address(value: Any) -> str | None:

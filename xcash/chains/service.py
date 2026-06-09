@@ -61,6 +61,7 @@ class ObservedTransferPayload:
     timestamp: int
     datetime: datetime
     source: str = "observer"
+    event_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,7 @@ class TransferService:
             "block": observed.block,
             "block_hash": observed.block_hash,
             "hash": observed.tx_hash,
+            "event_index": observed.event_index,
             "from_address": observed.from_address,
             "to_address": observed.to_address,
             "crypto": observed.crypto,
@@ -151,7 +153,11 @@ class TransferService:
             chain = Chain.objects.select_for_update().get(pk=observed.chain.pk)
             existing = (
                 Transfer.objects.select_for_update()
-                .filter(chain=chain, hash=observed.tx_hash)
+                .filter(
+                    chain=chain,
+                    hash=observed.tx_hash,
+                    event_index=observed.event_index,
+                )
                 .first()
             )
             if existing is not None:
@@ -218,6 +224,7 @@ class TransferService:
                 existing = Transfer.objects.filter(
                     chain=chain,
                     hash=observed.tx_hash,
+                    event_index=observed.event_index,
                 ).first()
                 if existing is None:
                     logger.warning(

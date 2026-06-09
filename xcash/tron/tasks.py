@@ -2,6 +2,7 @@ import time
 
 import structlog
 from celery import shared_task
+from django.core.cache import cache
 from django.db import transaction as db_transaction
 from django.db.models import Q
 from tron.client import TronClientError
@@ -26,6 +27,8 @@ from common.time import ago
 
 logger = structlog.get_logger()
 
+TRON_SENDER_BROADCAST_LOCK_TIMEOUT_SECONDS = 60
+
 
 def tx_check_status(result: TxCheckStatus | TxCheckResult) -> TxCheckStatus:
     return result.status if isinstance(result, TxCheckResult) else result
@@ -38,10 +41,78 @@ def has_required_confirmations(*, chain: Chain, result: TxCheckResult | None) ->
     return int(result.block_number) <= confirmed_at_or_before
 
 
+def sender_broadcast_lock_key(*, chain_id: int, sender_id: int) -> str:
+    return f"tron:broadcast:chain:{chain_id}:sender:{sender_id}"
+
+
+def known_tx_hashes_for_task(task: TxTask) -> list[str]:
+    """返回当前任务所有已知 tx_hash，按新版本优先查询。"""
+    hashes: list[str] = []
+    if task.tx_hash:
+        hashes.append(task.tx_hash)
+    for tx_hash in (
+        task.tx_hashes.order_by("-version").values_list("hash", flat=True)
+    ):
+        if tx_hash not in hashes:
+            hashes.append(tx_hash)
+    return hashes
+
+
+def find_tron_receipt_across_hashes(
+    *,
+    adapter,
+    task: TxTask,
+) -> tuple[TxCheckStatus | TxCheckResult | Exception, str | None]:
+    """按所有历史 hash 查询 Tron 主动交易结果。
+
+    Tron 过期重签会产生多个 txID；任一历史 hash 成功都足以把幂等 deploy/collect
+    任务收口。只有所有已知 hash 均确定失败时才返回 FAILED；只要仍有 missing，
+    就继续等待/后续重播，避免把仍可能上链的新 hash 过早判失败。
+    """
+    failed_result: TxCheckStatus | TxCheckResult | None = None
+    failed_hash: str | None = None
+    saw_missing = False
+
+    for tx_hash in known_tx_hashes_for_task(task):
+        raw_result = adapter.tx_result(chain=task.chain, tx_hash=tx_hash)
+        if isinstance(raw_result, Exception):
+            return raw_result, None
+        status = tx_check_status(raw_result)
+        if status == TxCheckStatus.SUCCEEDED:
+            return raw_result, tx_hash
+        if status == TxCheckStatus.FAILED:
+            if failed_result is None:
+                failed_result = raw_result
+                failed_hash = tx_hash
+            continue
+        saw_missing = True
+
+    if failed_result is not None and not saw_missing:
+        return failed_result, failed_hash
+    return TxCheckStatus.MISSING, None
+
+
 @shared_task(ignore_result=True)
 @singleton_task(timeout=30, use_params=True)
 def broadcast_tron_task(pk: int) -> None:
     tx_task = TronTxTask.objects.select_related("base_task", "chain", "sender").get(pk=pk)
+    lock_key = sender_broadcast_lock_key(
+        chain_id=tx_task.chain_id,
+        sender_id=tx_task.sender_id,
+    )
+    acquired = cache.add(
+        lock_key,
+        "true",
+        TRON_SENDER_BROADCAST_LOCK_TIMEOUT_SECONDS,
+    )
+    if not acquired:
+        logger.info(
+            "Tron 任务广播跳过，同一发送地址已有任务执行中",
+            task_pk=tx_task.pk,
+            chain=tx_task.chain.code,
+            sender=tx_task.sender.address,
+        )
+        return
     try:
         if tx_task.base_task.status == TxTaskStatus.QUEUED:
             tx_task.broadcast()
@@ -54,6 +125,8 @@ def broadcast_tron_task(pk: int) -> None:
             chain=tx_task.chain.code,
             error=str(exc),
         )
+    finally:
+        cache.delete(lock_key)
 
 
 @shared_task(ignore_result=True)
@@ -73,7 +146,7 @@ def dispatch_tron_tx_tasks() -> None:
             Q(last_attempt_at__isnull=True) | Q(last_attempt_at__lt=ago(minutes=2)),
             created_at__lt=ago(seconds=2),
         )
-        .order_by("created_at")[:16]
+        .order_by("created_at")[:1]
     )
     for task in tasks:
         db_transaction.on_commit(lambda pk=task.pk: broadcast_tron_task.delay(pk))
@@ -98,24 +171,27 @@ def confirm_tron_receipt_tx_tasks() -> None:
     """
     tasks = (
         TxTask.objects.select_related("chain")
+        .prefetch_related("tx_hashes")
         .filter(
             chain__type=ChainType.TRON,
             tx_type__in=(TxTaskType.VaultSlotDeploy, TxTaskType.VaultSlotCollect),
             status=TxTaskStatus.SUBMITTED,
-            tx_hash__isnull=False,
         )
-        .exclude(tx_hash="")
         .order_by("updated_at")[:32]
     )
     for task in tasks:
+        if not known_tx_hashes_for_task(task):
+            continue
         adapter = AdapterFactory.get_adapter(task.chain.type)
-        raw_result = adapter.tx_result(chain=task.chain, tx_hash=task.tx_hash)
+        raw_result, matched_tx_hash = find_tron_receipt_across_hashes(
+            adapter=adapter,
+            task=task,
+        )
         if isinstance(raw_result, Exception):
             logger.warning(
                 "Tron 主动交易回执确认查询失败",
                 chain=task.chain.code,
                 tx_task_id=task.pk,
-                tx_hash=task.tx_hash,
                 error=str(raw_result),
             )
             continue
@@ -123,13 +199,16 @@ def confirm_tron_receipt_tx_tasks() -> None:
         result_meta = raw_result if isinstance(raw_result, TxCheckResult) else None
         status = tx_check_status(raw_result)
         if status == TxCheckStatus.SUCCEEDED:
+            if matched_tx_hash is None:
+                continue
             if not has_required_confirmations(chain=task.chain, result=result_meta):
                 continue
             updated = TxTask.mark_finalized_success(
                 chain=task.chain,
-                tx_hash=task.tx_hash,
+                tx_hash=matched_tx_hash,
             )
             if updated:
+                task.tx_hash = matched_tx_hash
                 if task.tx_type == TxTaskType.VaultSlotDeploy:
                     mark_deployed_by_task(task)
                 elif task.tx_type == TxTaskType.VaultSlotCollect:

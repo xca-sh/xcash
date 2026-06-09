@@ -210,18 +210,52 @@ class TronScanner:
         block_timestamp_ms = cls._extract_block_timestamp_ms(payload=payload, chain=chain)
         candidates: list[ParsedTronTransferEvent] = []
         for tx in transactions:
-            event = cls._parse_native_transfer(
+            candidates.extend(
+                cls._parse_native_transfers(
+                    chain=chain,
+                    tx=tx,
+                    block_number=block_number,
+                    block_hash=block_hash,
+                    block_timestamp_ms=block_timestamp_ms,
+                    crypto=native_on_chain.crypto,
+                    decimals=native_on_chain.decimals,
+                )
+            )
+        return cls.filter_matched_events(chain=chain, candidates=candidates)
+
+    @classmethod
+    def _parse_native_transfers(
+        cls,
+        *,
+        chain: Chain,
+        tx: dict,
+        block_number: int,
+        block_hash: str,
+        block_timestamp_ms: int,
+        crypto,
+        decimals: int,
+    ) -> list[ParsedTronTransferEvent]:
+        if not isinstance(tx, dict):
+            return []
+        contracts = (tx.get("raw_data") or {}).get("contract") or []
+        if not isinstance(contracts, list) or not contracts:
+            return []
+        events: list[ParsedTronTransferEvent] = []
+        for contract_index, contract in enumerate(contracts):
+            event = cls._parse_native_transfer_contract(
                 chain=chain,
                 tx=tx,
+                contract=contract,
+                contract_index=contract_index,
                 block_number=block_number,
                 block_hash=block_hash,
                 block_timestamp_ms=block_timestamp_ms,
-                crypto=native_on_chain.crypto,
-                decimals=native_on_chain.decimals,
+                crypto=crypto,
+                decimals=decimals,
             )
             if event is not None:
-                candidates.append(event)
-        return cls.filter_matched_events(chain=chain, candidates=candidates)
+                events.append(event)
+        return events
 
     @classmethod
     def _parse_native_transfer(
@@ -235,22 +269,46 @@ class TronScanner:
         crypto,
         decimals: int,
     ) -> ParsedTronTransferEvent | None:
-        """单笔 TransferContract → 入账事件；非 TransferContract / 执行失败 / 金额非正一律跳过。"""
+        """兼容旧单测入口：返回 tx 中第一条可解析的原生 TRX 入账事件。"""
+        events = cls._parse_native_transfers(
+            chain=chain,
+            tx=tx,
+            block_number=block_number,
+            block_hash=block_hash,
+            block_timestamp_ms=block_timestamp_ms,
+            crypto=crypto,
+            decimals=decimals,
+        )
+        return events[0] if events else None
+
+    @classmethod
+    def _parse_native_transfer_contract(
+        cls,
+        *,
+        chain: Chain,
+        tx: dict,
+        contract: object,
+        contract_index: int,
+        block_number: int,
+        block_hash: str,
+        block_timestamp_ms: int,
+        crypto,
+        decimals: int,
+    ) -> ParsedTronTransferEvent | None:
+        """单个 TransferContract → 入账事件；非 TransferContract / 执行失败 / 金额非正一律跳过。"""
         if not isinstance(tx, dict):
             return None
         tx_id = str(tx.get("txID") or "")
         if not tx_id:
             return None
-        # 仅接受执行成功的交易：TransferContract 入块通常即成功，但仍以 ret.contractRet 为准。
+        # 仅接受执行成功的 contract：TransferContract 入块通常即成功，但仍以 ret.contractRet 为准。
         ret = tx.get("ret") or []
-        if isinstance(ret, list) and ret and isinstance(ret[0], dict):
-            contract_ret = ret[0].get("contractRet")
-            if contract_ret not in (None, "", "SUCCESS"):
-                return None
-        contracts = (tx.get("raw_data") or {}).get("contract") or []
-        if not isinstance(contracts, list) or not contracts:
-            return None
-        contract = contracts[0]
+        if isinstance(ret, list) and contract_index < len(ret):
+            ret_item = ret[contract_index]
+            if isinstance(ret_item, dict):
+                contract_ret = ret_item.get("contractRet")
+                if contract_ret not in (None, "", "SUCCESS"):
+                    return None
         if not isinstance(contract, dict) or contract.get("type") != "TransferContract":
             return None
         value_obj = ((contract.get("parameter") or {}).get("value")) or {}
@@ -276,6 +334,7 @@ class TronScanner:
                 chain=chain,
                 block=block_number,
                 tx_hash=tx_id,
+                event_index=contract_index,
                 from_address=from_address,
                 to_address=to_address,
                 crypto=crypto,
@@ -487,7 +546,7 @@ class TronScanner:
         try:
             block_number = int(row.get("block_number") or 0)
             timestamp_ms = int(row.get("block_timestamp") or 0)
-            int(raw_event_index)
+            event_index = int(raw_event_index)
         except (TypeError, ValueError):
             return None
         if not tx_id or not block_number or not timestamp_ms:
@@ -534,6 +593,7 @@ class TronScanner:
                 chain=chain,
                 block=block_number,
                 tx_hash=tx_id,
+                event_index=event_index,
                 from_address=from_address,
                 to_address=to_address,
                 crypto=token.crypto,

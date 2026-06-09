@@ -620,6 +620,41 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
         broadcast.assert_not_called()
         rebroadcast_expired_submitted.assert_called_once()
 
+    @patch("tron.tasks.cache")
+    @patch("tron.models.TronTxTask.broadcast")
+    def test_broadcast_task_skips_when_sender_lock_is_held(
+        self,
+        broadcast,
+        cache_mock,
+    ):
+        task = self.make_task()
+        cache_mock.add.return_value = False
+
+        broadcast_tron_task.run(task.pk)
+
+        broadcast.assert_not_called()
+        cache_mock.delete.assert_not_called()
+
+    @patch("tron.tasks.broadcast_tron_task.delay")
+    def test_dispatch_tron_tx_tasks_dispatches_one_task_per_tick(self, delay_mock):
+        from tron.tasks import dispatch_tron_tx_tasks
+
+        first = self.make_task()
+        second = self.make_task()
+        TronTxTask.objects.filter(pk=first.pk).update(
+            created_at=timezone.now() - timedelta(seconds=10),
+            last_attempt_at=None,
+        )
+        TronTxTask.objects.filter(pk=second.pk).update(
+            created_at=timezone.now() - timedelta(seconds=5),
+            last_attempt_at=None,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            dispatch_tron_tx_tasks.run()
+
+        delay_mock.assert_called_once_with(first.pk)
+
 
 class TronWatchCursorTests(TestCase):
     def test_enabling_tron_chain_creates_scan_cursor(self):
@@ -1048,8 +1083,81 @@ class TronScannerTests(TestCase):
         self.assertEqual(summary.filter_addresses, 1)
         transfer = Transfer.objects.get(hash="d" * 64)
         self.assertEqual(transfer.to_address, self.watch_address)
+        self.assertEqual(transfer.event_index, 0)
         self.assertEqual(transfer.amount, Decimal("1.234567"))
         enqueue_processing_mock.assert_called_once()
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    @patch("tron.scanner.TronHttpClient")
+    def test_scan_chain_creates_independent_trc20_events_in_same_tx(
+        self,
+        client_cls,
+        enqueue_processing_mock,
+    ):
+        from tron.scanner import TronScanner
+
+        second_watch_address = "TVjsyZ7fYF3qLF6BQgPmTEZy1xrNNyVAAA"
+        VaultSlot.objects.create(
+            chain=self.chain,
+            project=self.project,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=0,
+            address=self.watch_address,
+            salt=b"a" * 32,
+        )
+        VaultSlot.objects.create(
+            chain=self.chain,
+            project=self.project,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=1,
+            address=second_watch_address,
+            salt=b"b" * 32,
+        )
+        self._set_cursor_block(last_scanned_block=123455)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = 123456
+        client.get_solid_block_id.return_value = "0" * 64
+        client.list_confirmed_contract_events.return_value = {
+            "data": [
+                {
+                    "transaction_id": "1" * 64,
+                    "event_index": "0",
+                    "block_number": 123456,
+                    "block_timestamp": 1_700_000_000_000,
+                    "event_name": "Transfer",
+                    "contract_address": self.usdt_mapping.address,
+                    "result": {
+                        "from": self.sender_address,
+                        "to": self.watch_address,
+                        "value": "1000000",
+                    },
+                },
+                {
+                    "transaction_id": "1" * 64,
+                    "event_index": "1",
+                    "block_number": 123456,
+                    "block_timestamp": 1_700_000_000_000,
+                    "event_name": "Transfer",
+                    "contract_address": self.usdt_mapping.address,
+                    "result": {
+                        "from": self.sender_address,
+                        "to": second_watch_address,
+                        "value": "2000000",
+                    },
+                },
+            ],
+            "meta": {},
+        }
+
+        summary = TronScanner.scan_chain(chain=self.chain)
+
+        self.assertEqual(summary.events_seen, 2)
+        self.assertEqual(summary.filter_addresses, 2)
+        transfers = list(Transfer.objects.filter(hash="1" * 64).order_by("event_index"))
+        self.assertEqual(len(transfers), 2)
+        self.assertEqual([transfer.event_index for transfer in transfers], [0, 1])
+        self.assertEqual([transfer.amount for transfer in transfers], [Decimal("1"), Decimal("2")])
+        self.assertEqual(enqueue_processing_mock.call_count, 2)
 
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")
@@ -1148,6 +1256,7 @@ class TronScannerTests(TestCase):
 
         event = parse(self._native_tx(to_hex=to_hex, from_hex=from_hex))
         self.assertIsNotNone(event)
+        self.assertEqual(event.observed.event_index, 0)
         self.assertEqual(event.observed.to_address, self.watch_address)
         self.assertEqual(event.observed.from_address, self.sender_address)
         self.assertEqual(event.observed.crypto, self.trx)
@@ -1212,9 +1321,69 @@ class TronScannerTests(TestCase):
         self.assertEqual(summary.filter_addresses, 1)
         transfer = Transfer.objects.get(hash="f" * 64)
         self.assertEqual(transfer.to_address, self.watch_address)
+        self.assertEqual(transfer.event_index, 0)
         self.assertEqual(transfer.crypto, self.trx)
         self.assertEqual(transfer.value, Decimal("1500000"))
         self.assertEqual(transfer.amount, Decimal("1.5"))
+        enqueue_processing_mock.assert_called_once()
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    @patch("tron.scanner.TronHttpClient")
+    def test_scan_chain_matches_native_transfer_contract_after_first_contract(
+        self,
+        client_cls,
+        enqueue_processing_mock,
+    ):
+        from tron.codec import TronAddressCodec
+        from tron.scanner import TronScanner
+
+        VaultSlot.objects.create(
+            chain=self.chain,
+            project=self.project,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=0,
+            address=self.watch_address,
+            salt=b"m" * 32,
+        )
+        self._set_cursor_block(last_scanned_block=123455)
+        to_hex = TronAddressCodec.base58_to_hex41(self.watch_address)
+        from_hex = TronAddressCodec.base58_to_hex41(self.sender_address)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = 123456
+        client.get_solid_block_id.return_value = "0" * 64
+        client.list_confirmed_contract_events.return_value = {"data": [], "meta": {}}
+        client.get_solid_block.return_value = {
+            "blockID": "a" * 64,
+            "block_header": {"raw_data": {"timestamp": 1_700_000_000_000}},
+            "transactions": [
+                {
+                    "txID": "2" * 64,
+                    "ret": [{"contractRet": "SUCCESS"}, {"contractRet": "SUCCESS"}],
+                    "raw_data": {
+                        "contract": [
+                            {"type": "FreezeBalanceV2Contract", "parameter": {"value": {}}},
+                            {
+                                "type": "TransferContract",
+                                "parameter": {
+                                    "value": {
+                                        "amount": 2_500_000,
+                                        "owner_address": from_hex,
+                                        "to_address": to_hex,
+                                    }
+                                },
+                            },
+                        ],
+                    },
+                }
+            ],
+        }
+
+        summary = TronScanner.scan_chain(chain=self.chain)
+
+        self.assertEqual(summary.events_seen, 1)
+        transfer = Transfer.objects.get(hash="2" * 64)
+        self.assertEqual(transfer.event_index, 1)
+        self.assertEqual(transfer.amount, Decimal("2.5"))
         enqueue_processing_mock.assert_called_once()
 
     @patch("chains.service.TransferService.enqueue_processing")
@@ -1521,6 +1690,52 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(base_task.status, TxTaskStatus.FAILED)
         refresh_balance.assert_not_called()
         collect_gas_fee.assert_not_called()
+
+    @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
+    @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tasks.AdapterFactory.get_adapter")
+    def test_confirm_collect_resolves_success_from_old_hash(
+        self,
+        get_adapter,
+        refresh_balance,
+        collect_gas_fee,
+        deploy_gas_fee,
+    ):
+        old_hash = "c" * 64
+        new_hash = "d" * 64
+        base_task = self.create_collect_task(tx_hash=old_hash)
+        base_task.append_tx_hash(new_hash)
+        adapter = Mock()
+
+        def tx_result(*, chain, tx_hash):
+            if tx_hash == new_hash:
+                return TxCheckStatus.MISSING
+            if tx_hash == old_hash:
+                return TxCheckResult(
+                    status=TxCheckStatus.SUCCEEDED,
+                    block_number=100,
+                    block_hash="b" * 64,
+                )
+            raise AssertionError(f"unexpected tx_hash={tx_hash}")
+
+        adapter.tx_result.side_effect = tx_result
+        get_adapter.return_value = adapter
+
+        confirm_tron_receipt_tx_tasks()
+
+        base_task.refresh_from_db()
+        self.assertEqual(base_task.status, TxTaskStatus.SUCCEEDED)
+        self.assertEqual(base_task.tx_hash, old_hash)
+        self.assertEqual(
+            [call.kwargs["tx_hash"] for call in adapter.tx_result.call_args_list],
+            [new_hash, old_hash],
+        )
+        refresh_balance.assert_called_once()
+        self.assertEqual(refresh_balance.call_args.args[0].tx_hash, old_hash)
+        collect_gas_fee.assert_called_once()
+        self.assertEqual(collect_gas_fee.call_args.kwargs["tx_task"].tx_hash, old_hash)
+        deploy_gas_fee.assert_not_called()
 
 
 @override_settings(
