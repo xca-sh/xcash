@@ -13,8 +13,8 @@ class StressRunStatus(models.TextChoices):
 
 class InvoiceStressCaseStatus(models.TextChoices):
     PENDING = "pending", _("等待执行")
-    CREATING = "creating", _("创建账单中")
-    CREATED = "created", _("账单已创建")
+    CREATING = "creating", _("创建账单收款中")
+    CREATED = "created", _("账单收款已创建")
     PAYING = "paying", _("支付中")
     PAID = "paid", _("链上已广播")
     WEBHOOK_OK = "webhook_ok", _("Webhook 验证通过")
@@ -25,9 +25,9 @@ class InvoiceStressCaseStatus(models.TextChoices):
 
 class DepositStressCaseStatus(models.TextChoices):
     PENDING = "pending", _("等待执行")
-    CREATING = "creating", _("获取充值地址中")
-    PAYING = "paying", _("模拟充值中")
-    PAID = "paid", _("已充值")
+    CREATING = "creating", _("获取账户充值地址中")
+    PAYING = "paying", _("模拟账户充值中")
+    PAID = "paid", _("账户充值已完成")
     WEBHOOK_OK = "webhook_ok", _("Webhook 验证通过")
     SUCCEEDED = "succeeded", _("成功")
     FAILED = "failed", _("失败")
@@ -36,9 +36,9 @@ class DepositStressCaseStatus(models.TextChoices):
 
 class StressRun(models.Model):
     name = models.CharField(_("名称"), max_length=128)
-    count = models.PositiveIntegerField(_("支付模拟次数"), default=0)
-    deposit_count = models.PositiveIntegerField(_("充币模拟次数"), default=0)
-    deposit_customer_count = models.PositiveIntegerField(_("充币客户数"), default=0)
+    count = models.PositiveIntegerField(_("账单收款模拟次数"), default=0)
+    deposit_count = models.PositiveIntegerField(_("账户充值模拟次数"), default=0)
+    deposit_customer_count = models.PositiveIntegerField(_("账户充值客户数"), default=0)
     status = models.CharField(
         _("状态"),
         max_length=16,
@@ -128,15 +128,15 @@ class InvoiceStressCase(models.Model):
     collection_done_at = models.DateTimeField(_("归集完成时间"), null=True, blank=True)
 
     started_at = models.DateTimeField(_("开始时间"), null=True, blank=True)
-    invoice_created_at = models.DateTimeField(_("账单创建完成时间"), null=True, blank=True)
+    invoice_created_at = models.DateTimeField(_("账单收款创建完成时间"), null=True, blank=True)
     api_done_at = models.DateTimeField(_("选支付方式完成时间"), null=True, blank=True)
     chain_paid_at = models.DateTimeField(_("链上广播完成时间"), null=True, blank=True)
     webhook_received_at = models.DateTimeField(_("Webhook 处理完成时间"), null=True, blank=True)
     finished_at = models.DateTimeField(_("完成时间"), null=True, blank=True)
 
     class Meta:
-        verbose_name = _("账单测试")
-        verbose_name_plural = _("账单测试")
+        verbose_name = _("账单收款测试")
+        verbose_name_plural = _("账单收款测试")
         ordering = ["stress_run", "sequence"]
 
     def __str__(self):
@@ -162,9 +162,9 @@ class DepositStressCase(models.Model):
     # 执行过程中填充
     crypto = models.CharField(_("币种"), max_length=32)
     chain = models.CharField(_("链"), max_length=32)
-    deposit_address = models.CharField(_("充值地址"), max_length=256, blank=True)
+    deposit_address = models.CharField(_("账户充值地址"), max_length=256, blank=True)
     amount = models.DecimalField(
-        _("充值金额"),
+        _("账户充值金额"),
         max_digits=36,
         decimal_places=18,
     )
@@ -194,15 +194,15 @@ class DepositStressCase(models.Model):
     error = models.TextField(_("错误信息"), blank=True)
 
     started_at = models.DateTimeField(_("开始时间"), null=True, blank=True)
-    api_done_at = models.DateTimeField(_("获取充值地址完成时间"), null=True, blank=True)
-    chain_paid_at = models.DateTimeField(_("链上充值完成时间"), null=True, blank=True)
+    api_done_at = models.DateTimeField(_("获取账户充值地址完成时间"), null=True, blank=True)
+    chain_paid_at = models.DateTimeField(_("链上账户充值完成时间"), null=True, blank=True)
     webhook_received_at = models.DateTimeField(_("Webhook 处理完成时间"), null=True, blank=True)
     collection_done_at = models.DateTimeField(_("归集完成时间"), null=True, blank=True)
     finished_at = models.DateTimeField(_("完成时间"), null=True, blank=True)
 
     class Meta:
-        verbose_name = _("充币测试")
-        verbose_name_plural = _("充币测试")
+        verbose_name = _("账户充值测试")
+        verbose_name_plural = _("账户充值测试")
         ordering = ["stress_run", "sequence"]
 
     def __str__(self):

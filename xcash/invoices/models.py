@@ -213,8 +213,8 @@ class Invoice(models.Model):
 
     class Meta:
         ordering = ("-created_at",)
-        verbose_name = _("账单")
-        verbose_name_plural = _("账单")
+        verbose_name = _("账单收款")
+        verbose_name_plural = _("账单收款")
         constraints = [
             # 统一采用具名 UniqueConstraint，便于数据库约束报错定位和后续约束扩展。
             models.UniqueConstraint(

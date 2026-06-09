@@ -23,8 +23,8 @@ class RiskAssessment(models.Model):
         FAILED = "failed", _("查询失败")
 
     class TargetType(models.TextChoices):
-        INVOICE = "invoice", _("账单")
-        DEPOSIT = "deposit", _("充币")
+        INVOICE = "invoice", _("账单收款")
+        DEPOSIT = "deposit", _("账户充值")
 
     source = models.CharField(
         _("数据来源"),
@@ -51,7 +51,7 @@ class RiskAssessment(models.Model):
         null=True,
         blank=True,
         related_name="aml_assessment",
-        verbose_name=_("账单"),
+        verbose_name=_("账单收款"),
     )
     deposit = models.OneToOneField(
         "deposits.Deposit",
@@ -59,7 +59,7 @@ class RiskAssessment(models.Model):
         null=True,
         blank=True,
         related_name="aml_assessment",
-        verbose_name=_("充币"),
+        verbose_name=_("账户充值"),
     )
     address = models.CharField(_("查询地址"), max_length=128, db_index=True)
     tx_hash = models.CharField(_("交易哈希"), max_length=128, blank=True, default="")

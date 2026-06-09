@@ -134,32 +134,32 @@ SIDEBAR_UNFOLD = {
                 ],
             },
             {
-                "title": _("支付"),
+                "title": _("账单收款"),
                 "collapsible": False,
                 "items": [
                     {
-                        "title": _("账单列表"),
+                        "title": _("账单收款记录"),
                         "icon": "receipt_long",
                         "link": reverse_lazy("admin:invoices_invoice_changelist"),
                     },
                     {
-                        "title": _("账单合约"),
+                        "title": _("账单收款地址"),
                         "icon": "add_card",
                         "link": reverse_lazy("admin:chains_invoicevaultslot_changelist"),
                     },
                 ],
             },
             {
-                "title": _("充币"),
+                "title": _("账户充值"),
                 "collapsible": False,
                 "items": [
                     {
-                        "title": _("充币记录"),
+                        "title": _("账户充值记录"),
                         "icon": "download",
                         "link": reverse_lazy("admin:deposits_deposit_changelist"),
                     },
                     {
-                        "title": _("充币合约"),
+                        "title": _("账户充值地址"),
                         "icon": "add_card",
                         "link": reverse_lazy("admin:chains_depositvaultslot_changelist"),
                     },

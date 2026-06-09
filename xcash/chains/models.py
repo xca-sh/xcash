@@ -493,8 +493,8 @@ class TransferType(models.TextChoices):
     """Transfer.type 的枚举：仅描述对一笔链上转账的业务归属。"""
 
     Unmatched = "unmatched", _("未归类")
-    Invoice = "invoice", _("💳 支付")
-    Deposit = "deposit", "💰 充币"
+    Invoice = "invoice", _("💳 账单收款")
+    Deposit = "deposit", _("💰 账户充值")
 
 
 class TxTaskStatus(models.TextChoices):
@@ -731,7 +731,7 @@ class TxTask(UndeletableModel):
 
 
 class VaultSlotUsage(models.TextChoices):
-    DEPOSIT = "deposit", _("用户充币")
+    DEPOSIT = "deposit", _("账户充值")
     INVOICE = "invoice", _("账单收款")
 
 
@@ -1172,7 +1172,7 @@ class VaultSlotCollectSchedule(models.Model):
 class DepositVaultSlot(VaultSlot):
     class Meta:
         proxy = True
-        verbose_name = _("充币收款地址")
+        verbose_name = _("账户充值地址")
         verbose_name_plural = verbose_name
 
 

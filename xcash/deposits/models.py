@@ -42,8 +42,8 @@ class Deposit(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        verbose_name = _("充币")
-        verbose_name_plural = _("充币")
+        verbose_name = _("账户充值")
+        verbose_name_plural = _("账户充值")
 
     def __str__(self) -> str:
         return f"Deposit({self.sys_no}, confirmed={self.confirmed})"
