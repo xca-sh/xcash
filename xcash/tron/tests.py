@@ -1767,7 +1767,7 @@ class TronCollectScheduleExecuteTests(TestCase):
         )
         self.project = Project.objects.create(
             name="Tron Execute Project",
-            vault="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            tron_vault="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
         )
         self.customer = Customer.objects.create(
             project=self.project, uid="tron-execute-customer"

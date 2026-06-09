@@ -372,10 +372,10 @@ class EpaySubmitServiceTests(TestCase):
             decimals=6,
         )
         Fiat.objects.get_or_create(code="CNY")
-        self.project.vault = Web3.to_checksum_address(
+        self.project.evm_vault = Web3.to_checksum_address(
             "0x00000000000000000000000000000000000000C1"
         )
-        self.project.save(update_fields=["vault"])
+        self.project.save(update_fields=["evm_vault"])
 
     def _signed_params(self, **overrides):
         params = {
@@ -692,7 +692,7 @@ class EpaySubmitServiceTests(TestCase):
     @patch("invoices.epay.service.check_saas_permission")
     def test_submit_rejects_when_project_has_no_payment_methods(self, mock_check):
         # EPay 建单若项目没有任何可用收款方式，必须拒绝而不是创建不可支付账单并占用商户单号。
-        Project.objects.filter(pk=self.project.pk).update(vault=None)
+        Project.objects.filter(pk=self.project.pk).update(evm_vault=None)
 
         params = self._signed_params(out_trade_no="EPAY-NO-METHODS-1001")
 

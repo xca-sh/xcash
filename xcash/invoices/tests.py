@@ -128,7 +128,7 @@ class InvoicePaymentSelectionTests(TestCase):
         self.user = User.objects.create(username="merchant-payments")
         self.project = Project.objects.create(
             name="SlotProject",
-            vault=Web3.to_checksum_address(
+            evm_vault=Web3.to_checksum_address(
                 "0x00000000000000000000000000000000000000A1"
             ),
             evm_invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
@@ -428,8 +428,8 @@ class InvoiceFinalizeMethodsOrderingTests(TestCase):
             address="0x0000000000000000000000000000000000000002",
             decimals=6,
         )
-        project.vault = "0x0000000000000000000000000000000000000003"
-        project.save(update_fields=["vault"])
+        project.evm_vault = "0x0000000000000000000000000000000000000003"
+        project.save(update_fields=["evm_vault"])
 
         methods = InvoiceService.finalize_methods(
             project=project,
@@ -464,8 +464,8 @@ class InvoicePaymentSelectionConcurrencyTests(TransactionTestCase):
             decimals=6,
         )
         Fiat.objects.get_or_create(code="USD")
-        self.project.vault = "0x00000000000000000000000000000000000000A1"
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = "0x00000000000000000000000000000000000000A1"
+        self.project.save(update_fields=["evm_vault"])
 
     def test_select_method_allocates_distinct_payments_under_concurrency(self):
         # 两个并发账单抢同一条链/币种支付组合时，必须各自拿到不同当前支付指引。
@@ -576,7 +576,7 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
     def test_contract_available_methods_exposes_evm_for_vault_project(self):
         project = Project.objects.create(
             name="Invoice Contract Only Project",
-            vault="0x0000000000000000000000000000000000008801",
+            evm_vault="0x0000000000000000000000000000000000008801",
             evm_invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
             tron_invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
@@ -713,8 +713,8 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
             address="0x0000000000000000000000000000000000009913",
             decimals=6,
         )
-        project.vault = "0x0000000000000000000000000000000000009914"
-        project.save(update_fields=["vault"])
+        project.evm_vault = "0x0000000000000000000000000000000000009914"
+        project.save(update_fields=["evm_vault"])
         cache.set(
             f"saas:permission:{project.appid}",
             {
@@ -742,7 +742,7 @@ class InvoiceContractBillingValidationTests(TestCase):
         self.factory = APIRequestFactory()
         self.project = Project.objects.create(
             name="Invoice Mixed Billing Project",
-            vault="0x0000000000000000000000000000000000007801",
+            evm_vault="0x0000000000000000000000000000000000007801",
             evm_invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
             tron_invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
         )
@@ -879,8 +879,13 @@ class InvoiceContractBillingValidationTests(TestCase):
     def test_tron_methods_exposed_only_after_runtime_gate(self):
         self.project.evm_invoice_receiving_mode = InvoiceReceivingMode.VaultSlot
         self.project.tron_invoice_receiving_mode = InvoiceReceivingMode.VaultSlot
+        self.project.tron_vault = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
         self.project.save(
-            update_fields=["evm_invoice_receiving_mode", "tron_invoice_receiving_mode"]
+            update_fields=[
+                "evm_invoice_receiving_mode",
+                "tron_invoice_receiving_mode",
+                "tron_vault",
+            ]
         )
 
         methods = Invoice.available_methods(self.project)
@@ -902,8 +907,13 @@ class InvoiceContractBillingValidationTests(TestCase):
 
         self.project.evm_invoice_receiving_mode = InvoiceReceivingMode.VaultSlot
         self.project.tron_invoice_receiving_mode = InvoiceReceivingMode.VaultSlot
+        self.project.tron_vault = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
         self.project.save(
-            update_fields=["evm_invoice_receiving_mode", "tron_invoice_receiving_mode"]
+            update_fields=[
+                "evm_invoice_receiving_mode",
+                "tron_invoice_receiving_mode",
+                "tron_vault",
+            ]
         )
         invoice = Invoice.objects.create(
             project=self.project,
@@ -1073,8 +1083,8 @@ class InvoiceExpiredMatchTests(TestCase):
         self.recipient_address = Web3.to_checksum_address(
             "0x00000000000000000000000000000000000000E1"
         )
-        self.project.vault = self.recipient_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = self.recipient_address
+        self.project.save(update_fields=["evm_vault"])
         CryptoOnChain.objects.create(
             crypto=self.crypto,
             chain=self.chain,
@@ -1154,10 +1164,10 @@ class FallbackInvoiceExpiredTests(TestCase):
         )
         self.chain = create_active_evm_test_chain(code=ChainCode.Ethereum)
         Fiat.objects.get_or_create(code="USD")
-        self.project.vault = Web3.to_checksum_address(
+        self.project.evm_vault = Web3.to_checksum_address(
             "0x00000000000000000000000000000000000000F1"
         )
-        self.project.save(update_fields=["vault"])
+        self.project.save(update_fields=["evm_vault"])
         CryptoOnChain.objects.create(
             crypto=self.crypto,
             chain=self.chain,
@@ -1241,10 +1251,10 @@ class CheckExpiredAtomicityTests(TransactionTestCase):
         )
         self.chain = create_active_evm_test_chain(code=ChainCode.Ethereum)
         Fiat.objects.get_or_create(code="USD")
-        self.project.vault = Web3.to_checksum_address(
+        self.project.evm_vault = Web3.to_checksum_address(
             "0x00000000000000000000000000000000000000A7"
         )
-        self.project.save(update_fields=["vault"])
+        self.project.save(update_fields=["evm_vault"])
         CryptoOnChain.objects.create(
             crypto=self.crypto,
             chain=self.chain,
@@ -1633,8 +1643,8 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F01"
         )
-        self.project.vault = vault_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
         invoice = self.create_test_invoice(
             out_no="contract-vault-source",
         )
@@ -1660,8 +1670,8 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F02"
         )
-        self.project.vault = vault_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
         invoice = self.create_test_invoice(
             out_no="contract-slot-row",
         )
@@ -1687,8 +1697,8 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F12"
         )
-        self.project.vault = vault_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
         invoice = self.create_test_invoice(
             out_no="contract-slot-object",
         )
@@ -1708,8 +1718,8 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F16"
         )
-        self.project.vault = vault_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
         slot = VaultSlot.objects.create(
             project=self.project,
             chain=self.chain,
@@ -1739,8 +1749,8 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F17"
         )
-        self.project.vault = vault_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
         slot = VaultSlot.objects.create(
             project=self.project,
             chain=self.chain,
@@ -1767,7 +1777,7 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         schedule_deploy.assert_called_once_with(slot.pk)
         self.assertEqual(slot.invoice_index, 0)
         self.assertIsNone(slot.customer_id)
-        self.assertEqual(slot.project.vault, vault_address)
+        self.assertEqual(slot.project.evm_vault, vault_address)
 
     def test_contract_slot_reuses_slot_when_existing_invoice_expired(self):
         # 旧账单已被过期任务翻成 EXPIRED 后，其 (pay_address, pay_amount) 组合脱离
@@ -1776,8 +1786,8 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F03"
         )
-        self.project.vault = vault_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
         first_invoice = self.create_test_invoice(
             out_no="contract-reuse-first",
             status=InvoiceStatus.EXPIRED,
@@ -1824,8 +1834,8 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F05"
         )
-        self.project.vault = vault_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
         first_invoice = self.create_test_invoice(
             out_no="contract-waiting-expired-first",
             expires_at=timezone.now() - timedelta(minutes=1),
@@ -1868,8 +1878,8 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F13"
         )
-        self.project.vault = vault_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
         first_invoice = self.create_test_invoice(
             out_no="contract-reuse-amount-first",
         )
@@ -1909,8 +1919,8 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F14"
         )
-        self.project.vault = vault_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
         other_crypto = Crypto.objects.create(
             name="USD Coin Contract",
             symbol="USDCC",
@@ -1956,8 +1966,8 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F04"
         )
-        self.project.vault = vault_address
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
         first_invoice = self.create_test_invoice(
             out_no="contract-overlap-first",
         )
@@ -2006,12 +2016,12 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F15"
         )
-        self.project.vault = vault_address
+        self.project.evm_vault = vault_address
         self.project.evm_invoice_receiving_mode = InvoiceReceivingMode.VaultSlot
         self.project.tron_invoice_receiving_mode = InvoiceReceivingMode.VaultSlot
         self.project.save(
             update_fields=[
-                "vault",
+                "evm_vault",
                 "evm_invoice_receiving_mode",
                 "tron_invoice_receiving_mode",
             ]

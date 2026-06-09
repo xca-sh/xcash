@@ -149,10 +149,10 @@ def test_concurrent_schedule_deploy_reuses_single_task_for_same_slot():
         rpc="http://vault-slot.local",
     )
     project = Project.objects.create(name="Concurrent VaultSlot")
-    project.vault = Web3.to_checksum_address(
+    project.evm_vault = Web3.to_checksum_address(
         "0x0000000000000000000000000000000000000f01"
     )
-    project.save(update_fields=["vault"])
+    project.save(update_fields=["evm_vault"])
     customer = Customer.objects.create(project=project, uid="same-slot")
     wallet = Wallet.objects.create()
     system_wallet = Wallet.objects.create()
@@ -245,10 +245,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.project = Project.objects.create(
             name="Deposit Slot Project",
         )
-        self.project.vault = Web3.to_checksum_address(
+        self.project.evm_vault = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000f01"
         )
-        self.project.save(update_fields=["vault"])
+        self.project.save(update_fields=["evm_vault"])
         self.customer = Customer.objects.create(
             project=self.project,
             uid="vault-slot-customer",
@@ -314,10 +314,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
         )
 
     def test_first_ensure_deposit_address_delays_deploy_for_token(self):
-        self.project.vault = Web3.to_checksum_address(
+        self.project.evm_vault = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000f01"
         )
-        self.project.save(update_fields=["vault"])
+        self.project.save(update_fields=["evm_vault"])
         address_patch = self.patch_address_derivation()
 
         with (
@@ -336,10 +336,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
         schedule.assert_not_called()
 
     def test_first_ensure_deposit_address_schedules_deploy_for_native_after_commit(self):
-        self.project.vault = Web3.to_checksum_address(
+        self.project.evm_vault = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000f01"
         )
-        self.project.save(update_fields=["vault"])
+        self.project.save(update_fields=["evm_vault"])
         address_patch = self.patch_address_derivation()
 
         with (
@@ -361,7 +361,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(intent.tx_type, TxTaskType.VaultSlotDeploy)
         self.assertEqual(intent.sender, self.system_sender)
         self.assertEqual(intent.to, XCASH_VAULT_SLOT_FACTORY_ADDRESS)
-        self.assertIn(self.project.vault[2:].lower(), intent.data)
+        self.assertIn(self.project.evm_vault[2:].lower(), intent.data)
 
     def test_customer_vault_slot_records_project_usage_without_invoice_index(self):
         address_patch = self.patch_address_derivation()
@@ -605,7 +605,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                     "topics": [
                         Web3.keccak(text="Transfer(address,address,uint256)"),
                         address_topic(slot.address),
-                        address_topic(self.project.vault),
+                        address_topic(self.project.evm_vault),
                     ],
                     "data": hex(value),
                     "logIndex": 6,
@@ -713,7 +713,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(tx_detail["native_price"], "2000")
 
     def test_ensure_deposit_address_rejects_project_without_vault(self):
-        Project.objects.filter(pk=self.project.pk).update(vault=None)
+        Project.objects.filter(pk=self.project.pk).update(evm_vault=None)
         self.project.refresh_from_db()
         address_patch = self.patch_address_derivation()
 
@@ -1200,7 +1200,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
         slot = self._create_vault_slot()
         slot.address = predict_xcash_vault_slot_address(
-            vault=self.project.vault,
+            vault=self.project.evm_vault,
             salt=bytes(slot.salt),
         )
         slot.save(update_fields=["address"])
@@ -1208,7 +1208,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             sender=self.system_sender,
             chain=self.chain,
             factory_address=XCASH_VAULT_SLOT_FACTORY_ADDRESS,
-            vault_address=self.project.vault,
+            vault_address=self.project.evm_vault,
             salt=bytes(slot.salt),
             token_address=self.token_address,
         )
@@ -1234,7 +1234,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                     "topics": [
                         Web3.keccak(text="Transfer(address,address,uint256)"),
                         address_topic(slot.address),
-                        address_topic(self.project.vault),
+                        address_topic(self.project.evm_vault),
                     ],
                     "data": hex(value),
                     "logIndex": 6,
@@ -1250,7 +1250,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
         self.assertIsNotNone(fact)
         self.assertEqual(fact.from_address, slot.address)
-        self.assertEqual(fact.to_address, self.project.vault)
+        self.assertEqual(fact.to_address, self.project.evm_vault)
         self.assertEqual(fact.crypto, self.token)
         self.assertEqual(fact.value, Decimal(value))
         self.assertEqual(fact.amount, Decimal("1.23"))
@@ -1316,11 +1316,11 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(tx_detail["native_price"], "2000")
 
     def _create_vault_slot(self) -> VaultSlot:
-        if self.project.vault is None:
-            self.project.vault = Web3.to_checksum_address(
+        if self.project.evm_vault is None:
+            self.project.evm_vault = Web3.to_checksum_address(
                 "0x0000000000000000000000000000000000000f01"
             )
-            self.project.save(update_fields=["vault"])
+            self.project.save(update_fields=["evm_vault"])
         return VaultSlot.objects.create(
             customer=self.customer,
             usage=VaultSlotUsage.DEPOSIT,

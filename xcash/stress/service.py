@@ -334,11 +334,11 @@ def _seed_stress_saas_permission_cache(project: Project) -> None:
 def _setup_wallet_for_vault(project: Project) -> None:
     """为 Stress Project 分配系统钱包派生的独立 EVM vault 地址。
 
-    合约账单（CONTRACT）依赖 project.vault：它既是 CREATE2 派生 VaultSlot 的不可变归集地址，
-    也是 VaultSlot 归集（sweep）的最终终点。Project.vault 有唯一约束，不能让多轮 StressRun
+    合约账单（CONTRACT）依赖 project.evm_vault：它既是 CREATE2 派生 VaultSlot 的不可变归集地址，
+    也是 VaultSlot 归集（sweep）的最终终点。Project.evm_vault 有唯一约束，不能让多轮 StressRun
     复用 address_index=0 的系统热钱包地址；压测专用 vault 使用系统钱包按 project.pk 派生的地址，
     仍由主系统托管私钥。address_index=0 继续作为系统热钱包支付 VaultSlot 部署与归集 gas。
-    Project.vault 一旦写入不可修改（见 Project.save 校验），故只在本次首次准备时赋值。
+    Project.evm_vault 一旦写入不可修改（见 Project.save 校验），故只在本次首次准备时赋值。
     """
     from chains.models import AddressUsage
     from chains.models import ChainType
@@ -353,8 +353,8 @@ def _setup_wallet_for_vault(project: Project) -> None:
         usage=AddressUsage.HotWallet,
         address_index=project.pk,
     ).address
-    project.vault = evm_vault_address
-    project.save(update_fields=["vault"])
+    project.evm_vault = evm_vault_address
+    project.save(update_fields=["evm_vault"])
 
 
 def _build_stress_cases(stress: StressRun) -> list[InvoiceStressCase]:
@@ -517,7 +517,7 @@ def _fund_evm_vault(project: Project) -> None:
     from .evm import _require_contract
     from .evm import _set_balance
 
-    vault_address = project.vault
+    vault_address = project.evm_vault
     if not vault_address:
         raise RuntimeError("Stress Project Vault 地址未配置，无法注资")
 

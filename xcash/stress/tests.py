@@ -1357,8 +1357,8 @@ class StressContractProvisioningTests(TestCase):
     """压测合约账单 provisioning 的真实路径验证（不 mock available_methods / select_method）。
 
     覆盖 vault 修复与链命名收敛后、stress 合约单的建单前置与收款分配：
-    - _setup_wallet_for_vault 把系统钱包派生的项目专用 EVM 地址写入 project.vault；
-    - _require_stress_methods_ready 校验 project.vault；
+    - _setup_wallet_for_vault 把系统钱包派生的项目专用 EVM 地址写入 project.evm_vault；
+    - _require_stress_methods_ready 校验 project.evm_vault；
     - 合约 Invoice.select_method 在 vault 就绪时真实分配 VaultSlot 收款地址，缺 vault 时分配失败。
 
     这些路径在 stress 单元测试里被 mock 掩盖，必须走真实 DB + 真实分配逻辑才能暴露 vault 缺失。
@@ -1385,10 +1385,10 @@ class StressContractProvisioningTests(TestCase):
         # _set_current_payment 计算 worth 时按 USD 取价，需有 USD 法币记录。
         Fiat.objects.get_or_create(code="USD")
 
-    def make_project(self, *, name, vault=None):
+    def make_project(self, *, name, evm_vault=None):
         return Project.objects.create(
             name=name,
-            vault=vault,
+            evm_vault=evm_vault,
         )
 
     def make_contract_invoice(self, project, *, out_no, methods):
@@ -1403,14 +1403,14 @@ class StressContractProvisioningTests(TestCase):
         )
 
     def test_setup_wallet_for_vault_assigns_unique_system_derived_vault(self):
-        # Project.vault 有唯一约束；压测连续创建多轮 Project 时，vault 必须按项目维度派生，
+        # Project.evm_vault 有唯一约束；压测连续创建多轮 Project 时，vault 必须按项目维度派生，
         # 不能复用 address_index=0 的系统热钱包地址。
         from core.models import SystemWallet
 
         project = self.make_project(name="stress-vault-wiring")
         next_project = self.make_project(name="stress-vault-wiring-next")
-        self.assertIsNone(project.vault)
-        self.assertIsNone(next_project.vault)
+        self.assertIsNone(project.evm_vault)
+        self.assertIsNone(next_project.evm_vault)
 
         _setup_wallet_for_vault(project)
         _setup_wallet_for_vault(next_project)
@@ -1429,14 +1429,14 @@ class StressContractProvisioningTests(TestCase):
 
         project.refresh_from_db()
         next_project.refresh_from_db()
-        self.assertEqual(project.vault, project_vault_address)
-        self.assertEqual(next_project.vault, next_project_vault_address)
-        self.assertNotEqual(project.vault, next_project.vault)
+        self.assertEqual(project.evm_vault, project_vault_address)
+        self.assertEqual(next_project.evm_vault, next_project_vault_address)
+        self.assertNotEqual(project.evm_vault, next_project.evm_vault)
 
     def test_require_stress_methods_ready_passes_with_vault(self):
         project = self.make_project(
             name="stress-ready-vault",
-            vault="0x0000000000000000000000000000000000009001",
+            evm_vault="0x0000000000000000000000000000000000009001",
         )
         self.assertEqual(
             _require_stress_methods_ready(project),
@@ -1451,7 +1451,7 @@ class StressContractProvisioningTests(TestCase):
     def test_contract_select_method_allocates_vault_slot_with_vault(self):
         project = self.make_project(
             name="stress-alloc-vault",
-            vault="0x0000000000000000000000000000000000009201",
+            evm_vault="0x0000000000000000000000000000000000009201",
         )
         invoice = self.make_contract_invoice(
             project, out_no="alloc-1", methods=STRESS_FIXED_METHODS

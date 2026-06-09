@@ -37,7 +37,7 @@ def create_deploy_tx_task(*, slot: VaultSlot) -> TxTask:
         sender=sender,
         chain=slot.chain,
         factory_address=XCASH_VAULT_SLOT_FACTORY_ADDRESS,
-        vault_address=Web3.to_checksum_address(slot.project.vault),
+        vault_address=Web3.to_checksum_address(slot.project.evm_vault),
         salt=bytes(slot.salt),
     )
     return EvmTxTask.schedule(intent).base_task
@@ -62,7 +62,7 @@ def create_collect_tx_task(*, chain: Chain, crypto, slot: VaultSlot) -> TxTask:
             sender=sender,
             chain=chain,
             factory_address=XCASH_VAULT_SLOT_FACTORY_ADDRESS,
-            vault_address=Web3.to_checksum_address(slot.project.vault),
+            vault_address=Web3.to_checksum_address(slot.project.evm_vault),
             salt=bytes(slot.salt),
             token_address=crypto.address(chain),
         )
@@ -74,7 +74,7 @@ def create_collect_tx_task(*, chain: Chain, crypto, slot: VaultSlot) -> TxTask:
 def can_create_collect_tx_task(*, chain: Chain, crypto, slot: VaultSlot) -> bool:
     if slot.is_deployed:
         return True
-    if not slot.project.vault:
+    if not slot.project.evm_vault:
         return False
     if getattr(crypto, "pk", None) != chain.native_coin.pk:
         return True

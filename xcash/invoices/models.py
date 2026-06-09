@@ -278,10 +278,10 @@ class Invoice(models.Model):
         crypto_amount: Decimal,
     ):
         """返回本次合约账单可使用的 INVOICE VaultSlot。"""
-        vault_address = self.project.vault
+        vault_address = self.project.vault_address_for_chain_type(chain.type)
         if not vault_address:
             raise self.InvoiceAllocationError(
-                f"project={self.project_id} VaultSlot Vault 地址未配置"
+                f"project={self.project_id}, chain={chain.code} VaultSlot Vault 地址未配置"
             )
 
         reusable_slots = VaultSlot.objects.filter(

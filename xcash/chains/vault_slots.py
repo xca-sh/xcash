@@ -71,14 +71,17 @@ def ensure_deposit_address(
         )
         return existing.address
 
-    if not project.vault:
-        raise RuntimeError(f"Project {customer.project_id} VaultSlot Vault 地址未配置")
+    vault_address = project.vault_address_for_chain_type(chain.type)
+    if not vault_address:
+        raise RuntimeError(
+            f"Project {customer.project_id} {chain.type} VaultSlot Vault 地址未配置"
+        )
     salt = VaultSlot.build_salt(
         chain_type=chain.type,
         usage=VaultSlotUsage.DEPOSIT,
         customer=customer,
     )
-    slot_address = backend.predict_address(vault=project.vault, salt=salt)
+    slot_address = backend.predict_address(vault=vault_address, salt=salt)
     try:
         slot, created = VaultSlot.objects.get_or_create(
             chain=chain,
@@ -134,15 +137,18 @@ def ensure_invoice_address(
         )
         return existing.address
 
-    if not project.vault:
-        raise RuntimeError(f"Project {project.pk} VaultSlot Vault 地址未配置")
+    vault_address = project.vault_address_for_chain_type(chain.type)
+    if not vault_address:
+        raise RuntimeError(
+            f"Project {project.pk} {chain.type} VaultSlot Vault 地址未配置"
+        )
     salt = VaultSlot.build_salt(
         chain_type=chain.type,
         usage=VaultSlotUsage.INVOICE,
         project_id=project.pk,
         invoice_index=invoice_index,
     )
-    slot_address = backend.predict_address(vault=project.vault, salt=salt)
+    slot_address = backend.predict_address(vault=vault_address, salt=salt)
     try:
         slot, created = VaultSlot.objects.get_or_create(
             chain=chain,
@@ -210,8 +216,10 @@ def schedule_deploy(slot_pk: int) -> TxTask | None:
         if deploy_task is not None and deploy_task.status == TxTaskStatus.SUCCEEDED:
             return deploy_task
 
-        if not slot.project.vault:
-            raise RuntimeError(f"Project {slot.project_id} VaultSlot Vault 地址未配置")
+        if not slot.project.vault_address_for_chain_type(slot.chain.type):
+            raise RuntimeError(
+                f"Project {slot.project_id} {slot.chain.type} VaultSlot Vault 地址未配置"
+            )
 
         # 锁住 VaultSlot 本行后再创建任务，避免并发 on_commit 调度同时看到
         # deploy_tx_task 为空，从而为同一个 CREATE2 地址创建多笔部署交易。

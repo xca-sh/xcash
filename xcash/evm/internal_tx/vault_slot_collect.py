@@ -157,14 +157,14 @@ def vault_slot_collect_matcher(
         .select_related("project")
         .first()
     )
-    if slot is None or not slot.project.vault:
+    if slot is None or not slot.project.evm_vault:
         return None
 
     crypto = _crypto_for_collect_token(chain=chain, token_address=token_address)
     if crypto is None:
         return None
 
-    vault_address = Web3.to_checksum_address(slot.project.vault)
+    vault_address = Web3.to_checksum_address(slot.project.evm_vault)
     collected_log = _find_collected_log(
         receipt=receipt,
         slot_address=slot_address,

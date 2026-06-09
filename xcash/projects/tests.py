@@ -65,7 +65,7 @@ class ProjectAdminTests(TestCase):
     ):
         admin_instance = ProjectAdmin(Project, admin.site)
         request = self._build_project_owner_request()
-        form = SimpleNamespace(changed_data=["vault"])
+        form = SimpleNamespace(changed_data=["evm_vault"])
 
         with patch.object(
             ModelAdmin,
@@ -90,18 +90,18 @@ class ProjectAdminTests(TestCase):
                 "active": self.project.active,
                 "evm_invoice_receiving_mode": self.project.evm_invoice_receiving_mode,
                 "tron_invoice_receiving_mode": self.project.tron_invoice_receiving_mode,
-                "vault": contract_address,
+                "evm_vault": contract_address,
             },
             instance=self.project,
         )
 
         self.assertTrue(form.is_valid(), form.errors)
 
-        self.assertEqual(form.cleaned_data["vault"], contract_address)
+        self.assertEqual(form.cleaned_data["evm_vault"], contract_address)
 
     def test_project_form_rejects_changing_existing_vault(self):
-        self.project.vault = "0x52908400098527886E0F7030069857D2E4169EE7"
-        self.project.save(update_fields=["vault"])
+        self.project.evm_vault = "0x52908400098527886E0F7030069857D2E4169EE7"
+        self.project.save(update_fields=["evm_vault"])
         form = ProjectForm(
             data={
                 "name": self.project.name,
@@ -114,13 +114,13 @@ class ProjectAdminTests(TestCase):
                 "active": self.project.active,
                 "evm_invoice_receiving_mode": self.project.evm_invoice_receiving_mode,
                 "tron_invoice_receiving_mode": self.project.tron_invoice_receiving_mode,
-                "vault": "0x8617E340B3D01FA5F11F306F4090FD50E238070D",
+                "evm_vault": "0x8617E340B3D01FA5F11F306F4090FD50E238070D",
             },
             instance=self.project,
         )
 
         self.assertFalse(form.is_valid())
-        self.assertIn("vault", form.errors)
+        self.assertIn("evm_vault", form.errors)
 
 
 class ProjectTestnetGateTests(TestCase):
@@ -132,12 +132,12 @@ class ProjectTestnetGateTests(TestCase):
 
         prod = Project.objects.create(
             name="Prod Gate Project",
-            vault="0x0000000000000000000000000000000000009901",
+            evm_vault="0x0000000000000000000000000000000000009901",
             is_test=False,
         )
         test = Project.objects.create(
             name="Test Gate Project",
-            vault="0x0000000000000000000000000000000000009902",
+            evm_vault="0x0000000000000000000000000000000000009902",
             is_test=True,
         )
 

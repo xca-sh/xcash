@@ -5,7 +5,10 @@ from django.db import models
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from shortuuid.django_fields import ShortUUIDField
+from tron.codec import TronAddressCodec
+from web3 import Web3
 
+from chains.models import ChainType
 from common.consts import UPPER_ALPHABET
 from common.fields import AddressField
 
@@ -63,12 +66,23 @@ class Project(models.Model):
         verbose_name=_("HMAC密钥"),
         length=32,
     )
-    vault = AddressField(
-        _("收款归集地址"),
+    evm_vault = AddressField(
+        _("EVM 收款归集地址"),
         null=True,
         blank=True,
         help_text=_(
-            "用于生成 VaultSlot 合约的不可变 vault。留空时禁止生成 VaultSlot；"
+            "用于生成 EVM VaultSlot 合约的不可变 vault，必须是 EVM checksum 地址。"
+            "留空时禁止在 EVM 生成 VaultSlot；一旦设置不可修改。"
+        ),
+        unique=True,
+    )
+    tron_vault = AddressField(
+        _("Tron 收款归集地址"),
+        null=True,
+        blank=True,
+        help_text=_(
+            "用于生成 Tron VaultSlot 合约的不可变 vault，必须是 Tron Base58 地址。"
+            "留空时禁止在 Tron 生成 VaultSlot；"
             "一旦设置不可修改。"
         ),
         unique=True,
@@ -113,15 +127,72 @@ class Project(models.Model):
         return self.name
 
     def save(self, *args, **kwargs):
+        self.validate_vault_addresses()
         if self.pk is not None:
-            old_vault = (
+            old_values = (
                 self.__class__.objects.filter(pk=self.pk)
-                .values_list("vault", flat=True)
+                .values("evm_vault", "tron_vault")
                 .first()
             )
-            if old_vault and self.vault != old_vault:
-                raise ValidationError({"vault": _("收款归集地址一旦设置不可修改。")})
+            errors = {}
+            if old_values:
+                for field in ("evm_vault", "tron_vault"):
+                    old_vault = old_values[field]
+                    if old_vault and getattr(self, field) != old_vault:
+                        errors[field] = _("收款归集地址一旦设置不可修改。")
+            if errors:
+                raise ValidationError(errors)
         return super().save(*args, **kwargs)
+
+    def clean(self) -> None:
+        super().clean()
+        self.validate_vault_addresses()
+
+    def validate_vault_addresses(self) -> None:
+        errors = {}
+        for chain_type, field in (
+            (ChainType.EVM, "evm_vault"),
+            (ChainType.TRON, "tron_vault"),
+        ):
+            value = getattr(self, field)
+            if not value:
+                continue
+            try:
+                self.validate_vault_address_for_chain_type(
+                    chain_type=chain_type,
+                    address=value,
+                )
+            except ValidationError as exc:
+                errors[field] = exc.message
+        if errors:
+            raise ValidationError(errors)
+
+    @staticmethod
+    def validate_vault_address_for_chain_type(
+        *,
+        chain_type: ChainType | str,
+        address: str,
+    ) -> None:
+        if chain_type == ChainType.EVM:
+            if not Web3.is_checksum_address(address):
+                raise ValidationError(_("EVM 收款归集地址必须是 checksum 地址。"))
+            return
+        if chain_type == ChainType.TRON:
+            if not TronAddressCodec.is_valid_base58(address):
+                raise ValidationError(_("Tron 收款归集地址必须是 Base58 地址。"))
+            return
+        raise ValidationError(_("不支持的链类型: %(chain_type)s") % {"chain_type": chain_type})
+
+    @staticmethod
+    def vault_field_for_chain_type(chain_type: ChainType | str) -> str:
+        if chain_type == ChainType.EVM:
+            return "evm_vault"
+        if chain_type == ChainType.TRON:
+            return "tron_vault"
+        raise ValueError(f"unsupported vault chain_type={chain_type}")
+
+    def vault_address_for_chain_type(self, chain_type: ChainType | str) -> str | None:
+        return getattr(self, self.vault_field_for_chain_type(chain_type))
 
     @classmethod
     def retrieve(cls, appid: str):
@@ -134,8 +205,16 @@ class Project(models.Model):
     def is_ready(self) -> tuple[bool, list[str]]:
         # 错误项采用统一的"短名词 + 状态"格式，便于前端横排拼接。
         errors: list[str] = []
-        if not self.vault:
-            errors.append(_("金库地址未配置"))  # noqa
+        if (
+            self.evm_invoice_receiving_mode == InvoiceReceivingMode.VaultSlot
+            and not self.evm_vault
+        ):
+            errors.append(_("EVM 金库地址未配置"))  # noqa
+        if (
+            self.tron_invoice_receiving_mode == InvoiceReceivingMode.VaultSlot
+            and not self.tron_vault
+        ):
+            errors.append(_("Tron 金库地址未配置"))  # noqa
         if not self.ip_white_list:
             errors.append(_("IP 白名单未配置"))  # noqa
         if not self.webhook:

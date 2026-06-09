@@ -1,7 +1,9 @@
 import ipaddress
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from chains.models import ChainType
 from projects.models import Project
 
 # 业务校验上下界，集中声明便于审计与调整。
@@ -80,17 +82,29 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
 
 
 class ProjectVaultSetSerializer(serializers.Serializer):
-    """商户首次设置收款归集地址（Vault）。
+    """商户首次设置指定链类型的收款归集地址（Vault）。
 
-    vault 是一次性写入、不可修改的归集地址。immutability（已设置则拒绝）
-    在视图层先行拦截；这里不做链上、多签或部署状态校验。
+    每个链类型的 vault 都是一次性写入、不可修改的归集地址。immutability（已设置则拒绝）
+    在视图层先行拦截；这里只做链类型与地址格式校验，不做链上、多签或部署状态校验。
     """
 
+    chain_type = serializers.ChoiceField(choices=ChainType.choices)
     vault = serializers.CharField()
+
+    def validate(self, attrs):
+        try:
+            Project.validate_vault_address_for_chain_type(
+                chain_type=attrs["chain_type"],
+                address=attrs["vault"],
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"vault": exc.message}) from exc
+        return attrs
 
 
 class ProjectDetailSerializer(serializers.ModelSerializer):
-    vault_address = serializers.SerializerMethodField()
+    evm_vault_address = serializers.SerializerMethodField()
+    tron_vault_address = serializers.SerializerMethodField()
     is_ready = serializers.SerializerMethodField()
     ready_errors = serializers.SerializerMethodField()
 
@@ -107,17 +121,19 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
             "fast_confirm_threshold",
             "evm_invoice_receiving_mode",
             "tron_invoice_receiving_mode",
-            "vault_address",
+            "evm_vault_address",
+            "tron_vault_address",
             "is_ready",
             "ready_errors",
             "active",
             "created_at",
         ]
 
-    def get_vault_address(self, obj):
-        # 商户的资金最终汇入其收款归集地址（VaultSlot 合约写死的转发目标），
-        # 故对外暴露 Project.vault 才是语义正确的“金库地址”；未配置时返回 None。
-        return obj.vault or None
+    def get_evm_vault_address(self, obj):
+        return obj.evm_vault or None
+
+    def get_tron_vault_address(self, obj):
+        return obj.tron_vault or None
 
     def get_is_ready(self, obj):
         ready, _ = obj.is_ready

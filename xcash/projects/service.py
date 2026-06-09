@@ -26,13 +26,13 @@ class ProjectService:
     def contract_receivable_chain_codes(project: Project) -> set[str]:
         """VaultSlot 合约模式下项目可收款的链 code 集合。
 
-        合约收款依赖项目不可变 vault 地址；Tron 只有 Nile 验证结论与 factory/template/
-        fee_limit 明确配置后才暴露，默认配置下始终只返回 EVM。
+        合约收款依赖对应链类型的项目不可变 vault 地址；Tron 只有 Nile 验证结论与
+        factory/template/fee_limit 明确配置后才暴露，默认配置下始终只返回 EVM。
         """
-        if not project.vault:
-            return set()
-        chain_codes = ChainService.codes_of_types({ChainType.EVM})
-        if tron_vault_slot_runtime_ready():
+        chain_codes = set()
+        if project.evm_vault:
+            chain_codes |= ChainService.codes_of_types({ChainType.EVM})
+        if project.tron_vault and tron_vault_slot_runtime_ready():
             chain_codes |= set(
                 CryptoOnChain.objects.filter(
                     chain__type=ChainType.TRON,
@@ -121,11 +121,11 @@ class ProjectService:
 
     @staticmethod
     def _vault_slot_invoice_receiving_ready(*, project: Project, chain) -> bool:
-        if not project.vault:
-            return False
         if chain.type == ChainType.TRON:
-            return tron_vault_slot_runtime_ready()
-        return chain.type == ChainType.EVM
+            return bool(project.tron_vault) and tron_vault_slot_runtime_ready()
+        if chain.type == ChainType.EVM:
+            return bool(project.evm_vault)
+        return False
 
     @staticmethod
     def _differ_invoice_receiving_ready(

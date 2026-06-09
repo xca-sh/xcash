@@ -38,7 +38,8 @@ class ProjectForm(forms.ModelForm):
             "failed_count",
             "fast_confirm_threshold",
             "hmac_key",
-            "vault",
+            "evm_vault",
+            "tron_vault",
             "evm_invoice_receiving_mode",
             "tron_invoice_receiving_mode",
             "active",
@@ -67,8 +68,8 @@ class ProjectForm(forms.ModelForm):
 
         return ip_white_list
 
-    def clean_vault(self):
-        address = self.cleaned_data.get("vault")
+    def clean_evm_vault(self):
+        address = self.cleaned_data.get("evm_vault")
         if not address:
             return None
 
@@ -76,13 +77,34 @@ class ProjectForm(forms.ModelForm):
         if self.instance and self.instance.pk:
             old_address = (
                 Project.objects.filter(pk=self.instance.pk)
-                .values_list("vault", flat=True)
+                .values_list("evm_vault", flat=True)
                 .first()
             )
         if old_address:
             if old_address != address:
                 raise forms.ValidationError(
-                    _("VaultSlot 多签归集地址一旦设置不可修改。")
+                    _("EVM 收款归集地址一旦设置不可修改。")
+                )
+            return old_address
+
+        return address
+
+    def clean_tron_vault(self):
+        address = self.cleaned_data.get("tron_vault")
+        if not address:
+            return None
+
+        old_address = None
+        if self.instance and self.instance.pk:
+            old_address = (
+                Project.objects.filter(pk=self.instance.pk)
+                .values_list("tron_vault", flat=True)
+                .first()
+            )
+        if old_address:
+            if old_address != address:
+                raise forms.ValidationError(
+                    _("Tron 收款归集地址一旦设置不可修改。")
                 )
             return old_address
 
@@ -215,8 +237,10 @@ class ProjectAdmin(ModelAdmin):
                 "failed_count",
                 "display_ready_detail",
             )
-            if obj.vault:
-                readonly_fields += ("vault",)
+            if obj.evm_vault:
+                readonly_fields += ("evm_vault",)
+            if obj.tron_vault:
+                readonly_fields += ("tron_vault",)
             return readonly_fields
         # 新建项目
         return ("appid",)
@@ -262,7 +286,8 @@ class ProjectAdmin(ModelAdmin):
             _("项目资金"),
             {
                 "fields": (
-                    "vault",
+                    "evm_vault",
+                    "tron_vault",
                     "evm_invoice_receiving_mode",
                     "tron_invoice_receiving_mode",
                 ),

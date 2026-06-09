@@ -52,33 +52,35 @@ class ProjectViewSet(ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def vault(self, request, appid=None):
-        """商户首次设置收款归集地址（Vault），一经设置不可修改。
+        """商户首次设置指定链类型的收款归集地址（Vault），一经设置不可修改。
 
-        POST /projects/{appid}/vault  body: {"vault": "0x..."}
+        POST /projects/{appid}/vault  body: {"chain_type": "evm|tron", "vault": "..."}
         - 已设置 → 409，明确告知不可修改；
         - 未设置 → 写入后返回项目详情。
         """
         project = self.get_object()
+        serializer = ProjectVaultSetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        chain_type = serializer.validated_data["chain_type"]
+        vault_field = Project.vault_field_for_chain_type(chain_type)
         # 先做无锁短路：已设置直接拒绝，避免常见的"重复点击"进入事务。
-        if project.vault:
+        if getattr(project, vault_field):
             return Response(
                 {"vault": "收款归集地址一旦设置不可修改。"},
                 status=drf_status.HTTP_409_CONFLICT,
             )
-        serializer = ProjectVaultSetSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
         new_vault = serializer.validated_data["vault"]
 
         # 加行锁后复查再写：vault 不可变且关乎资金去向，必须杜绝并发下两个请求都通过空值检查。
         with db_transaction.atomic():
             locked = Project.objects.select_for_update().get(pk=project.pk)
-            if locked.vault:
+            if getattr(locked, vault_field):
                 return Response(
                     {"vault": "收款归集地址一旦设置不可修改。"},
                     status=drf_status.HTTP_409_CONFLICT,
                 )
-            locked.vault = new_vault
-            locked.save(update_fields=["vault"])
+            setattr(locked, vault_field, new_vault)
+            locked.save(update_fields=[vault_field])
         return Response(ProjectDetailSerializer(locked).data)
 
     @action(detail=True, methods=["post"])

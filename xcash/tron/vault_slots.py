@@ -49,7 +49,7 @@ def create_deploy_tx_task(*, slot: VaultSlot) -> TxTask:
         sender=sender,
         chain=slot.chain,
         factory_address=settings.TRON_VAULT_SLOT_FACTORY_ADDRESS,
-        vault_address=slot.project.vault,
+        vault_address=slot.project.tron_vault,
         salt=bytes(slot.salt),
     )
     return TronTxTask.schedule(intent).base_task
@@ -72,7 +72,7 @@ def create_collect_tx_task(*, chain: Chain, crypto, slot: VaultSlot) -> TxTask:
             sender=sender,
             chain=chain,
             factory_address=settings.TRON_VAULT_SLOT_FACTORY_ADDRESS,
-            vault_address=slot.project.vault,
+            vault_address=slot.project.tron_vault,
             salt=bytes(slot.salt),
             token_address=collect_token_address(crypto=crypto, chain=chain),
         )
@@ -88,4 +88,4 @@ def can_create_collect_tx_task(*, chain: Chain, crypto, slot: VaultSlot) -> bool
     # 部署 + 清扫（原生币传 address(0)，命中模板原生分支）。Tron 上 TransferContract 不触发
     # receive()，原生入账靠区块扫描观测、与 slot 是否预先部署无关，故原生币不再要求先存在
     # receive() 合约，与 TRC20 共用同一条未部署路径。唯一前提是已知 vault，否则无法预测部署 slot。
-    return bool(slot.project.vault)
+    return bool(slot.project.tron_vault)
