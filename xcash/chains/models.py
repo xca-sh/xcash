@@ -525,6 +525,11 @@ class TxHash(models.Model):
     )
     hash = HashField(unique=False, verbose_name=_("交易哈希"))
     version = models.PositiveIntegerField(_("版本"))
+    expires_at_ms = models.PositiveBigIntegerField(
+        _("过期时间(ms)"),
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
 
     class Meta:
@@ -618,7 +623,7 @@ class TxTask(UndeletableModel):
         return self.get_status_display()
 
     @db_transaction.atomic
-    def append_tx_hash(self, tx_hash: str) -> TxHash:
+    def append_tx_hash(self, tx_hash: str, *, expires_at_ms: int | None = None) -> TxHash:
         locked_task = TxTask.objects.select_for_update().get(pk=self.pk)
         # 并发广播可能产生相同 tx_hash（相同 nonce + gas_price 签名结果相同），
         # 若已存在则视为幂等，直接返回。
@@ -634,6 +639,9 @@ class TxTask(UndeletableModel):
                 tx_hash=tx_hash,
                 updated_at=timezone.now(),
             )
+            if expires_at_ms is not None and existing.expires_at_ms != expires_at_ms:
+                TxHash.objects.filter(pk=existing.pk).update(expires_at_ms=expires_at_ms)
+                existing.expires_at_ms = expires_at_ms
             self.tx_hash = tx_hash
             return existing
         max_version = (
@@ -647,6 +655,7 @@ class TxTask(UndeletableModel):
             chain=locked_task.chain,
             hash=tx_hash,
             version=next_version,
+            expires_at_ms=expires_at_ms,
         )
         TxTask.objects.filter(pk=locked_task.pk).update(
             tx_hash=tx_hash,

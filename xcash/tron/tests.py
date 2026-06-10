@@ -18,6 +18,7 @@ from django.utils import timezone
 from tron.admin import TronWatchCursorAdmin
 from tron.client import TronClientError
 from tron.client import TronHttpClient
+from tron.models import TRON_MAX_BROADCAST_HASHES
 from tron.models import TronTxTask
 from tron.models import TronWatchCursor
 from tron.tasks import broadcast_tron_task
@@ -659,6 +660,29 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
         task.rebroadcast_expired_submitted()
 
         execute_broadcast.assert_called_once()
+
+    @patch("tron.models.TronTxTask.execute_broadcast")
+    def test_rebroadcast_expired_submitted_marks_failed_after_hash_limit(
+        self,
+        execute_broadcast,
+    ):
+        task = self.make_task()
+        TxTask.objects.filter(pk=task.base_task_id).update(
+            status=TxTaskStatus.SUBMITTED,
+        )
+        task.expiration = int((timezone.now() - timedelta(minutes=1)).timestamp() * 1000)
+        task.save(update_fields=["expiration"])
+        for index in range(TRON_MAX_BROADCAST_HASHES):
+            task.base_task.append_tx_hash(
+                f"{index + 1:064x}",
+                expires_at_ms=task.expiration,
+            )
+
+        task.rebroadcast_expired_submitted()
+
+        execute_broadcast.assert_not_called()
+        task.base_task.refresh_from_db()
+        self.assertEqual(task.base_task.status, TxTaskStatus.FAILED)
 
     @patch("tron.models.TronTxTask.rebroadcast_expired_submitted")
     @patch("tron.models.TronTxTask.broadcast")
@@ -1867,6 +1891,48 @@ class TronReceiptConfirmTaskTests(TestCase):
         collect_gas_fee.assert_called_once()
         self.assertEqual(collect_gas_fee.call_args.kwargs["tx_task"].tx_hash, old_hash)
         deploy_gas_fee.assert_not_called()
+
+    @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tasks.AdapterFactory.get_adapter")
+    def test_confirm_failed_when_old_missing_hash_is_expired(
+        self,
+        get_adapter,
+        refresh_balance,
+        collect_gas_fee,
+    ):
+        old_hash = "e" * 64
+        new_hash = "f" * 64
+        base_task = self.create_collect_task(tx_hash=old_hash)
+        expired_ms = int((timezone.now() - timedelta(minutes=1)).timestamp() * 1000)
+        base_task.tx_hashes.filter(hash=old_hash).update(expires_at_ms=expired_ms)
+        base_task.append_tx_hash(new_hash)
+        adapter = Mock()
+
+        def tx_result(*, chain, tx_hash):
+            if tx_hash == new_hash:
+                return TxCheckResult(
+                    status=TxCheckStatus.FAILED,
+                    block_number=100,
+                    block_hash="f" * 64,
+                )
+            if tx_hash == old_hash:
+                return TxCheckStatus.MISSING
+            raise AssertionError(f"unexpected tx_hash={tx_hash}")
+
+        adapter.tx_result.side_effect = tx_result
+        get_adapter.return_value = adapter
+
+        confirm_tron_receipt_tx_tasks()
+
+        base_task.refresh_from_db()
+        self.assertEqual(base_task.status, TxTaskStatus.FAILED)
+        self.assertEqual(
+            [call.kwargs["tx_hash"] for call in adapter.tx_result.call_args_list],
+            [new_hash, old_hash],
+        )
+        refresh_balance.assert_not_called()
+        collect_gas_fee.assert_not_called()
 
 
 @override_settings(

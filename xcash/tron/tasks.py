@@ -1,4 +1,5 @@
 import time
+from dataclasses import dataclass
 
 import structlog
 from celery import shared_task
@@ -30,6 +31,12 @@ logger = structlog.get_logger()
 TRON_SENDER_BROADCAST_LOCK_TIMEOUT_SECONDS = 60
 
 
+@dataclass(frozen=True)
+class KnownTronTxHash:
+    hash: str
+    expires_at_ms: int | None
+
+
 def tx_check_status(result: TxCheckStatus | TxCheckResult) -> TxCheckStatus:
     return result.status if isinstance(result, TxCheckResult) else result
 
@@ -47,15 +54,38 @@ def sender_broadcast_lock_key(*, chain_id: int, sender_id: int) -> str:
 
 def known_tx_hashes_for_task(task: TxTask) -> list[str]:
     """返回当前任务所有已知 tx_hash，按新版本优先查询。"""
+    return [record.hash for record in known_tx_hash_records_for_task(task)]
+
+
+def known_tx_hash_records_for_task(task: TxTask) -> list[KnownTronTxHash]:
+    """返回当前任务所有已知 tx_hash 及该 hash 对应的过期时间。"""
     hashes: list[str] = []
+    records: list[KnownTronTxHash] = []
     if task.tx_hash:
         hashes.append(task.tx_hash)
-    for tx_hash in (
-        task.tx_hashes.order_by("-version").values_list("hash", flat=True)
-    ):
-        if tx_hash not in hashes:
-            hashes.append(tx_hash)
-    return hashes
+    for tx_hash in task.tx_hashes.order_by("-version"):
+        if tx_hash.hash not in hashes:
+            hashes.append(tx_hash.hash)
+            records.append(
+                KnownTronTxHash(
+                    hash=tx_hash.hash,
+                    expires_at_ms=tx_hash.expires_at_ms,
+                )
+            )
+        elif task.tx_hash == tx_hash.hash and not records:
+            records.append(
+                KnownTronTxHash(
+                    hash=tx_hash.hash,
+                    expires_at_ms=tx_hash.expires_at_ms,
+                )
+            )
+    if task.tx_hash and all(record.hash != task.tx_hash for record in records):
+        records.insert(0, KnownTronTxHash(hash=task.tx_hash, expires_at_ms=None))
+    return records
+
+
+def is_known_tron_hash_expired(record: KnownTronTxHash, *, now_ms: int) -> bool:
+    return record.expires_at_ms is not None and now_ms >= int(record.expires_at_ms)
 
 
 def find_tron_receipt_across_hashes(
@@ -72,20 +102,22 @@ def find_tron_receipt_across_hashes(
     failed_result: TxCheckStatus | TxCheckResult | None = None
     failed_hash: str | None = None
     saw_missing = False
+    now_ms = int(time.time() * 1000)
 
-    for tx_hash in known_tx_hashes_for_task(task):
-        raw_result = adapter.tx_result(chain=task.chain, tx_hash=tx_hash)
+    for record in known_tx_hash_records_for_task(task):
+        raw_result = adapter.tx_result(chain=task.chain, tx_hash=record.hash)
         if isinstance(raw_result, Exception):
             return raw_result, None
         status = tx_check_status(raw_result)
         if status == TxCheckStatus.SUCCEEDED:
-            return raw_result, tx_hash
+            return raw_result, record.hash
         if status == TxCheckStatus.FAILED:
             if failed_result is None:
                 failed_result = raw_result
-                failed_hash = tx_hash
+                failed_hash = record.hash
             continue
-        saw_missing = True
+        if not is_known_tron_hash_expired(record, now_ms=now_ms):
+            saw_missing = True
 
     if failed_result is not None and not saw_missing:
         return failed_result, failed_hash

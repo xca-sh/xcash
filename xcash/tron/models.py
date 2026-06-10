@@ -16,6 +16,7 @@ from tron.resources import require_bandwidth_for_signed_transaction
 from tron.resources import require_energy_for_contract_call
 from web3 import Web3
 
+from chains.models import TxHash
 from chains.models import TxTask
 from chains.models import TxTaskStatus
 from common.fields import AddressField
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
     from tron.intents import TronTxIntent
 
 logger = structlog.get_logger()
+
+TRON_MAX_BROADCAST_HASHES = 5
 
 
 class TronWatchCursor(models.Model):
@@ -135,7 +138,28 @@ class TronTxTask(UndeletableModel):
     def rebroadcast_expired_submitted(self) -> None:
         if not self.can_rebroadcast_expired_submitted:
             return
+        if self.rebroadcast_hash_limit_reached():
+            updated = TxTask.mark_finalized_failed(
+                task_id=self.base_task_id,
+                expected_status=TxTaskStatus.SUBMITTED,
+            )
+            if updated:
+                logger.warning(
+                    "Tron 任务重签次数达到上限，已标记失败",
+                    tron_task_id=self.pk,
+                    tx_task_id=self.base_task_id,
+                    chain=self.chain.code,
+                    sender=self.sender.address,
+                    tx_hash_count=TRON_MAX_BROADCAST_HASHES,
+                )
+            return
         self.execute_broadcast()
+
+    def rebroadcast_hash_limit_reached(self) -> bool:
+        return (
+            TxHash.objects.filter(tx_task_id=self.base_task_id).count()
+            >= TRON_MAX_BROADCAST_HASHES
+        )
 
     def execute_broadcast(self) -> None:
         self.record_broadcast_attempt()
@@ -263,7 +287,7 @@ class TronTxTask(UndeletableModel):
                 "ref_block_hash",
             ]
         )
-        self.base_task.append_tx_hash(tx_id)
+        self.base_task.append_tx_hash(tx_id, expires_at_ms=self.expiration)
 
     def mark_submitted(self) -> None:
         TxTask.mark_submitted(
