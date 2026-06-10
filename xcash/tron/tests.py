@@ -879,6 +879,24 @@ class TronWatchCursorAdminTests(TestCase):
         self.assertEqual(client_cls.call_args.kwargs["chain"].pk, self.chain.pk)
 
     @patch("tron.admin.TronHttpClient")
+    def test_sync_selected_to_latest_never_rewinds_chain_or_cursor(self, client_cls):
+        Chain.objects.filter(pk=self.chain.pk).update(latest_block_number=100)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = 80
+
+        self.admin.sync_selected_to_latest(
+            request=Mock(),
+            queryset=TronWatchCursor.objects.filter(pk=self.cursor.pk),
+        )
+
+        self.cursor.refresh_from_db()
+        self.chain.refresh_from_db()
+
+        self.assertEqual(self.cursor.last_scanned_block, 100)
+        self.assertEqual(self.chain.latest_block_number, 100)
+        self.admin.message_user.assert_called_once()
+
+    @patch("tron.admin.TronHttpClient")
     def test_sync_selected_to_latest_keeps_cursor_when_realtime_fetch_fails(
         self, client_cls
     ):

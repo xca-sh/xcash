@@ -1,4 +1,6 @@
 from django.contrib import admin
+from django.db.models import F
+from django.db.models.functions import Greatest
 from tron.client import TronHttpClient
 from tron.models import TronWatchCursor
 from unfold.decorators import display
@@ -47,9 +49,11 @@ class TronWatchCursorAdmin(SyncScanCursorToLatestActionMixin, ReadOnlyModelAdmin
 
     def get_sync_latest_block(self, *, chain: Chain) -> int:
         latest_block = TronHttpClient(chain=chain).get_latest_solid_block_number()
-        Chain.objects.filter(pk=chain.pk).update(latest_block_number=latest_block)
-        chain.latest_block_number = latest_block
-        return latest_block
+        Chain.objects.filter(pk=chain.pk).update(
+            latest_block_number=Greatest(F("latest_block_number"), latest_block)
+        )
+        chain.refresh_from_db(fields=["latest_block_number"])
+        return chain.latest_block_number
 
     @admin.display(ordering="chain__code", description="网络")
     def display_chain(self, obj: TronWatchCursor):  # pragma: no cover
