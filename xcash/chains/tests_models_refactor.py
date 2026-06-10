@@ -101,7 +101,12 @@ def test_active_chain_runtime_config_database_constraint():
 
 @pytest.mark.django_db
 def test_clean_accepts_matching_rpc():
-    chain = Chain(code=ChainCode.Ethereum, rpc="http://fake.rpc")
+    chain = Chain(
+        code=ChainCode.Ethereum,
+        type=ChainType.EVM,
+        rpc="http://fake.rpc",
+        active=True,
+    )
     with patch("chains.models.Web3") as mock_w3:
         mock_w3.HTTPProvider.return_value = object()
         mock_w3.return_value.eth.chain_id = 1
@@ -110,7 +115,12 @@ def test_clean_accepts_matching_rpc():
 
 @pytest.mark.django_db
 def test_clean_rejects_mismatching_rpc():
-    chain = Chain(code=ChainCode.Ethereum, rpc="http://fake.rpc")
+    chain = Chain(
+        code=ChainCode.Ethereum,
+        type=ChainType.EVM,
+        rpc="http://fake.rpc",
+        active=True,
+    )
     with patch("chains.models.Web3") as mock_w3:
         mock_w3.HTTPProvider.return_value = object()
         mock_w3.return_value.eth.chain_id = 56  # BSC, not Ethereum
@@ -121,7 +131,12 @@ def test_clean_rejects_mismatching_rpc():
 
 @pytest.mark.django_db
 def test_clean_rejects_unreachable_rpc():
-    chain = Chain(code=ChainCode.Ethereum, rpc="http://fake.rpc")
+    chain = Chain(
+        code=ChainCode.Ethereum,
+        type=ChainType.EVM,
+        rpc="http://fake.rpc",
+        active=True,
+    )
     with patch("chains.models.Web3") as mock_w3:
         mock_w3.HTTPProvider.return_value = object()
         type(mock_w3.return_value.eth).chain_id = property(
