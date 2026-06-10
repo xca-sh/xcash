@@ -23,33 +23,66 @@ def refresh_vault_slot_balance(
     trigger_tx_hash: str | None = None,
     block_number: int | None = None,
 ) -> VaultSlotBalance:
-    """读取链上余额真值并覆盖写入 VaultSlotBalance。"""
+    """读取链上余额真值，并按同步区块单调刷新 VaultSlotBalance。"""
     chain = slot.chain
     adapter = AdapterFactory.get_adapter(chain.type)
     raw_balance = adapter.get_balance(slot.address, chain, crypto)
     value = Decimal(int(raw_balance))
     amount = value.scaleb(-crypto.get_decimals(chain))
     synced_at = timezone.now()
-    synced_block_number = (
-        block_number if block_number is not None else chain.latest_block_number
-    )
-
-    defaults = {
-        "value": value,
-        "amount": amount,
-        "synced_block_number": synced_block_number,
-        "synced_at": synced_at,
-        "last_tx_hash": trigger_tx_hash,
-    }
     with transaction.atomic():
         locked_slot = VaultSlot.objects.select_related("chain").select_for_update().get(
             pk=slot.pk
         )
-        balance, _created = VaultSlotBalance.objects.update_or_create(
+        synced_block_number = (
+            block_number
+            if block_number is not None
+            else locked_slot.chain.latest_block_number
+        )
+        balance, created = VaultSlotBalance.objects.get_or_create(
             chain=locked_slot.chain,
             vault_slot=locked_slot,
             crypto=crypto,
-            defaults=defaults,
+            defaults={
+                "value": value,
+                "amount": amount,
+                "synced_block_number": synced_block_number,
+                "synced_at": synced_at,
+                "last_tx_hash": trigger_tx_hash,
+            },
+        )
+        if created:
+            return balance
+
+        if (
+            balance.synced_block_number is not None
+            and synced_block_number < balance.synced_block_number
+        ):
+            logger.info(
+                "VaultSlot 余额旧快照跳过",
+                chain=locked_slot.chain.code,
+                vault_slot_id=locked_slot.pk,
+                crypto=getattr(crypto, "symbol", None),
+                incoming_block=synced_block_number,
+                existing_block=balance.synced_block_number,
+                trigger_tx_hash=trigger_tx_hash,
+            )
+            return balance
+
+        balance.value = value
+        balance.amount = amount
+        balance.synced_block_number = synced_block_number
+        balance.synced_at = synced_at
+        balance.last_tx_hash = trigger_tx_hash
+        balance.save(
+            update_fields=[
+                "value",
+                "amount",
+                "synced_block_number",
+                "synced_at",
+                "last_tx_hash",
+                "updated_at",
+            ]
         )
     return balance
 

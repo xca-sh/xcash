@@ -74,12 +74,16 @@ def _finalize_collect_success(
     fact = matcher(chain=chain, tx_task=tx_task, receipt=receipt, tx=tx)
     if fact is None:
         logger.warning(
-            "EVM VaultSlot 归集 receipt 成功但未找到预期资产移动事实",
+            "EVM VaultSlot 归集 receipt 成功但未找到预期资产移动事实，按空归集终局",
             chain=chain.code,
             tx_hash=tx_hash,
             tx_task_id=tx_task.pk,
         )
-        return False
+        updated = TxTask.mark_finalized_success(chain=chain, tx_hash=tx_hash)
+        if updated:
+            tx_task.refresh_from_db()
+            notify_vault_slot_collect_gas_fee(tx_task=tx_task)
+        return True
 
     updated = TxTask.mark_finalized_success(chain=chain, tx_hash=tx_hash)
     if updated:

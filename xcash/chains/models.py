@@ -1160,7 +1160,9 @@ class VaultSlotCollectSchedule(models.Model):
                     crypto=schedule.crypto,
                     reason="before_collect",
                 )
-                if balance is not None and balance.value <= 0:
+                if balance is None:
+                    continue
+                if balance.value <= 0:
                     schedule.delete()
                     continue
                 # 单条用 savepoint 隔离:个别计划建/绑任务失败不回滚整批归集调度。

@@ -1060,6 +1060,37 @@ class VaultSlotReceivedFlagTests(TestCase):
         self.assertEqual(balance.synced_block_number, transfer.block)
         self.assertEqual(balance.last_tx_hash, transfer.hash)
 
+    def test_vault_slot_balance_refresh_skips_older_snapshot(self):
+        from chains.vault_slot_balances import refresh_vault_slot_balance
+
+        VaultSlotBalance.objects.create(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+            value=Decimal("0"),
+            amount=Decimal("0"),
+            synced_block_number=200,
+            synced_at=timezone.now(),
+            last_tx_hash="0x" + "99" * 32,
+        )
+        adapter = type("Adapter", (), {"get_balance": lambda *_args: 1_234_567})()
+
+        with patch(
+            "chains.vault_slot_balances.AdapterFactory.get_adapter",
+            return_value=adapter,
+        ):
+            balance = refresh_vault_slot_balance(
+                slot=self.slot,
+                crypto=self.crypto,
+                trigger_tx_hash="0x" + "aa" * 32,
+                block_number=100,
+            )
+
+        self.assertEqual(balance.value, Decimal("0"))
+        self.assertEqual(balance.amount, Decimal("0"))
+        self.assertEqual(balance.synced_block_number, 200)
+        self.assertEqual(balance.last_tx_hash, "0x" + "99" * 32)
+
     def test_transfer_confirm_does_not_refresh_source_vault_slot_balance(self):
         transfer = Transfer.objects.create(
             chain=self.chain,
@@ -1150,13 +1181,13 @@ class TransferProcessQuickConfirmDispatchTests(TestCase):
         match_deposit_mock.return_value = False
         transfer = self.create_quick_transfer()
 
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
-            try:
-                with transaction.atomic():
-                    transfer.process()
-                    raise RuntimeError("rollback")
-            except RuntimeError:
-                pass
+        with (
+            self.captureOnCommitCallbacks(execute=True) as callbacks,
+            self.assertRaises(RuntimeError),
+            transaction.atomic(),
+        ):
+            transfer.process()
+            raise RuntimeError("rollback")
 
         self.assertEqual(callbacks, [])
         confirm_delay_mock.assert_not_called()
