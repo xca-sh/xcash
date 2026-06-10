@@ -42,22 +42,52 @@ class ChainSpec:
     # 是否为测试网（非主网）。链固有属性，仅用于区分/展示，不参与扫描与签名逻辑。
     # 作为带默认值的尾部字段，主网无需逐条改写既有定义。
     is_testnet: bool = False
+    # 链图标 URL，供 SaaS 前端按链展示。单一权威来源在此，新增链只改这里；
+    # 当前用 DefiLlama 公开链图标 CDN（见 _icon），后续可逐条换成自托管 URL。
+    # 测试网/本地链无需图标，留空即可。
+    icon: str = ""
+
+
+def _icon(slug: str) -> str:
+    """DefiLlama 公开链图标 CDN。slug 为其链命名（与本系统 code 不机械对应，
+    如 bsc→binance、arbitrum-one→arbitrum），故逐条显式指定而非由 code 派生。"""
+    return f"https://icons.llamao.fi/icons/chains/rsz_{slug}.jpg"
 
 
 CHAIN_SPECS: dict[str, ChainSpec] = {
-    ChainCode.Ethereum: ChainSpec(ChainType.EVM, 1, False, 12, "ETH", 18, 12),
-    ChainCode.BSC: ChainSpec(ChainType.EVM, 56, True, 15, "BNB", 18, 6),
-    ChainCode.Polygon: ChainSpec(ChainType.EVM, 137, True, 128, "POL", 18, 6),
-    ChainCode.ArbitrumOne: ChainSpec(ChainType.EVM, 42161, False, 20, "ETH", 18, 4),
-    ChainCode.Optimism: ChainSpec(ChainType.EVM, 10, False, 20, "ETH", 18, 4),
-    ChainCode.Base: ChainSpec(ChainType.EVM, 8453, False, 20, "ETH", 18, 4),
-    ChainCode.Avalanche: ChainSpec(ChainType.EVM, 43114, False, 8, "AVAX", 18, 6),
-    ChainCode.Linea: ChainSpec(ChainType.EVM, 59144, False, 20, "ETH", 18, 6),
-    ChainCode.Scroll: ChainSpec(ChainType.EVM, 534352, False, 20, "ETH", 18, 6),
+    ChainCode.Ethereum: ChainSpec(
+        ChainType.EVM, 1, False, 12, "ETH", 18, 12, icon=_icon("ethereum")
+    ),
+    ChainCode.BSC: ChainSpec(
+        ChainType.EVM, 56, True, 15, "BNB", 18, 6, icon=_icon("binance")
+    ),
+    ChainCode.Polygon: ChainSpec(
+        ChainType.EVM, 137, True, 128, "POL", 18, 6, icon=_icon("polygon")
+    ),
+    ChainCode.ArbitrumOne: ChainSpec(
+        ChainType.EVM, 42161, False, 20, "ETH", 18, 4, icon=_icon("arbitrum")
+    ),
+    ChainCode.Optimism: ChainSpec(
+        ChainType.EVM, 10, False, 20, "ETH", 18, 4, icon=_icon("optimism")
+    ),
+    ChainCode.Base: ChainSpec(
+        ChainType.EVM, 8453, False, 20, "ETH", 18, 4, icon=_icon("base")
+    ),
+    ChainCode.Avalanche: ChainSpec(
+        ChainType.EVM, 43114, False, 8, "AVAX", 18, 6, icon=_icon("avalanche")
+    ),
+    ChainCode.Linea: ChainSpec(
+        ChainType.EVM, 59144, False, 20, "ETH", 18, 6, icon=_icon("linea")
+    ),
+    ChainCode.Scroll: ChainSpec(
+        ChainType.EVM, 534352, False, 20, "ETH", 18, 6, icon=_icon("scroll")
+    ),
     # Anvil 是本地联调链：作为本地"主网替身"供普通项目端到端测试，故保持
     # is_testnet=False，避免被 Project.is_test 门控挡在普通项目之外。
     ChainCode.Anvil: ChainSpec(ChainType.EVM, 31337, False, 8, "ETH", 18, 4),
-    ChainCode.Tron: ChainSpec(ChainType.TRON, None, None, 16, "TRX", 6, 6),
+    ChainCode.Tron: ChainSpec(
+        ChainType.TRON, None, None, 16, "TRX", 6, 6, icon=_icon("tron")
+    ),
     ChainCode.Sepolia: ChainSpec(
         ChainType.EVM, 11155111, False, 12, "ETH", 18, 12, is_testnet=True
     ),

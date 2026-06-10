@@ -117,6 +117,10 @@ class Chain(models.Model):
         return ChainCode(self.code).label
 
     @property
+    def icon(self) -> str:
+        return self.spec.icon
+
+    @property
     def chain_id(self) -> int | None:
         return self.spec.chain_id
 

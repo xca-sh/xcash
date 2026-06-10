@@ -23,5 +23,6 @@ class SaasChainViewSet(ListModelMixin, GenericViewSet):
     authentication_classes = [SaasTokenAuthentication]
     permission_classes = [IsAuthenticated]
     serializer_class = SaasChainSerializer
-    queryset = Chain.objects.filter(active=True)
+    # 仅暴露已启用且非测试网的链，供 SaaS 收款页按链类型展示当前支持的公链。
+    queryset = Chain.objects.filter(active=True, is_testnet=False).order_by("sort_order")
     pagination_class = None

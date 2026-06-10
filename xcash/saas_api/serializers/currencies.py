@@ -30,12 +30,16 @@ class SaasCryptoSerializer(serializers.ModelSerializer):
 
 class SaasChainSerializer(serializers.ModelSerializer):
     native_coin = serializers.SerializerMethodField()
+    # name/icon 是 code 派生的只读 property，ModelSerializer 不会自动识别，显式声明。
+    name = serializers.CharField(read_only=True)
+    icon = serializers.CharField(read_only=True)
 
     class Meta:
         model = Chain
         fields = [
+            "code",
             "name",
-            "chain",
+            "icon",
             "type",
             "native_coin",
             "confirm_block_count",
