@@ -473,6 +473,32 @@ class TransferServiceCreateObservedTests(TestCase):
         enqueue_mock.assert_called_once()
 
     @patch("chains.service.TransferService.enqueue_processing")
+    def test_oversized_observed_value_returns_conflict_without_breaking_transaction(
+        self,
+        enqueue_mock,
+    ):
+        from chains.service import ObservedTransferPayload
+        from chains.service import TransferService
+
+        oversized = ObservedTransferPayload(
+            **{
+                **self.payload.__dict__,
+                "value": Decimal("1e32"),
+                "amount": Decimal("1"),
+            }
+        )
+
+        with transaction.atomic():
+            result = TransferService.create_observed_transfer(observed=oversized)
+            transfer_count = Transfer.objects.count()
+
+        self.assertFalse(result.created)
+        self.assertTrue(result.conflict)
+        self.assertIsNone(result.transfer)
+        self.assertEqual(transfer_count, 0)
+        enqueue_mock.assert_not_called()
+
+    @patch("chains.service.TransferService.enqueue_processing")
     def test_same_tx_different_event_index_creates_independent_transfers(
         self,
         enqueue_mock,

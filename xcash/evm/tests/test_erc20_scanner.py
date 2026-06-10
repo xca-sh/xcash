@@ -416,6 +416,108 @@ class EvmErc20ScannerTests(TestCase):
         self.assertEqual({transfer.hash for transfer in transfers}, {"0x" + "ab" * 32})
         rpc_client.get_block_timestamp.assert_called_once_with(block_number=100)
 
+    @patch("evm.scanner.observed_transfers.TransferService.create_observed_transfer")
+    def test_erc20_scanner_skips_oversized_value_without_blocking_valid_event(
+        self,
+        create_observed_transfer_mock,
+    ):
+        second_customer = Customer.objects.create(
+            project=self.project,
+            uid="scanner-customer-oversized",
+        )
+        second_slot = VaultSlot.objects.create(
+            customer=second_customer,
+            usage=VaultSlotUsage.DEPOSIT,
+            chain=self.chain,
+            address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000be"
+            ),
+            salt=b"\x03" * 32,
+        )
+        sender = Web3.to_checksum_address("0x" + "cc" * 20)
+        logs = [
+            self._build_transfer_log(
+                from_address=sender,
+                to_address=self.vault_slot.address,
+                value=10**32,
+                log_index=5,
+            ),
+            self._build_transfer_log(
+                from_address=sender,
+                to_address=second_slot.address,
+                value=10**18,
+                log_index=6,
+            ),
+        ]
+        rpc_client = Mock()
+        rpc_client.get_block_timestamp.return_value = 1_700_000_000
+
+        created = EvmLogScanner._process_logs(
+            chain=self.chain,
+            logs=logs,
+            rpc_client=rpc_client,
+            token_registry={self.token_on_chain.address: self.token_on_chain},
+        )
+
+        self.assertIsNone(created)
+        create_observed_transfer_mock.assert_called_once()
+        observed = create_observed_transfer_mock.call_args.kwargs["observed"]
+        self.assertEqual(observed.event_index, 6)
+        self.assertEqual(observed.to_address, second_slot.address)
+
+    @patch("evm.scanner.observed_transfers.TransferService.create_observed_transfer")
+    def test_erc20_scanner_continues_after_single_persist_error(
+        self,
+        create_observed_transfer_mock,
+    ):
+        second_customer = Customer.objects.create(
+            project=self.project,
+            uid="scanner-customer-after-error",
+        )
+        second_slot = VaultSlot.objects.create(
+            customer=second_customer,
+            usage=VaultSlotUsage.DEPOSIT,
+            chain=self.chain,
+            address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000bf"
+            ),
+            salt=b"\x04" * 32,
+        )
+        sender = Web3.to_checksum_address("0x" + "cc" * 20)
+        logs = [
+            self._build_transfer_log(
+                from_address=sender,
+                to_address=self.vault_slot.address,
+                log_index=5,
+            ),
+            self._build_transfer_log(
+                from_address=sender,
+                to_address=second_slot.address,
+                log_index=6,
+            ),
+        ]
+        rpc_client = Mock()
+        rpc_client.get_block_timestamp.return_value = 1_700_000_000
+        create_observed_transfer_mock.side_effect = [
+            RuntimeError("numeric field overflow"),
+            None,
+        ]
+
+        created = EvmLogScanner._process_logs(
+            chain=self.chain,
+            logs=logs,
+            rpc_client=rpc_client,
+            token_registry={self.token_on_chain.address: self.token_on_chain},
+        )
+
+        self.assertIsNone(created)
+        self.assertEqual(create_observed_transfer_mock.call_count, 2)
+        observed_events = [
+            call.kwargs["observed"].event_index
+            for call in create_observed_transfer_mock.call_args_list
+        ]
+        self.assertEqual(observed_events, [5, 6])
+
     def test_erc20_scanner_does_not_route_known_internal_hash_to_processor(self):
         tx_hash = "0x" + "51" * 32
         recipient = Web3.to_checksum_address("0x" + "52" * 20)

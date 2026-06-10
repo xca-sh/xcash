@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+import structlog
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
@@ -17,9 +18,12 @@ from tron.models import TronWatchCursor
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import VaultSlot
+from chains.service import MAX_TRANSFER_VALUE
 from chains.service import ObservedTransferPayload
 from chains.service import TransferService
 from currencies.models import CryptoOnChain
+
+logger = structlog.get_logger()
 
 # 单轮扫描最多向前推进的块数；walletsolidity 返回的是 BFT 不可逆块，故无需 replay。
 # Tron 3 秒一块、beat tick 30 秒 ≈ 每轮净新增 ~10 块，32 块留够冗余且能消化短暂积压；
@@ -115,7 +119,7 @@ class TronScanner:
                     )
                     events_seen += len(parsed_events)
                     for event in parsed_events:
-                        TransferService.create_observed_transfer(
+                        cls._persist_observed_transfer_safely(
                             observed=event.observed
                         )
                     blocks_scanned += 1
@@ -348,6 +352,15 @@ class TronScanner:
             return None
         if value <= 0:
             return None
+        if value > MAX_TRANSFER_VALUE:
+            logger.warning(
+                "Tron 原生币转账数值超过 Transfer.value 范围，已跳过",
+                chain=chain.code,
+                tx_hash=tx_id,
+                event_index=contract_index,
+                value=str(value),
+            )
+            return None
         try:
             from_address = cls._event_address_to_base58(value_obj.get("owner_address"))
             to_address = cls._event_address_to_base58(value_obj.get("to_address"))
@@ -554,6 +567,24 @@ class TronScanner:
             if event.observed.to_address in matched_addresses
         ]
 
+    @staticmethod
+    def _persist_observed_transfer_safely(
+        *,
+        observed: ObservedTransferPayload,
+    ) -> None:
+        try:
+            TransferService.create_observed_transfer(observed=observed)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Tron 入账事件落库失败，已跳过",
+                chain=observed.chain.code,
+                tx_hash=observed.tx_hash,
+                event_index=observed.event_index,
+                value=str(observed.value),
+                amount=str(observed.amount),
+                error=str(exc),
+            )
+
     @classmethod
     def _parse_contract_event(
         cls,
@@ -609,6 +640,15 @@ class TronScanner:
         except Exception:  # noqa: BLE001
             return None
         if value <= 0:
+            return None
+        if value > MAX_TRANSFER_VALUE:
+            logger.warning(
+                "Tron TRC20 Transfer 数值超过 Transfer.value 范围，已跳过",
+                chain=chain.code,
+                tx_hash=tx_id,
+                event_index=event_index,
+                value=str(value),
+            )
             return None
 
         occurred_at = datetime.fromtimestamp(

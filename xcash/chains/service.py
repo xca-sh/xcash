@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
+from django.db import DataError
 from django.db import IntegrityError
 from django.db import transaction
 
@@ -15,11 +17,12 @@ from chains.models import TransferType
 
 if TYPE_CHECKING:
     from datetime import datetime
-    from decimal import Decimal
 
     from currencies.models import Crypto
 
 logger = structlog.get_logger()
+
+MAX_TRANSFER_VALUE = Decimal("9" * 32)
 
 
 class ChainService:
@@ -221,6 +224,22 @@ class TransferService:
                 # 只有首次真正落库成功的观测转账才需要派发一次业务处理任务。
                 TransferService.enqueue_processing(transfer)
                 return ObservedTransferCreateResult(transfer=transfer, created=True)
+            except DataError as exc:
+                logger.warning(
+                    "Observed transfer value outside database range",
+                    source=observed.source,
+                    chain=chain.code,
+                    tx_hash=observed.tx_hash,
+                    event_index=observed.event_index,
+                    value=str(observed.value),
+                    amount=str(observed.amount),
+                    error=str(exc),
+                )
+                return ObservedTransferCreateResult(
+                    transfer=None,
+                    created=False,
+                    conflict=True,
+                )
             except IntegrityError:
                 existing = Transfer.objects.filter(
                     chain=chain,

@@ -1325,6 +1325,135 @@ class TronScannerTests(TestCase):
 
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")
+    def test_scan_chain_skips_oversized_trc20_value_without_blocking_valid_event(
+        self,
+        client_cls,
+        enqueue_processing_mock,
+    ):
+        from tron.scanner import TronScanner
+
+        VaultSlot.objects.create(
+            chain=self.chain,
+            project=self.project,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=0,
+            address=self.watch_address,
+            salt=b"c" * 32,
+        )
+        self._set_cursor_block(last_scanned_block=123455)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = 123456
+        client.get_solid_block_id.return_value = "0" * 64
+        client.list_confirmed_contract_events.return_value = {
+            "data": [
+                {
+                    "transaction_id": "2" * 64,
+                    "event_index": "0",
+                    "block_number": 123456,
+                    "block_timestamp": 1_700_000_000_000,
+                    "event_name": "Transfer",
+                    "contract_address": self.usdt_mapping.address,
+                    "result": {
+                        "from": self.sender_address,
+                        "to": self.watch_address,
+                        "value": str(10**32),
+                    },
+                },
+                {
+                    "transaction_id": "3" * 64,
+                    "event_index": "1",
+                    "block_number": 123456,
+                    "block_timestamp": 1_700_000_000_000,
+                    "event_name": "Transfer",
+                    "contract_address": self.usdt_mapping.address,
+                    "result": {
+                        "from": self.sender_address,
+                        "to": self.watch_address,
+                        "value": "1000000",
+                    },
+                },
+            ],
+            "meta": {},
+        }
+
+        summary = TronScanner.scan_chain(chain=self.chain)
+
+        self.assertEqual(summary.events_seen, 1)
+        self.assertFalse(Transfer.objects.filter(hash="2" * 64).exists())
+        transfer = Transfer.objects.get(hash="3" * 64)
+        self.assertEqual(transfer.event_index, 1)
+        self.assertEqual(transfer.amount, Decimal("1"))
+        enqueue_processing_mock.assert_called_once()
+
+    @patch("tron.scanner.TransferService.create_observed_transfer")
+    @patch("tron.scanner.TronHttpClient")
+    def test_scan_chain_continues_after_single_persist_error(
+        self,
+        client_cls,
+        create_observed_transfer_mock,
+    ):
+        from tron.scanner import TronScanner
+
+        VaultSlot.objects.create(
+            chain=self.chain,
+            project=self.project,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=0,
+            address=self.watch_address,
+            salt=b"d" * 32,
+        )
+        self._set_cursor_block(last_scanned_block=123455)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = 123456
+        client.get_solid_block_id.return_value = "0" * 64
+        client.list_confirmed_contract_events.return_value = {
+            "data": [
+                {
+                    "transaction_id": "4" * 64,
+                    "event_index": "0",
+                    "block_number": 123456,
+                    "block_timestamp": 1_700_000_000_000,
+                    "event_name": "Transfer",
+                    "contract_address": self.usdt_mapping.address,
+                    "result": {
+                        "from": self.sender_address,
+                        "to": self.watch_address,
+                        "value": "1000000",
+                    },
+                },
+                {
+                    "transaction_id": "5" * 64,
+                    "event_index": "1",
+                    "block_number": 123456,
+                    "block_timestamp": 1_700_000_000_000,
+                    "event_name": "Transfer",
+                    "contract_address": self.usdt_mapping.address,
+                    "result": {
+                        "from": self.sender_address,
+                        "to": self.watch_address,
+                        "value": "2000000",
+                    },
+                },
+            ],
+            "meta": {},
+        }
+        create_observed_transfer_mock.side_effect = [
+            RuntimeError("numeric field overflow"),
+            None,
+        ]
+
+        summary = TronScanner.scan_chain(chain=self.chain)
+
+        self.assertEqual(summary.events_seen, 2)
+        self.assertEqual(create_observed_transfer_mock.call_count, 2)
+        observed_events = [
+            call.kwargs["observed"].event_index
+            for call in create_observed_transfer_mock.call_args_list
+        ]
+        self.assertEqual(observed_events, [0, 1])
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    @patch("tron.scanner.TronHttpClient")
     def test_scan_chain_matches_differ_recipient_candidates(
         self,
         client_cls,
@@ -1443,6 +1572,9 @@ class TronScannerTests(TestCase):
         )
         self.assertIsNone(
             parse(self._native_tx(to_hex=to_hex, from_hex=from_hex, amount=0))
+        )
+        self.assertIsNone(
+            parse(self._native_tx(to_hex=to_hex, from_hex=from_hex, amount=10**32))
         )
 
     @patch("chains.service.TransferService.enqueue_processing")

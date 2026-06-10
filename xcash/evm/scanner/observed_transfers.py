@@ -11,6 +11,7 @@ from web3 import Web3
 
 from chains.models import Chain
 from chains.models import TxHash
+from chains.service import MAX_TRANSFER_VALUE
 from chains.service import ObservedTransferPayload
 from chains.service import TransferService
 from currencies.models import CryptoOnChain
@@ -154,6 +155,14 @@ class EvmObservedTransferProcessor:
 
         if value <= 0 or slot_address not in owned_addresses:
             return None
+        if value > MAX_TRANSFER_VALUE:
+            logger.warning(
+                "EVM 原生币充值数值超过 Transfer.value 范围，已跳过",
+                chain=chain.code,
+                tx_hash=tx_hash,
+                value=str(value),
+            )
+            return None
         if payer in owned_addresses:
             return None
 
@@ -216,6 +225,15 @@ class EvmObservedTransferProcessor:
 
         if value <= 0:
             return None
+        if value > MAX_TRANSFER_VALUE:
+            logger.warning(
+                "EVM ERC20 Transfer 数值超过 Transfer.value 范围，已跳过",
+                chain=chain.code,
+                tx_hash=tx_hash,
+                event_index=event_index,
+                value=str(value),
+            )
+            return None
 
         decimals = token.decimals
         return ParsedEvmTransferLog(
@@ -249,25 +267,43 @@ class EvmObservedTransferProcessor:
                 )
                 timestamp_cache[log.block_number] = timestamp
 
-            TransferService.create_observed_transfer(
-                observed=ObservedTransferPayload(
-                    chain=chain,
-                    block=log.block_number,
-                    tx_hash=log.tx_hash,
-                    event_index=log.event_index,
-                    from_address=log.from_address,
-                    to_address=log.to_address,
-                    crypto=log.crypto,
-                    value=log.value,
-                    amount=log.amount,
-                    timestamp=timestamp,
-                    datetime=datetime.fromtimestamp(
-                        timestamp,
-                        tz=timezone.get_current_timezone(),
-                    ),
-                    block_hash=log.block_hash,
-                    source="evm-scan",
-                )
+            observed = ObservedTransferPayload(
+                chain=chain,
+                block=log.block_number,
+                tx_hash=log.tx_hash,
+                event_index=log.event_index,
+                from_address=log.from_address,
+                to_address=log.to_address,
+                crypto=log.crypto,
+                value=log.value,
+                amount=log.amount,
+                timestamp=timestamp,
+                datetime=datetime.fromtimestamp(
+                    timestamp,
+                    tz=timezone.get_current_timezone(),
+                ),
+                block_hash=log.block_hash,
+                source="evm-scan",
+            )
+            cls._persist_observed_transfer_safely(chain=chain, observed=observed)
+
+    @staticmethod
+    def _persist_observed_transfer_safely(
+        *,
+        chain: Chain,
+        observed: ObservedTransferPayload,
+    ) -> None:
+        try:
+            TransferService.create_observed_transfer(observed=observed)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "EVM 入账事件落库失败，已跳过",
+                chain=chain.code,
+                tx_hash=observed.tx_hash,
+                event_index=observed.event_index,
+                value=str(observed.value),
+                amount=str(observed.amount),
+                error=str(exc),
             )
 
     @staticmethod
