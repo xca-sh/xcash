@@ -1180,6 +1180,66 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertIsNotNone(second.tx_task_id)
         self.assertNotEqual(first.tx_task_id, second.tx_task_id)
 
+    def test_due_collect_schedule_error_does_not_abort_batch(self):
+        first_slot = self._create_vault_slot()
+        self._mark_vault_slot_deployed(first_slot)
+        second_customer = Customer.objects.create(
+            project=self.project,
+            uid="vault-slot-customer-2",
+        )
+        second_slot = VaultSlot.objects.create(
+            customer=second_customer,
+            usage=VaultSlotUsage.DEPOSIT,
+            chain=self.chain,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000a22"
+            ),
+            salt=b"\x22" * 32,
+            is_deployed=True,
+        )
+        first_deposit = self._create_deposit(slot=first_slot, tx_hash_suffix="1")
+        second_deposit = self._create_deposit(
+            slot=second_slot,
+            customer=second_customer,
+            tx_hash_suffix="2",
+        )
+        address_patch = self.patch_address_derivation()
+
+        with address_patch:
+            first = VaultSlot.schedule_collect_for_deposit(first_deposit.pk)
+            second = VaultSlot.schedule_collect_for_deposit(second_deposit.pk)
+        for schedule in (first, second):
+            schedule.due_at = timezone.now() - timedelta(seconds=1)
+            schedule.save(update_fields=["due_at", "updated_at"])
+
+        original_create_tx_task = VaultSlotCollectSchedule.create_tx_task
+
+        def fail_first_schedule(schedule):
+            if schedule.pk == first.pk:
+                raise RuntimeError("token disabled")
+            return original_create_tx_task(schedule)
+
+        with (
+            address_patch,
+            patch.object(
+                VaultSlotCollectSchedule,
+                "create_tx_task",
+                autospec=True,
+                side_effect=fail_first_schedule,
+            ),
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ),
+        ):
+            created_count = VaultSlotCollectSchedule.execute_due()
+
+        self.assertEqual(created_count, 1)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertIsNone(first.tx_task_id)
+        self.assertIsNotNone(second.tx_task_id)
+
     def test_schedule_collect_for_deposit_skips_native_deposit(self):
         slot = self._create_vault_slot()
         deposit = self._create_deposit(slot=slot, crypto=self.chain.native_coin)
@@ -1340,6 +1400,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self,
         *,
         slot: VaultSlot,
+        customer: Customer | None = None,
         crypto: Crypto | None = None,
         tx_hash_suffix: str = "1",
     ) -> Deposit:
@@ -1359,6 +1420,6 @@ class VaultSlotAddressSchedulingTests(TestCase):
             type=TransferType.Deposit,
         )
         return Deposit.objects.create(
-            customer=self.customer,
+            customer=customer or self.customer,
             transfer=transfer,
         )

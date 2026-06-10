@@ -1169,10 +1169,11 @@ class VaultSlotCollectSchedule(models.Model):
                         tx_task = schedule.create_tx_task()
                         schedule.tx_task = tx_task
                         schedule.save(update_fields=["tx_task", "updated_at"])
-                except IntegrityError:
+                except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "VaultSlot 归集计划绑定任务失败,跳过",
+                        "VaultSlot 归集计划创建或绑定任务失败,跳过",
                         schedule_id=schedule.pk,
+                        error=str(exc),
                     )
                     continue
                 created_count += 1
