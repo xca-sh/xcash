@@ -29,6 +29,7 @@ from common.time import ago
 logger = structlog.get_logger()
 
 TRON_SENDER_BROADCAST_LOCK_TIMEOUT_SECONDS = 60
+TRON_RECEIPT_TX_TASK_TYPES = (TxTaskType.VaultSlotDeploy, TxTaskType.VaultSlotCollect)
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,8 @@ def broadcast_tron_task(pk: int) -> None:
         return
     try:
         if tx_task.base_task.status == TxTaskStatus.QUEUED:
+            if process_tron_receipt_task(tx_task.base_task):
+                return
             tx_task.broadcast()
         elif tx_task.base_task.status == TxTaskStatus.SUBMITTED:
             tx_task.rebroadcast_expired_submitted()
@@ -192,6 +195,66 @@ def notify_gas_fee_for_receipt_task(task: TxTask) -> None:
         notify_vault_slot_collect_gas_fee(tx_task=task)
 
 
+def process_tron_receipt_task(task: TxTask) -> bool:
+    """按已有 tx hash 推进单个 Tron 主动任务，返回是否已处理到链上事实。"""
+    if not known_tx_hashes_for_task(task):
+        return False
+    adapter = AdapterFactory.get_adapter(task.chain.type)
+    raw_result, matched_tx_hash = find_tron_receipt_across_hashes(
+        adapter=adapter,
+        task=task,
+    )
+    if isinstance(raw_result, Exception):
+        logger.warning(
+            "Tron 主动交易回执确认查询失败",
+            chain=task.chain.code,
+            tx_task_id=task.pk,
+            error=str(raw_result),
+        )
+        return False
+
+    result_meta = raw_result if isinstance(raw_result, TxCheckResult) else None
+    status = tx_check_status(raw_result)
+    if status == TxCheckStatus.SUCCEEDED:
+        if matched_tx_hash is None:
+            return False
+        if task.status == TxTaskStatus.QUEUED:
+            TxTask.mark_submitted(task_id=task.pk)
+            task.status = TxTaskStatus.SUBMITTED
+            task.tx_hash = matched_tx_hash
+        if not has_required_confirmations(chain=task.chain, result=result_meta):
+            return True
+        updated = TxTask.mark_finalized_success(
+            chain=task.chain,
+            tx_hash=matched_tx_hash,
+        )
+        if updated:
+            task.tx_hash = matched_tx_hash
+            task.status = TxTaskStatus.SUCCEEDED
+            if task.tx_type == TxTaskType.VaultSlotDeploy:
+                mark_deployed_by_task(task)
+            elif task.tx_type == TxTaskType.VaultSlotCollect:
+                refresh_vault_slot_balance_for_collect_task(task)
+            notify_gas_fee_for_receipt_task(task)
+        return True
+
+    if status == TxCheckStatus.MISSING:
+        return False
+
+    if status == TxCheckStatus.FAILED:
+        updated = TxTask.mark_finalized_failed(
+            task_id=task.pk,
+            expected_status=task.status,
+        )
+        if updated:
+            task.status = TxTaskStatus.FAILED
+            if task.tx_type == TxTaskType.VaultSlotDeploy:
+                mark_deployed_if_on_chain_for_task(task)
+        return bool(updated)
+
+    return False
+
+
 @shared_task(ignore_result=True)
 @singleton_task(timeout=55)
 def confirm_tron_receipt_tx_tasks() -> None:
@@ -206,55 +269,13 @@ def confirm_tron_receipt_tx_tasks() -> None:
         .prefetch_related("tx_hashes")
         .filter(
             chain__type=ChainType.TRON,
-            tx_type__in=(TxTaskType.VaultSlotDeploy, TxTaskType.VaultSlotCollect),
-            status=TxTaskStatus.SUBMITTED,
+            tx_type__in=TRON_RECEIPT_TX_TASK_TYPES,
+            status__in=(TxTaskStatus.QUEUED, TxTaskStatus.SUBMITTED),
         )
         .order_by("updated_at")[:32]
     )
     for task in tasks:
-        if not known_tx_hashes_for_task(task):
-            continue
-        adapter = AdapterFactory.get_adapter(task.chain.type)
-        raw_result, matched_tx_hash = find_tron_receipt_across_hashes(
-            adapter=adapter,
-            task=task,
-        )
-        if isinstance(raw_result, Exception):
-            logger.warning(
-                "Tron 主动交易回执确认查询失败",
-                chain=task.chain.code,
-                tx_task_id=task.pk,
-                error=str(raw_result),
-            )
-            continue
-
-        result_meta = raw_result if isinstance(raw_result, TxCheckResult) else None
-        status = tx_check_status(raw_result)
-        if status == TxCheckStatus.SUCCEEDED:
-            if matched_tx_hash is None:
-                continue
-            if not has_required_confirmations(chain=task.chain, result=result_meta):
-                continue
-            updated = TxTask.mark_finalized_success(
-                chain=task.chain,
-                tx_hash=matched_tx_hash,
-            )
-            if updated:
-                task.tx_hash = matched_tx_hash
-                if task.tx_type == TxTaskType.VaultSlotDeploy:
-                    mark_deployed_by_task(task)
-                elif task.tx_type == TxTaskType.VaultSlotCollect:
-                    refresh_vault_slot_balance_for_collect_task(task)
-                notify_gas_fee_for_receipt_task(task)
-        elif status == TxCheckStatus.MISSING:
-            continue
-        elif status == TxCheckStatus.FAILED:
-            updated = TxTask.mark_finalized_failed(
-                task_id=task.pk,
-                expected_status=TxTaskStatus.SUBMITTED,
-            )
-            if updated and task.tx_type == TxTaskType.VaultSlotDeploy:
-                mark_deployed_if_on_chain_for_task(task)
+        process_tron_receipt_task(task)
 
 
 @shared_task(ignore_result=True)

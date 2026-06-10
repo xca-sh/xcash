@@ -701,6 +701,31 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
         broadcast.assert_not_called()
         rebroadcast_expired_submitted.assert_called_once()
 
+    @patch("tron.models.TronTxTask.broadcast")
+    @patch("tron.tasks.AdapterFactory.get_adapter")
+    def test_broadcast_task_recovers_queued_known_hash_before_rebroadcast(
+        self,
+        get_adapter,
+        broadcast,
+    ):
+        task = self.make_task()
+        tx_hash = "1" * 64
+        task.base_task.append_tx_hash(tx_hash)
+        adapter = Mock()
+        adapter.tx_result.return_value = TxCheckResult(
+            status=TxCheckStatus.SUCCEEDED,
+            block_number=self.chain.latest_block_number,
+            block_hash="1" * 64,
+        )
+        get_adapter.return_value = adapter
+
+        broadcast_tron_task.run(task.pk)
+
+        broadcast.assert_not_called()
+        task.base_task.refresh_from_db()
+        self.assertEqual(task.base_task.status, TxTaskStatus.SUBMITTED)
+        self.assertEqual(task.base_task.tx_hash, tx_hash)
+
     @patch("tron.tasks.cache")
     @patch("tron.models.TronTxTask.broadcast")
     def test_broadcast_task_skips_when_sender_lock_is_held(
@@ -1696,12 +1721,17 @@ class TronReceiptConfirmTaskTests(TestCase):
             salt=b"\x01" * 32,
         )
 
-    def create_collect_task(self, *, tx_hash="a" * 64) -> TxTask:
+    def create_collect_task(
+        self,
+        *,
+        tx_hash="a" * 64,
+        status=TxTaskStatus.SUBMITTED,
+    ) -> TxTask:
         base_task = TxTask.objects.create(
             chain=self.chain,
             sender=self.sender,
             tx_type=TxTaskType.VaultSlotCollect,
-            status=TxTaskStatus.SUBMITTED,
+            status=status,
         )
         base_task.append_tx_hash(tx_hash)
         TronTxTask.objects.create(
@@ -1788,6 +1818,34 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(
             collect_gas_fee.call_args.kwargs["tx_task"].pk, base_task.pk
         )
+        deploy_gas_fee.assert_not_called()
+
+    @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
+    @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tasks.AdapterFactory.get_adapter")
+    def test_confirm_finalizes_queued_collect_with_known_hash(
+        self,
+        get_adapter,
+        refresh_balance,
+        collect_gas_fee,
+        deploy_gas_fee,
+    ):
+        base_task = self.create_collect_task(status=TxTaskStatus.QUEUED)
+        adapter = Mock()
+        adapter.tx_result.return_value = TxCheckResult(
+            status=TxCheckStatus.SUCCEEDED,
+            block_number=100,
+            block_hash="b" * 64,
+        )
+        get_adapter.return_value = adapter
+
+        confirm_tron_receipt_tx_tasks()
+
+        base_task.refresh_from_db()
+        self.assertEqual(base_task.status, TxTaskStatus.SUCCEEDED)
+        refresh_balance.assert_called_once()
+        collect_gas_fee.assert_called_once()
         deploy_gas_fee.assert_not_called()
 
     @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
