@@ -99,11 +99,6 @@ SIDEBAR_UNFOLD = {
                         "icon": "tune",
                         "link": reverse_lazy("admin:core_systemsettings_changelist"),
                     },
-                    {
-                        "title": _("用户管理"),
-                        "icon": "account_circle",
-                        "link": reverse_lazy("admin:users_user_changelist"),
-                    },
                 ],
             },
             {
@@ -112,12 +107,12 @@ SIDEBAR_UNFOLD = {
                 "items": [
                     {
                         "title": _("加密货币"),
-                        "icon": "currency_exchange",
+                        "icon": "currency_bitcoin",
                         "link": reverse_lazy("admin:currencies_crypto_changelist"),
                     },
                     {
                         "title": _("法定货币"),
-                        "icon": "currency_yuan",
+                        "icon": "attach_money",
                         "link": reverse_lazy("admin:currencies_fiat_changelist"),
                     },
                 ],
@@ -134,32 +129,32 @@ SIDEBAR_UNFOLD = {
                 ],
             },
             {
-                "title": _("账单收款"),
+                "title": _("账单"),
                 "collapsible": False,
                 "items": [
                     {
                         "title": _("账单记录"),
-                        "icon": "receipt_long",
+                        "icon": "receipt",
                         "link": reverse_lazy("admin:invoices_invoice_changelist"),
                     },
                     {
-                        "title": _("账单地址"),
-                        "icon": "add_card",
-                        "link": reverse_lazy(
-                            "admin:chains_invoicevaultslot_changelist"
-                        ),
-                    },
-                    {
-                        "title": _("钱包直收地址"),
+                        "title": _("钱包直收"),
                         "icon": "account_balance_wallet",
                         "link": reverse_lazy(
                             "admin:invoices_differrecipientaddress_changelist"
                         ),
                     },
+                    {
+                        "title": _("合约地址"),
+                        "icon": "contract",
+                        "link": reverse_lazy(
+                            "admin:chains_invoicevaultslot_changelist"
+                        ),
+                    },
                 ],
             },
             {
-                "title": _("充值收款"),
+                "title": _("充值"),
                 "collapsible": False,
                 "items": [
                     {
@@ -168,8 +163,8 @@ SIDEBAR_UNFOLD = {
                         "link": reverse_lazy("admin:deposits_deposit_changelist"),
                     },
                     {
-                        "title": _("充值地址"),
-                        "icon": "add_card",
+                        "title": _("合约地址"),
+                        "icon": "contract",
                         "link": reverse_lazy(
                             "admin:chains_depositvaultslot_changelist"
                         ),
