@@ -427,8 +427,8 @@ def ensure_local_chains(*, using: str = "default", stdout=None) -> None:
             stdout=stdout,
         )
 
-    # VaultSlot 工厂 / 模板：本地 anvil 不持久化状态，每次 bootstrap 用确定性 CREATE2
-    # 重新部署到全网统一地址，使合约账单 / 充币的 VaultSlot 归集链路在本地可用。
+    # VaultSlot 工厂 / 模板：本地 compose 持久化 anvil state；这里仍用确定性 CREATE2
+    # 幂等检查并部署，覆盖首次启动或显式重建本地链后的初始化。
     # 生产 / 测试网由 contracts/scripts/DeployXcashVaultSlot.s.sol 经 Foundry 部署。
     ensure_local_vault_slot_contracts(w3=_build_local_evm_web3(rpc=local_evm_rpc))
 

@@ -1,9 +1,10 @@
 """本地联调：把 XcashVaultSlot 工厂 / 模板确定性部署到本地 EVM 链。
 
 生产 / 测试网由 `contracts/scripts/DeployXcashVaultSlot.s.sol` 经 Foundry 部署；
-本地 anvil 不持久化链状态（每次重启从创世块开始），故由 `ensure_local_chains`
-在 bootstrap 时用同一套 CREATE2 规则把工厂 / 模板重新部署到全网统一地址，
-让合约账单 / 充币的 VaultSlot 归集链路（deployVaultSlot + collect）在本地可用。
+本地 compose 会持久化 anvil state，使系统热钱包 nonce、合约代码和数据库同生命周期。
+`ensure_local_chains` 仍在 bootstrap 时用同一套 CREATE2 规则幂等检查并部署工厂 / 模板，
+覆盖首次启动或显式重建本地链后的初始化，让合约账单 / 充币的 VaultSlot 归集链路
+（deployVaultSlot + collect）在本地可用。
 
 部署不经 Foundry，而是直接把 `salt || init_code` 发给链上的 Arachnid CREATE2
 Deployer，纯 web3 调用，不依赖宿主安装 forge。init_code 取自合约编译产物

@@ -5,6 +5,9 @@ volumes:
   redis_data: {}
   # anvil 会在 $HOME/.foundry/anvil/tmp 下按会话堆放每块 trace/receipt，独立卷便于排查与单独清理。
   foundry_home: {}
+  # anvil 链状态必须与 dev DB 同生命周期，否则系统热钱包链上 nonce 会回到 0，
+  # 但 EvmTxTask 仍会从历史 nonce 继续分配，造成本地链与数据库错位。
+  anvil_state: {}
 
 services:
   django-db:
@@ -70,6 +73,7 @@ services:
       # anvil 会在 $HOME/.foundry/anvil/tmp/<session> 下累积每块 trace/receipt，并仅在 graceful shutdown 时清理。
       # 容器异常重启会留下数十 GB 孤儿目录。挂出独立卷避免污染容器可写层，便于按需 docker volume rm 清理。
       - foundry_home:/root/.foundry
+      - anvil_state:/anvil
     # anvil 的 stdout 每秒至少一行块日志，限制 daemon 端日志体积，避免长跑后吃满宿主机磁盘。
     logging:
       driver: json-file
@@ -86,9 +90,11 @@ services:
       # 每秒自动出块，模拟真实链的区块推进，使 FULL 确认模式和 block_number_updated 正常工作。
       - --block-time
       - "${LOCAL_EVM_BLOCK_TIME:-1}"
-      # dev 不持久化链状态：anvil 的 --state 单文件 + 周期落盘并非原子写，被强杀会留下截断 JSON 致下次启动反复崩溃。
-      # 每次容器重启都从创世块开始，业务侧不应依赖历史余额/nonce/合约地址。
-      # 仅保留最近 N 块的 trace/receipt/log，避免 anvil 在 $HOME/.foundry 无限累积历史。
-      # 1s 出块下 10000 块 ≈ 2.8h 历史，覆盖典型 dev 调试场景。
-      - --prune-history
-      - "10000"
+      # 持久化本地链状态，使账户 nonce、合约代码、余额和区块环境随容器重启保留。
+      # 如果需要重建本地链，必须同时重置 dev DB 或清理依赖 anvil 链事实的业务数据。
+      - --state
+      - /anvil/state.json
+      # 周期落盘降低异常退出导致 state 丢失的窗口；不要与 --prune-history 同用，
+      # prune-history 会禁用 state 持久化，使链状态重新回到非持久化模式。
+      - --state-interval
+      - "${LOCAL_EVM_STATE_INTERVAL:-5}"
