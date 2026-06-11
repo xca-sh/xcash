@@ -145,7 +145,7 @@ SIDEBAR_UNFOLD = {
                         ),
                     },
                     {
-                        "title": _("合约地址"),
+                        "title": _("账单合约"),
                         "icon": "contract",
                         "link": reverse_lazy(
                             "admin:chains_invoicevaultslot_changelist"
@@ -163,7 +163,7 @@ SIDEBAR_UNFOLD = {
                         "link": reverse_lazy("admin:deposits_deposit_changelist"),
                     },
                     {
-                        "title": _("合约地址"),
+                        "title": _("充值合约"),
                         "icon": "contract",
                         "link": reverse_lazy(
                             "admin:chains_depositvaultslot_changelist"

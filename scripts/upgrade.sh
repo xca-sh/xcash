@@ -4,9 +4,12 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# 本脚本落盘的内容（数据库 dump、迁移日志/plan、升级锁）均属运维敏感数据，
+# 统一收紧新建文件权限为 600 / 目录 700；已存在的文件与目录不受影响。
+umask 077
+
 ENV_FILE="${ENV_FILE:-.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
-UPGRADE_REF="${1:-${UPGRADE_REF:-main}}"
 SKIP_GIT_PULL="${SKIP_GIT_PULL:-false}"
 # 默认在线 dump（不停机生成演练数据，缩短停机窗口、提升升级体验）：dump 期间
 # django/worker/beat 继续服务，仅在 production migrate 前才停机。
@@ -98,7 +101,10 @@ cleanup() {
   fi
 
   if [[ "${LOCK_ACQUIRED}" == "true" ]]; then
-    "${REHEARSAL_COMPOSE[@]}" rm -sf migration-rehearsal-db >/dev/null 2>&1 || true
+    # -v 连带删除匿名卷：postgres 镜像声明 VOLUME /var/lib/postgresql，演练库
+    # 未显式挂卷，不加 -v 每次升级都会残留一个含完整生产数据副本的匿名卷
+    # （磁盘只增不减，且敏感数据藏在无名卷里难以察觉）。
+    "${REHEARSAL_COMPOSE[@]}" rm -sfv migration-rehearsal-db >/dev/null 2>&1 || true
   fi
 
   exit "${exit_code}"
@@ -136,9 +142,12 @@ pull_code() {
   fi
 
   ensure_git_clean
-  log "fetch and fast-forward ${UPGRADE_REF}"
+  # 发布渠道锁定 main 最新。显式 checkout 是收敛动作：若有人在服务器上切到其他
+  # 分支排查问题后忘记切回，bare git pull 会把那个分支当作"最新版"部署上线。
+  # 将来开始按 release tag 发版时，再引入版本参数（注意 detached HEAD 下需跳过 pull）。
+  log "fetch and fast-forward main"
   git fetch --prune
-  git checkout "${UPGRADE_REF}"
+  git checkout main
   git pull --ff-only
   ensure_git_clean
 }
@@ -230,11 +239,12 @@ restore_pre_migration_services() {
     "${COMPOSE[@]}" start "${APP_SERVICES_TO_RESTORE[@]}"
 }
 
-# 从 migrate --plan 输出中只保留真正的迁移行（形如 "  app_label.NNNN_name"），
-# 丢弃提示文案、空行、日志、以及可能漏入的 compose 进度残留，让 diff 比对鲁棒。
+# 从 migrate --plan 输出中只保留真正的迁移行：Django 将其【顶格】输出（形如
+# "app_label.NNNN_name"），前导空白按可选兼容上游格式微调；丢弃提示文案、空行、
+# 日志、以及可能漏入的 compose 进度残留，让 diff 比对鲁棒。
 # 操作明细行（形如 "    Add field xxx"）首字母为大写，不匹配 [a-z_]，会被自然过滤。
 extract_plan() {
-  grep -E '^[[:space:]]+[a-z_][a-z0-9_]*\.[0-9]{4}_' "$1" || true
+  grep -E '^[[:space:]]*[a-z_][a-z0-9_]*\.[0-9]{4}_' "$1" || true
 }
 
 compare_plans() {
@@ -268,6 +278,10 @@ print_rehearsal_failure_help() {
 }
 
 trap cleanup EXIT
+
+# 不接受任何位置参数：发布渠道已锁定 main 最新（见 pull_code）。显式拒绝而非
+# 静默忽略，防止有人习惯性传 "./upgrade.sh v1.2.0" 却被实际升级到 main 而不自知。
+[[ $# -eq 0 ]] || die "unexpected argument: $1 — this script always upgrades to latest main (set SKIP_GIT_PULL=true to deploy the current tree)"
 
 require_command docker
 require_command git
@@ -306,7 +320,12 @@ log "build production images"
 "${COMPOSE[@]}" build
 
 log "ensure database and cache dependencies are running"
-"${COMPOSE[@]}" up -d django-db redis
+# --no-recreate：在备份 dump 落盘之前，绝不因 compose 配置/镜像变更重建生产 DB
+# 容器，保证备份必定取自升级前已知良好的实例。否则一旦本次升级恰好改动了 db 服务
+# 配置（典型如卷映射写错），重建后的新容器会以空库启动，随后的"备份"与演练都将在
+# 空库上全绿通过，整条防线失效。db/redis 的配置变更统一推迟到升级末尾的
+# up -d --remove-orphans 应用——那时真实数据的备份已经在手。
+"${COMPOSE[@]}" up -d --no-recreate django-db redis
 wait_for_postgres django-db
 
 if [[ "${STOP_BEFORE_REHEARSAL}" == "true" ]]; then
@@ -320,7 +339,8 @@ dump_main_database "${MAIN_DUMP}"
 log "pre-upgrade backup saved: ${MAIN_DUMP}"
 
 log "reset rehearsal database"
-"${REHEARSAL_COMPOSE[@]}" rm -sf migration-rehearsal-db >/dev/null 2>&1 || true
+# -v 清理上一轮残留的匿名卷，理由见 cleanup 中同命令的注释。
+"${REHEARSAL_COMPOSE[@]}" rm -sfv migration-rehearsal-db >/dev/null 2>&1 || true
 "${REHEARSAL_COMPOSE[@]}" up -d migration-rehearsal-db
 wait_for_postgres migration-rehearsal-db
 
