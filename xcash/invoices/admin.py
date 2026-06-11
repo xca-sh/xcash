@@ -171,7 +171,7 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
     @display(
         description=_("状态"),  # noqa
         label={  # noqa
-            "待账单收款": "warning",
+            "待支付": "warning",
             "确认中": "info",
             "已完成": "success",
             "已超时": "",

@@ -205,7 +205,7 @@ def dashboard_callback(request, context):
 
     backlog_rows = [
         {
-            "label": _("待账单收款"),
+            "label": _("待支付"),
             "value": snapshot["waiting_count"],
             "detail": _fmt_usd(snapshot["waiting_worth"]),
             "href": f"{reverse('admin:invoices_invoice_changelist')}?status__exact=waiting",

@@ -530,7 +530,7 @@ msgid "无可用账单收款方式。请确保已设置账单收款地址且 met
 msgstr "No valid recipient address."
 
 #: xcash/common/error_codes.py:50
-msgid "待账单收款记录过多，请勿滥用"
+msgid "待支付记录过多，请勿滥用"
 msgstr "Too many pending invoices, please do not abuse"
 
 #: xcash/common/error_codes.py:51
@@ -648,7 +648,7 @@ msgid "账单"
 msgstr "Invoice"
 
 #: xcash/invoices/models.py:28
-msgid "待账单收款"
+msgid "待支付"
 msgstr "Pending payment"
 
 #: xcash/invoices/models.py:32 xcash/referrals/models.py:151

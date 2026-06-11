@@ -20,7 +20,7 @@
     "blockchainNetwork": "区块链网络",
     "paymentIrreversible": "请仔细核对金额与订单信息，账单收款完成后无法撤销",
     "status": {
-      "waiting": "待账单收款",
+      "waiting": "待支付",
       "confirming": "确认中",
       "finalizing": "最终化中",
       "completed": "已完成",
@@ -66,7 +66,7 @@
     "awaitingFinalization": "已达到所需区块确认数，正在等待最终入账"
   },
   "waiting": {
-    "title": "等待账单收款",
+    "title": "等待支付",
     "description": "请尽快完成账单收款",
     "timeRemaining": "剩余时间",
     "expired": "已过期",
