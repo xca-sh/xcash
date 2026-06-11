@@ -303,7 +303,7 @@ class EvmTxTask(UndeletableModel):
         }
 
     def _mark_submitted(self) -> None:
-        # 首次成功提交到节点后，统一父任务从"待提交"进入"已提交，待链上结果"。
+        # 首次成功提交到节点后，统一父任务从"待提交"进入"已提交"。
         TxTask.mark_submitted(task_id=self.base_task_id)
 
     @property

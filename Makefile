@@ -44,7 +44,7 @@ down:
 	docker compose down
 
 upgrade:
-	./scripts/upgrade.sh main
+	./scripts/upgrade.sh
 
 dev-sync:
 	uv sync --group dev
