@@ -5,6 +5,7 @@
 
 import pytest
 
+from invoices.models import DifferRecipientAddress
 from projects.models import Project
 
 AUTH_HEADER = "Bearer test-saas-token"
@@ -76,6 +77,44 @@ class TestSetVault:
         assert response.status_code == 400
         project.refresh_from_db()
         assert project.tron_vault in (None, "")
+
+    def test_set_vault_rejects_global_differ_address_conflict(
+        self, client, project
+    ):
+        other_project = Project.objects.create(name="vault-conflict-owner")
+        DifferRecipientAddress.objects.create(
+            project=other_project,
+            chain_type="evm",
+            address=VALID_EVM_VAULT,
+        )
+
+        response = client.post(
+            _url(project),
+            data={"chain_type": "evm", "vault": VALID_EVM_VAULT},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+
+        assert response.status_code == 400
+        project.refresh_from_db()
+        assert project.evm_vault in (None, "")
+
+    def test_set_vault_rejects_global_vault_conflict(self, client, project):
+        Project.objects.create(
+            name="vault-conflict-project",
+            evm_vault=VALID_EVM_VAULT,
+        )
+
+        response = client.post(
+            _url(project),
+            data={"chain_type": "evm", "vault": VALID_EVM_VAULT},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+
+        assert response.status_code == 400
+        project.refresh_from_db()
+        assert project.evm_vault in (None, "")
 
     def test_set_vault_requires_auth(self, client, project):
         response = client.post(

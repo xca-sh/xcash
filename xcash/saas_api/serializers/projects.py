@@ -104,6 +104,11 @@ class ProjectVaultSetSerializer(serializers.Serializer):
                 chain_type=attrs["chain_type"],
                 address=attrs["vault"],
             )
+            project = self.context.get("project")
+            if project is not None:
+                project.validate_vault_address_is_globally_unique(
+                    address=attrs["vault"],
+                )
         except DjangoValidationError as exc:
             raise serializers.ValidationError({"vault": exc.message}) from exc
         return attrs

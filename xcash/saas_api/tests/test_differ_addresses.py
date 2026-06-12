@@ -96,6 +96,23 @@ class TestDifferAddressCreate:
         )
         assert response.status_code == 400
 
+    def test_create_rejects_global_vault_conflict(self, client, project):
+        other_project = Project.objects.create(
+            name="differ-vault-conflict-owner",
+            evm_vault=EVM_ADDR,
+        )
+        assert other_project.evm_vault == EVM_ADDR
+
+        response = client.post(
+            _list_url(project),
+            data={"chain_type": "evm", "address": EVM_ADDR},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+
+        assert response.status_code == 400
+        assert not DifferRecipientAddress.objects.filter(project=project).exists()
+
 
 @pytest.mark.django_db
 class TestDifferAddressScopingAndList:

@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Q
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from shortuuid.django_fields import ShortUUIDField
@@ -168,6 +169,9 @@ class Project(models.Model):
                     chain_type=chain_type,
                     address=value,
                 )
+                self.validate_vault_address_is_globally_unique(
+                    address=value,
+                )
             except ValidationError as exc:
                 errors[field] = exc.message
         if errors:
@@ -190,6 +194,20 @@ class Project(models.Model):
         raise ValidationError(
             _("不支持的链类型: %(chain_type)s") % {"chain_type": chain_type}
         )
+
+    def validate_vault_address_is_globally_unique(self, *, address: str) -> None:
+        project_conflicts = Project.objects.filter(
+            Q(evm_vault=address) | Q(tron_vault=address)
+        )
+        if self.pk:
+            project_conflicts = project_conflicts.exclude(pk=self.pk)
+        if project_conflicts.exists():
+            raise ValidationError(_("收款归集地址已被其他项目地址占用。"))
+
+        from invoices.models import DifferRecipientAddress
+
+        if DifferRecipientAddress.objects.filter(address=address).exists():
+            raise ValidationError(_("收款归集地址已被钱包直收地址占用。"))
 
     @staticmethod
     def vault_field_for_chain_type(chain_type: ChainType | str) -> str:

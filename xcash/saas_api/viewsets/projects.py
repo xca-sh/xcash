@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction as db_transaction
 from rest_framework import status as drf_status
 from rest_framework.decorators import action
@@ -59,7 +60,10 @@ class ProjectViewSet(ModelViewSet):
         - 未设置 → 写入后返回项目详情。
         """
         project = self.get_object()
-        serializer = ProjectVaultSetSerializer(data=request.data)
+        serializer = ProjectVaultSetSerializer(
+            data=request.data,
+            context={"project": project},
+        )
         serializer.is_valid(raise_exception=True)
         chain_type = serializer.validated_data["chain_type"]
         vault_field = Project.vault_field_for_chain_type(chain_type)
@@ -80,7 +84,13 @@ class ProjectViewSet(ModelViewSet):
                     status=drf_status.HTTP_409_CONFLICT,
                 )
             setattr(locked, vault_field, new_vault)
-            locked.save(update_fields=[vault_field])
+            try:
+                locked.save(update_fields=[vault_field])
+            except DjangoValidationError as exc:
+                return Response(
+                    getattr(exc, "message_dict", {"vault": exc.messages}),
+                    status=drf_status.HTTP_400_BAD_REQUEST,
+                )
         return Response(ProjectDetailSerializer(locked).data)
 
     @action(detail=True, methods=["post"])

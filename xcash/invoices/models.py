@@ -89,6 +89,10 @@ class DifferRecipientAddress(models.Model):
             self.address
         ):
             raise ValidationError({"address": _("Tron 钱包直收地址必须是 Base58 地址")})
+        if Project.objects.filter(
+            Q(evm_vault=self.address) | Q(tron_vault=self.address)
+        ).exists():
+            raise ValidationError({"address": _("钱包直收地址已被收款归集地址占用")})
 
     @staticmethod
     def matched_addresses_for_candidates(*, chain, candidates: set[str]) -> set[str]:
