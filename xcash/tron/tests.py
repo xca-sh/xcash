@@ -1501,7 +1501,6 @@ class TronScannerTests(TestCase):
     ):
         """暂时性 DB 故障必须上抛并停住游标，由下一轮重扫恢复，不能当毒事件跳过。"""
         from django.db import OperationalError
-
         from tron.scanner import TronScanner
 
         VaultSlot.objects.create(
@@ -2011,6 +2010,29 @@ class TronReceiptConfirmTaskTests(TestCase):
             notify_vault_slot_collect_gas_fee(tx_task=base_task)
 
         retry_delay.assert_called_once_with(base_task.pk)
+
+    @patch("tron.saas_gas_billing.TronHttpClient")
+    def test_build_tx_detail_charges_burned_trx_and_energy_cost(self, client_cls):
+        from tron.saas_gas_billing import build_tx_detail
+
+        trx = self.chain.native_coin
+        trx.prices = {"USD": "0.1"}
+        trx.save(update_fields=["prices"])
+        client_cls.return_value.get_transaction_info_by_id.return_value = {
+            "fee": 1_000_000,
+            "receipt": {
+                "energy_usage_total": 65_000,
+                "net_usage": 300,
+            },
+        }
+
+        detail = build_tx_detail(chain=self.chain, tx_hash="c" * 64)
+
+        self.assertEqual(detail.fee_sun, 1_000_000)
+        self.assertEqual(detail.energy_usage_total, 65_000)
+        self.assertEqual(detail.net_usage, 300)
+        self.assertEqual(detail.native_price, "0.1")
+        self.assertEqual(detail.gas_cost, "0.4")
 
     @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
     @patch("tron.tasks.notify_vault_slot_collect_gas_fee")

@@ -21,6 +21,8 @@ from common.saas_callback import send_saas_callback
 logger = structlog.get_logger()
 
 GAS_FEE_CALLBACK_RETRY_BACKOFF_SECONDS = 60
+TRON_ENERGY_MARKET_PRICE_ENERGY = Decimal("65000")
+TRON_ENERGY_MARKET_PRICE_TRX = Decimal("3")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -52,17 +54,23 @@ def build_tx_detail(*, chain: Chain, tx_hash: str) -> TronTxDetail:
     receipt = payload.get("receipt") or {}
     if not isinstance(receipt, dict):
         receipt = {}
+    energy_usage_total = int_payload_value(receipt, "energy_usage_total")
     native_crypto = chain.native_coin
     native_decimals = native_crypto.get_decimals(chain)
     native_price = native_crypto.usd_amount(Decimal(1))
-    gas_fee_native = Decimal(fee_sun).scaleb(-native_decimals)
-    gas_cost = gas_fee_native * native_price
+    burned_trx = Decimal(fee_sun).scaleb(-native_decimals)
+    energy_cost_trx = (
+        Decimal(energy_usage_total)
+        * TRON_ENERGY_MARKET_PRICE_TRX
+        / TRON_ENERGY_MARKET_PRICE_ENERGY
+    )
+    gas_cost = (burned_trx + energy_cost_trx) * native_price
     return TronTxDetail(
         gas_cost=format_decimal(gas_cost),
         tx_hash=tx_hash,
         chain=ChainCode(chain.code).label,
         fee_sun=fee_sun,
-        energy_usage_total=int_payload_value(receipt, "energy_usage_total"),
+        energy_usage_total=energy_usage_total,
         net_usage=int_payload_value(receipt, "net_usage"),
         native_price=format_decimal(native_price),
     )
