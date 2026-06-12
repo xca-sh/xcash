@@ -267,6 +267,7 @@ class VaultSlotBalanceInline(TabularInline):
     fields = (
         "crypto",
         "amount",
+        "worth",
         "value",
         "synced_block_number",
         "synced_at",

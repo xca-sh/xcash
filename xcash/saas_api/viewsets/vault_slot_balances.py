@@ -13,12 +13,16 @@ class SaasVaultSlotBalanceViewSet(ListModelMixin, GenericViewSet):
     authentication_classes = [SaasTokenAuthentication]
     permission_classes = [IsAuthenticated]
     serializer_class = SaasVaultSlotBalanceSerializer
+    ordering_fields = {"updated_at", "worth"}
 
     def get_queryset(self):
+        ordering = self.request.query_params.get("ordering") or "-worth"
+        if ordering.lstrip("-") not in self.ordering_fields:
+            ordering = "-worth"
         return (
             VaultSlotBalance.objects.filter(
                 vault_slot__project__appid=self.kwargs["project_appid"]
             )
             .select_related("vault_slot__customer", "chain", "crypto")
-            .order_by("-updated_at", "-pk")
+            .order_by(ordering, "-pk")
         )

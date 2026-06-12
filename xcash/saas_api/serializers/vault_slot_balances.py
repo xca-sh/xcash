@@ -13,6 +13,7 @@ class SaasVaultSlotBalanceSerializer(serializers.ModelSerializer):
     crypto = serializers.CharField(source="crypto.symbol", read_only=True)
     value = StrippedDecimalField(read_only=True, max_digits=80, decimal_places=0)
     amount = StrippedDecimalField(read_only=True, max_digits=80, decimal_places=30)
+    worth = StrippedDecimalField(read_only=True, max_digits=80, decimal_places=30)
 
     class Meta:
         model = VaultSlotBalance
@@ -26,6 +27,7 @@ class SaasVaultSlotBalanceSerializer(serializers.ModelSerializer):
             "crypto",
             "value",
             "amount",
+            "worth",
             "synced_block_number",
             "synced_at",
             "last_tx_hash",

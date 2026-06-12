@@ -29,6 +29,7 @@ def refresh_vault_slot_balance(
     raw_balance = adapter.get_balance(slot.address, chain, crypto)
     value = Decimal(int(raw_balance))
     amount = value.scaleb(-crypto.get_decimals(chain))
+    worth = crypto.usd_amount(amount)
     synced_at = timezone.now()
     with transaction.atomic():
         locked_slot = VaultSlot.objects.select_related("chain").select_for_update().get(
@@ -46,6 +47,7 @@ def refresh_vault_slot_balance(
             defaults={
                 "value": value,
                 "amount": amount,
+                "worth": worth,
                 "synced_block_number": synced_block_number,
                 "synced_at": synced_at,
                 "last_tx_hash": trigger_tx_hash,
@@ -71,6 +73,7 @@ def refresh_vault_slot_balance(
 
         balance.value = value
         balance.amount = amount
+        balance.worth = worth
         balance.synced_block_number = synced_block_number
         balance.synced_at = synced_at
         balance.last_tx_hash = trigger_tx_hash
@@ -78,6 +81,7 @@ def refresh_vault_slot_balance(
             update_fields=[
                 "value",
                 "amount",
+                "worth",
                 "synced_block_number",
                 "synced_at",
                 "last_tx_hash",

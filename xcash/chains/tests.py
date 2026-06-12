@@ -1071,6 +1071,8 @@ class VaultSlotReceivedFlagTests(TestCase):
         self.assertFalse(self.slot.has_received)
 
     def test_transfer_confirm_refreshes_vault_slot_balance_from_chain(self):
+        self.crypto.prices = {"USD": "2"}
+        self.crypto.save(update_fields=["prices"])
         transfer = Transfer.objects.create(
             chain=self.chain,
             block=100,
@@ -1099,8 +1101,39 @@ class VaultSlotReceivedFlagTests(TestCase):
         )
         self.assertEqual(balance.value, Decimal("1234567"))
         self.assertEqual(balance.amount, Decimal("1.234567"))
+        self.assertEqual(balance.worth, Decimal("2.469134"))
         self.assertEqual(balance.synced_block_number, transfer.block)
         self.assertEqual(balance.last_tx_hash, transfer.hash)
+
+    def test_transfer_confirm_sets_vault_slot_balance_worth_zero_without_usd_price(self):
+        transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=100,
+            block_hash="0x" + "a1" * 32,
+            hash="0x" + "b2" * 32,
+            crypto=self.crypto,
+            from_address=Web3.to_checksum_address("0x" + "cd" * 20),
+            to_address=self.slot_address,
+            value=Decimal("1000000"),
+            amount=Decimal("1"),
+            timestamp=1_700_000_003,
+            datetime=timezone.now(),
+        )
+        adapter = type("Adapter", (), {"get_balance": lambda *_args: 1_234_567})()
+
+        with patch(
+            "chains.vault_slot_balances.AdapterFactory.get_adapter",
+            return_value=adapter,
+        ):
+            transfer.confirm()
+
+        balance = VaultSlotBalance.objects.get(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+        )
+        self.assertEqual(balance.amount, Decimal("1.234567"))
+        self.assertEqual(balance.worth, Decimal("0"))
 
     def test_vault_slot_balance_refresh_skips_older_snapshot(self):
         from chains.vault_slot_balances import refresh_vault_slot_balance
@@ -1111,6 +1144,7 @@ class VaultSlotReceivedFlagTests(TestCase):
             crypto=self.crypto,
             value=Decimal("0"),
             amount=Decimal("0"),
+            worth=Decimal("0"),
             synced_block_number=200,
             synced_at=timezone.now(),
             last_tx_hash="0x" + "99" * 32,

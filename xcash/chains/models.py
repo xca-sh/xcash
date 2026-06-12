@@ -1026,6 +1026,12 @@ class VaultSlotBalance(models.Model):
         decimal_places=30,
         default=0,
     )
+    worth = models.DecimalField(
+        _("价值(USD)"),
+        max_digits=80,
+        decimal_places=30,
+        default=0,
+    )
     synced_block_number = models.PositiveIntegerField(
         _("同步区块"),
         null=True,

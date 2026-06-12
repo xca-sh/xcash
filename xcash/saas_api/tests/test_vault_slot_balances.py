@@ -22,6 +22,7 @@ class TestSaasVaultSlotBalanceEndpoint:
         project = Project.objects.create(name="balance-project")
         other_project = Project.objects.create(name="other-balance-project")
         customer = Customer.objects.create(project=project, uid="user-1")
+        customer_2 = Customer.objects.create(project=project, uid="user-3")
         other_customer = Customer.objects.create(project=other_project, uid="user-2")
         chain = Chain.objects.create(
             code=ChainCode.Ethereum,
@@ -46,14 +47,31 @@ class TestSaasVaultSlotBalanceEndpoint:
             address="0x2222222222222222222222222222222222222222",
             salt=b"2" * 32,
         )
+        slot_2 = VaultSlot.objects.create(
+            chain=chain,
+            usage=VaultSlotUsage.DEPOSIT,
+            project=project,
+            customer=customer_2,
+            address="0x3333333333333333333333333333333333333333",
+            salt=b"3" * 32,
+        )
         VaultSlotBalance.objects.create(
             vault_slot=slot,
             chain=chain,
             crypto=crypto,
             value=Decimal("123000000"),
             amount=Decimal("123"),
+            worth=Decimal("123"),
             synced_block_number=100,
             last_tx_hash="0x" + "a" * 64,
+        )
+        VaultSlotBalance.objects.create(
+            vault_slot=slot_2,
+            chain=chain,
+            crypto=crypto,
+            value=Decimal("1000000"),
+            amount=Decimal("1"),
+            worth=Decimal("1"),
         )
         VaultSlotBalance.objects.create(
             vault_slot=other_slot,
@@ -61,16 +79,18 @@ class TestSaasVaultSlotBalanceEndpoint:
             crypto=crypto,
             value=Decimal("456000000"),
             amount=Decimal("456"),
+            worth=Decimal("456"),
         )
 
         response = client.get(
             f"/saas/v1/projects/{project.appid}/vault-slot-balances",
+            {"ordering": "-worth"},
             HTTP_AUTHORIZATION=AUTH_HEADER,
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["count"] == 1
+        assert data["count"] == 2
         item = data["results"][0]
         assert item["vault_slot_address"] == "0x1111111111111111111111111111111111111111"
         assert item["usage"] == VaultSlotUsage.DEPOSIT
@@ -79,4 +99,16 @@ class TestSaasVaultSlotBalanceEndpoint:
         assert item["crypto"] == "USDT"
         assert item["value"] == "123000000"
         assert item["amount"] == "123"
+        assert item["worth"] == "123"
         assert item["synced_block_number"] == 100
+
+        response = client.get(
+            f"/saas/v1/projects/{project.appid}/vault-slot-balances",
+            {"ordering": "worth"},
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["results"][0]["vault_slot_address"] == (
+            "0x3333333333333333333333333333333333333333"
+        )
