@@ -250,6 +250,14 @@ class Project(models.Model):
     def is_ready(self) -> tuple[bool, list[str]]:
         # 错误项采用统一的"短名词 + 状态"格式，便于前端横排拼接。
         errors: list[str] = []
+        from invoices.models import DifferRecipientAddress
+
+        has_differ_address = DifferRecipientAddress.objects.filter(
+            project=self,
+            active=True,
+        ).exists()
+        if not has_differ_address and not self.evm_vault and not self.tron_vault:
+            errors.append(_("收款地址未配置"))  # noqa
         if (
             self.resolved_invoice_receiving_mode(ChainType.EVM)
             == InvoiceReceivingMode.VaultSlot

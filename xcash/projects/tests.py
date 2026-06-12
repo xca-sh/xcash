@@ -10,6 +10,7 @@ from chains.models import Chain
 from chains.tests_fixtures import make_evm_chain
 from common.admin import ModelAdmin
 from currencies.models import Crypto
+from invoices.models import DifferRecipientAddress
 from projects.admin import ProjectAdmin
 from projects.admin import ProjectForm
 from projects.models import Project
@@ -152,3 +153,35 @@ class ProjectTestnetGateTests(TestCase):
         # 测试项目只见测试网链
         self.assertIn(ChainCode.Sepolia, test_codes)
         self.assertNotIn(ChainCode.Ethereum, test_codes)
+
+
+class ProjectReadinessTests(TestCase):
+    def test_is_ready_reports_missing_receiving_address_when_no_differ_or_vault(self):
+        project = Project.objects.create(name="No Receiving Address")
+
+        ready, errors = project.is_ready
+
+        self.assertFalse(ready)
+        self.assertIn("收款地址未配置", [str(error) for error in errors])
+
+    def test_is_ready_does_not_report_missing_receiving_address_when_vault_exists(self):
+        project = Project.objects.create(
+            name="Vault Ready",
+            evm_vault="0x0000000000000000000000000000000000009901",
+        )
+
+        _, errors = project.is_ready
+
+        self.assertNotIn("收款地址未配置", [str(error) for error in errors])
+
+    def test_is_ready_does_not_report_missing_receiving_address_when_differ_exists(self):
+        project = Project.objects.create(name="Differ Ready")
+        DifferRecipientAddress.objects.create(
+            project=project,
+            chain_type="evm",
+            address="0x0000000000000000000000000000000000009901",
+        )
+
+        _, errors = project.is_ready
+
+        self.assertNotIn("收款地址未配置", [str(error) for error in errors])
