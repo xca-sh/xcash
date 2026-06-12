@@ -17,6 +17,7 @@ from saas_api.viewsets.differ_addresses import SaasDifferRecipientAddressViewSet
 from saas_api.viewsets.epay import EpayMerchantView
 from saas_api.viewsets.invoices import SaasInvoiceViewSet
 from saas_api.viewsets.stats import StatsViewSet
+from saas_api.viewsets.vault_slot_balances import SaasVaultSlotBalanceViewSet
 from saas_api.viewsets.webhooks import DeliveryAttemptViewSet
 from saas_api.viewsets.webhooks import WebhookEventViewSet
 
@@ -35,6 +36,11 @@ project_router.register(
     "delivery-attempts", DeliveryAttemptViewSet, basename="saas-delivery-attempt"
 )
 project_router.register("stats", StatsViewSet, basename="saas-stats")
+project_router.register(
+    "vault-slot-balances",
+    SaasVaultSlotBalanceViewSet,
+    basename="saas-vault-slot-balance",
+)
 
 app_name = "saas_api"
 urlpatterns = [
