@@ -461,11 +461,11 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
     @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_invoice_saas_permission_granted_screens(self, score):
-        """SaaS 模式 + 缓存命中 + enable_aml_screening=True → 正常筛查。"""
+        """SaaS 模式 + 缓存命中 + enable_risk_marking=True → 正常筛查。"""
         invoice = self.make_invoice(worth=Decimal("500"))
         cache.set(
             f"saas:permission:{invoice.project.appid}",
-            {"enable_aml_screening": True, "_fetched_at": time.time()},
+            {"enable_risk_marking": True, "_fetched_at": time.time()},
             None,
         )
         score.return_value = MistTrackAmlResult(
@@ -483,11 +483,11 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
     @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_invoice_saas_permission_denied_does_not_create_assessment(self, score):
-        """SaaS 模式 + 缓存命中 + enable_aml_screening=False → 直接 return，不写记录。"""
+        """SaaS 模式 + 缓存命中 + enable_risk_marking=False → 直接 return，不写记录。"""
         invoice = self.make_invoice(worth=Decimal("500"))
         cache.set(
             f"saas:permission:{invoice.project.appid}",
-            {"enable_aml_screening": False, "_fetched_at": time.time()},
+            {"enable_risk_marking": False, "_fetched_at": time.time()},
             None,
         )
 
@@ -532,7 +532,7 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         deposit = self.make_deposit(worth=Decimal("500"))
         cache.set(
             f"saas:permission:{deposit.customer.project.appid}",
-            {"enable_aml_screening": True, "_fetched_at": time.time()},
+            {"enable_risk_marking": True, "_fetched_at": time.time()},
             None,
         )
         score.return_value = MistTrackAmlResult(
@@ -553,7 +553,7 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         deposit = self.make_deposit(worth=Decimal("500"))
         cache.set(
             f"saas:permission:{deposit.customer.project.appid}",
-            {"enable_aml_screening": False, "_fetched_at": time.time()},
+            {"enable_risk_marking": False, "_fetched_at": time.time()},
             None,
         )
 

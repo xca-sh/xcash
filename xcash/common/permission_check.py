@@ -33,6 +33,7 @@ REFRESH_AFTER = 60
 
 _TIMEOUT = httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=5.0)
 
+
 def _cache_key(appid: str) -> str:
     return f"saas:permission:{appid}"
 
@@ -101,6 +102,14 @@ def check_saas_permission(
 
     if perm.get("frozen"):
         raise APIError(ErrorCode.ACCOUNT_FROZEN)
+
+
+def get_saas_risk_marking_enabled(*, appid: str) -> bool | None:
+    """读取 SaaS 当前 Tier 的风控开关；None 表示自托管或权限缓存不可用。"""
+    perm = _read_saas_perm(appid)
+    if perm is None:
+        return None
+    return bool(perm.get("enable_risk_marking", False))
 
 
 def get_saas_deposit_customer_limit(*, appid: str) -> int | None:

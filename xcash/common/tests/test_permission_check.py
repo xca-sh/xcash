@@ -13,6 +13,7 @@ from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from common.permission_check import _refresh_saas_permission
 from common.permission_check import check_saas_permission
+from common.permission_check import get_saas_risk_marking_enabled
 
 
 @override_settings(
@@ -110,7 +111,7 @@ class CheckSaasPermissionTest(TestCase):
         check_saas_permission(appid="XC-d", action="deposit")
 
     def test_invoice_action_ignores_legacy_permission_fields(self):
-        """Invoice 收款只校验账号状态，不读取旧权限字段和链币白名单字段。"""
+        """账号状态入口只看 frozen；历史链币白名单字段不再参与判定。"""
 
         cache.set(
             "saas:permission:XC-invoice",
@@ -125,8 +126,8 @@ class CheckSaasPermissionTest(TestCase):
 
         check_saas_permission(appid="XC-invoice", action="invoice")
 
-    def test_deposit_action_ignores_legacy_whitelist_fields(self):
-        """项目默认可使用所有链和币种，SaaS 链币白名单字段不再限制 deposit。"""
+    def test_deposit_action_keeps_account_status_separate_from_whitelist_fields(self):
+        """Deposit 默认开放所有链和币种，历史白名单字段不再参与判定。"""
 
         cache.set(
             "saas:permission:XC-deposit-all-methods",
@@ -140,6 +141,19 @@ class CheckSaasPermissionTest(TestCase):
         )
 
         check_saas_permission(appid="XC-deposit-all-methods", action="deposit")
+
+    def test_risk_marking_reads_current_saas_field(self):
+        cache.set(
+            "saas:permission:XC-risk",
+            {
+                "frozen": False,
+                "enable_risk_marking": True,
+                "_fetched_at": time.time(),
+            },
+            None,
+        )
+
+        self.assertIs(get_saas_risk_marking_enabled(appid="XC-risk"), True)
 
     @override_settings(IS_SAAS=False)
     @patch("common.permission_check._refresh_saas_permission.delay")

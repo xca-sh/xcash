@@ -21,7 +21,7 @@ from django.utils import timezone
 
 from chains.models import Chain
 from chains.models import ChainType
-from common.permission_check import _read_saas_perm
+from common.permission_check import get_saas_risk_marking_enabled
 from core.runtime_settings import get_aml_screening_cache_seconds
 from core.runtime_settings import get_aml_screening_enabled
 from core.runtime_settings import get_aml_screening_force_refresh_threshold_usd
@@ -103,11 +103,11 @@ class AmlScreeningService:
 
     @classmethod
     def _is_aml_screening_allowed(cls, target: Invoice | Deposit) -> bool:
-        """SaaS 模式下按 tier 的 enable_aml_screening 判定；自托管模式直接放行。
+        """SaaS 模式下按 tier 的 enable_risk_marking 判定；自托管模式直接放行。
 
-        语义：SaaS 权限缓存中的 enable_aml_screening 控制是否允许本项目产生外部 AML 查询成本。
+        语义：SaaS 权限缓存中的 enable_risk_marking 控制是否允许本项目产生外部 AML 查询成本。
         - 自托管（IS_SAAS=False）→ 放行，保持独立部署旧行为。
-        - SaaS 模式 + 缓存命中 → 按 enable_aml_screening 判定。
+        - SaaS 模式 + 缓存命中 → 按 enable_risk_marking 判定。
         - SaaS 模式 + 冷缓存 → fail-closed，避免在权限不明时产生 MistTrack 成本。
         """
         if not settings.IS_SAAS:
@@ -118,8 +118,8 @@ class AmlScreeningService:
         else:
             appid = target.customer.project.appid
 
-        perm = _read_saas_perm(appid)
-        if perm is None:
+        enabled = get_saas_risk_marking_enabled(appid=appid)
+        if enabled is None:
             logger.info(
                 "aml_screening.saas_perm_unavailable",
                 appid=appid,
@@ -128,7 +128,7 @@ class AmlScreeningService:
             )
             return False
 
-        return bool(perm.get("enable_aml_screening", False))
+        return enabled
 
     @classmethod
     def write_cache(
