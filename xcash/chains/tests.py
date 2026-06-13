@@ -28,6 +28,7 @@ from chains.models import TxTaskStatus
 from chains.models import TxTaskType
 from chains.models import VaultSlot
 from chains.models import VaultSlotBalance
+from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.models import Wallet
 from chains.tasks import process_transfer
@@ -1195,6 +1196,85 @@ class VaultSlotReceivedFlagTests(TestCase):
                 crypto=self.crypto,
             ).exists()
         )
+
+    def test_reconcile_creates_pending_collect_for_positive_balance_gap(self):
+        from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
+
+        VaultSlotBalance.objects.create(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+            value=Decimal("1234567"),
+            amount=Decimal("1.234567"),
+            worth=Decimal("0"),
+            synced_at=timezone.now(),
+        )
+
+        summary = reconcile_vault_slot_collect_balance_gaps()
+
+        self.assertEqual(summary["created_count"], 1)
+        self.assertEqual(summary["failed_blocked_count"], 0)
+        schedule = VaultSlotCollectSchedule.objects.get(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+            tx_task__isnull=True,
+        )
+        self.assertLessEqual(schedule.due_at, timezone.now())
+
+    def test_reconcile_does_not_auto_requeue_failed_collect_balance_gap(self):
+        from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
+
+        wallet = Wallet.objects.create()
+        sender = Address.objects.create(
+            wallet=wallet,
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.HotWallet,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
+            address_index=0,
+            address=Web3.to_checksum_address("0x" + "45" * 20),
+        )
+        failed_task = TxTask.objects.create(
+            sender=sender,
+            chain=self.chain,
+            tx_type=TxTaskType.VaultSlotCollect,
+            status=TxTaskStatus.FAILED,
+        )
+        failed_schedule = VaultSlotCollectSchedule.objects.create(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+            due_at=timezone.now() - timedelta(minutes=1),
+            tx_task=failed_task,
+        )
+        VaultSlotBalance.objects.create(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+            value=Decimal("1234567"),
+            amount=Decimal("1.234567"),
+            worth=Decimal("0"),
+            synced_at=timezone.now(),
+        )
+
+        summary = reconcile_vault_slot_collect_balance_gaps()
+
+        self.assertEqual(summary["created_count"], 0)
+        self.assertEqual(summary["failed_blocked_count"], 1)
+        self.assertFalse(
+            VaultSlotCollectSchedule.objects.filter(
+                chain=self.chain,
+                vault_slot=self.slot,
+                crypto=self.crypto,
+                tx_task__isnull=True,
+            ).exists()
+        )
+
+        pending_schedule = failed_schedule.requeue_failed_collect()
+
+        self.assertIsNotNone(pending_schedule)
+        self.assertIsNone(pending_schedule.tx_task_id)
+        self.assertLessEqual(pending_schedule.due_at, timezone.now())
 
 
 class TransferProcessQuickConfirmDispatchTests(TestCase):

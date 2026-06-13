@@ -10,6 +10,7 @@ from chains.models import ConfirmMode
 from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import VaultSlotCollectSchedule
+from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
 from common.decorators import singleton_task
 from common.time import ago
 
@@ -50,6 +51,25 @@ def execute_due_vault_slot_collect_schedules() -> None:
         logger.info(
             "VaultSlot 到期归集计划已创建链上任务",
             count=created_count,
+        )
+
+
+@shared_task(ignore_result=True)
+@singleton_task(timeout=55)
+def reconcile_vault_slot_collect_balance_gaps_task() -> None:
+    summary = reconcile_vault_slot_collect_balance_gaps()
+    if summary["created_count"]:
+        logger.info(
+            "VaultSlot 余额对账已补建遗漏归集计划",
+            created_count=summary["created_count"],
+        )
+    if summary["failed_blocked_count"]:
+        logger.warning(
+            "VaultSlot 余额对账发现失败归集阻塞",
+            failed_blocked_count=summary["failed_blocked_count"],
+            sample_balance_ids=[
+                balance.pk for balance in summary["recent_failed_blocked"][:3]
+            ],
         )
 
 

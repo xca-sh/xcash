@@ -1173,6 +1173,39 @@ class VaultSlotCollectSchedule(models.Model):
         self.save(update_fields=["due_at", "updated_at"])
 
     @classmethod
+    def ensure_pending_due_now(
+        cls,
+        *,
+        chain: Chain,
+        vault_slot: VaultSlot,
+        crypto,
+    ) -> VaultSlotCollectSchedule:
+        """确保存在一条立即可执行的 pending 归集计划。"""
+        schedule = cls.ensure_pending(
+            chain=chain,
+            vault_slot=vault_slot,
+            crypto=crypto,
+        )
+        now = timezone.now()
+        if schedule.due_at > now:
+            cls.objects.filter(pk=schedule.pk).update(due_at=now, updated_at=now)
+            schedule.due_at = now
+            schedule.updated_at = now
+        return schedule
+
+    def requeue_failed_collect(self) -> VaultSlotCollectSchedule | None:
+        """把失败终局的归集计划重新排成一条 pending 计划，供人工恢复使用。"""
+        if self.tx_task_id is None:
+            return None
+        if self.tx_task.status != TxTaskStatus.FAILED:
+            return None
+        return self.ensure_pending_due_now(
+            chain=self.chain,
+            vault_slot=self.vault_slot,
+            crypto=self.crypto,
+        )
+
+    @classmethod
     def execute_due(cls, *, limit: int = 32) -> int:
         from chains.vault_slot_balances import refresh_vault_slot_balance_safely
         from chains.vault_slots import can_create_collect_tx_task

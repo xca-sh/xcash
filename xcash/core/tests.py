@@ -9,6 +9,7 @@ from decimal import Decimal
 from os import environ
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -17,23 +18,34 @@ from django.core.cache import cache as _cache
 from django.core.management import call_command
 from django.test import SimpleTestCase
 from django.test import TestCase
+from tron.models import TronTxTask
 from web3 import Web3
 
+from chains.constants import ChainCode
 from chains.constants import ChainType
+from chains.models import Address
+from chains.models import AddressUsage
 from chains.models import Chain
+from chains.models import TxTask
+from chains.models import TxTaskStatus
+from chains.models import TxTaskType
 from chains.models import Wallet
+from chains.tests_fixtures import make_evm_chain
+from chains.tests_fixtures import make_tron_chain
 from core.dashboard_metrics import build_dashboard_metrics
 from core.default_data import ensure_base_currencies
 from core.default_data import ensure_local_chains
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from core.models import SystemSettings
 from core.models import SystemWallet
+from core.monitoring import OperationalRiskService
 from core.runtime_settings import get_webhook_delivery_breaker_threshold
 from core.runtime_settings import get_webhook_delivery_max_backoff_seconds
 from core.runtime_settings import get_webhook_delivery_max_retries
 from currencies.models import CryptoOnChain
 from evm.local_erc20 import LOCAL_EVM_ERC20_ABI
 from evm.local_erc20 import LOCAL_EVM_ERC20_BYTECODE
+from evm.models import EvmTxTask
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 from invoices.models import Invoice
 from invoices.models import InvoiceStatus
@@ -82,6 +94,96 @@ class SystemWalletTests(TestCase):
         self.assertEqual(same_system_wallet.wallet_id, system_wallet.wallet_id)
         self.assertEqual(SystemWallet.objects.count(), 1)
         self.assertEqual(Wallet.objects.count(), 1)
+
+
+class OperationalRiskResourceTests(TestCase):
+    def test_evm_low_native_balance_alerts_when_sender_cannot_cover_queue(self):
+        chain = make_evm_chain(code=ChainCode.Ethereum)
+        w3 = SimpleNamespace(
+            eth=SimpleNamespace(
+                gas_price=10,
+                get_balance=lambda _address: 1_000,
+            )
+        )
+        wallet = Wallet.objects.create()
+        sender = Address.objects.create(
+            wallet=wallet,
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.HotWallet,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
+            address_index=0,
+            address=Web3.to_checksum_address("0x" + "66" * 20),
+        )
+        base_task = TxTask.objects.create(
+            sender=sender,
+            chain=chain,
+            tx_type=TxTaskType.VaultSlotCollect,
+            status=TxTaskStatus.QUEUED,
+        )
+        EvmTxTask.objects.create(
+            base_task=base_task,
+            sender=sender,
+            chain=chain,
+            nonce=0,
+            to=Web3.to_checksum_address("0x" + "67" * 20),
+            value=0,
+            gas=100,
+            gas_price=10,
+        )
+
+        with patch.object(Chain, "_build_w3", return_value=w3):
+            alerts = OperationalRiskService.evm_low_native_balance_alerts()
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["current_balance"], 1_000)
+        self.assertEqual(alerts[0]["required_balance"], 2_000)
+        self.assertEqual(alerts[0]["sender"], sender)
+
+    def test_tron_low_resource_alerts_when_energy_is_below_pending_queue(self):
+        chain = make_tron_chain()
+        wallet = Wallet.objects.create()
+        sender = Address.objects.create(
+            wallet=wallet,
+            chain_type=ChainType.TRON,
+            usage=AddressUsage.HotWallet,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
+            address_index=0,
+            address="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        )
+        base_task = TxTask.objects.create(
+            sender=sender,
+            chain=chain,
+            tx_type=TxTaskType.VaultSlotCollect,
+            status=TxTaskStatus.QUEUED,
+        )
+        TronTxTask.objects.create(
+            base_task=base_task,
+            sender=sender,
+            chain=chain,
+            to="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+            function_selector="collect(address)",
+            parameter="0" * 64,
+            fee_limit=150_000_000,
+        )
+
+        with (
+            patch("tron.client.TronHttpClient") as client_class,
+            patch("tron.resources.estimate_contract_call_energy", return_value=100),
+        ):
+            client_class.return_value.get_account_resource.return_value = {
+                "EnergyLimit": 100,
+                "EnergyUsed": 95,
+                "freeNetLimit": 0,
+                "freeNetUsed": 0,
+                "NetLimit": 0,
+                "NetUsed": 0,
+            }
+            alerts = OperationalRiskService.tron_low_resource_alerts()
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["available_energy"], 5)
+        self.assertEqual(alerts[0]["required_energy"], 120)
+        self.assertEqual(alerts[0]["sender"], sender)
 
 
 class DashboardMetricsTests(TestCase):

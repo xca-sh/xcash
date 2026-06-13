@@ -82,6 +82,10 @@ chains_tasks = {
         "task": "chains.tasks.execute_due_vault_slot_collect_schedules",
         "schedule": VAULT_SLOT_COLLECT_SCHEDULE_SECONDS,
     },
+    "reconcile_vault_slot_collect_balance_gaps": {
+        "task": "chains.tasks.reconcile_vault_slot_collect_balance_gaps_task",
+        "schedule": OPERATIONAL_RISKS_SCHEDULE_SECONDS,
+    },
 }
 
 # ---------------------------

@@ -16,7 +16,11 @@ class HomeView(RedirectView):
 
 def _build_environment_badge(risk_summary: dict) -> list[str]:
     """为后台顶部角标生成轻量状态摘要，避免复用完整首页聚合。"""
-    pending_count = risk_summary["stalled_webhook_event_count"]
+    pending_count = (
+        risk_summary["stalled_webhook_event_count"]
+        + risk_summary["evm_low_native_balance_count"]
+        + risk_summary["tron_low_resource_count"]
+    )
     if pending_count > 0:
         return [_("存在高风险告警"), "danger"]
 

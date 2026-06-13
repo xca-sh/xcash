@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib import admin
+from django.contrib import messages
 from django.utils.translation import gettext_lazy as _
 from unfold.decorators import display
 
@@ -341,6 +342,7 @@ class InvoiceVaultSlotAdmin(VaultSlotAdminBase):
 
 @admin.register(VaultSlotCollectSchedule)
 class VaultSlotCollectScheduleAdmin(ReadOnlyModelAdmin):
+    actions = ("requeue_failed_collect_schedules",)
     ordering = ("due_at",)
     list_display = ("vault_slot", "chain", "crypto", "due_at", "tx_task", "created_at")
     list_filter = ("chain", "crypto")
@@ -355,3 +357,24 @@ class VaultSlotCollectScheduleAdmin(ReadOnlyModelAdmin):
         "created_at",
         "updated_at",
     )
+
+    @admin.action(description="重新排队失败的归集计划", permissions=["view"])
+    def requeue_failed_collect_schedules(self, request, queryset):
+        requeued_count = 0
+        skipped_count = 0
+        for schedule in queryset.select_related("chain", "crypto", "vault_slot", "tx_task"):
+            pending_schedule = schedule.requeue_failed_collect()
+            if pending_schedule is None:
+                skipped_count += 1
+                continue
+            requeued_count += 1
+
+        level = messages.WARNING if skipped_count else messages.SUCCESS
+        self.message_user(
+            request,
+            _(
+                "已重新排队 %(requeued)d 个失败归集计划，跳过 %(skipped)d 个非失败计划。"
+            )
+            % {"requeued": requeued_count, "skipped": skipped_count},
+            level=level,
+        )

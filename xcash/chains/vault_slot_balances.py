@@ -4,16 +4,22 @@ from decimal import Decimal
 
 import structlog
 from django.db import transaction
+from django.db.models import Exists
+from django.db.models import OuterRef
+from django.db.models import Q
 from django.utils import timezone
 
 from chains.adapters import AdapterFactory
 from chains.models import Transfer
 from chains.models import TxTask
+from chains.models import TxTaskStatus
 from chains.models import VaultSlot
 from chains.models import VaultSlotBalance
 from chains.models import VaultSlotCollectSchedule
 
 logger = structlog.get_logger()
+
+ACTIVE_COLLECT_TASK_STATUSES = (TxTaskStatus.QUEUED, TxTaskStatus.SUBMITTED)
 
 
 def refresh_vault_slot_balance(
@@ -159,3 +165,67 @@ def refresh_vault_slot_balance_for_collect_task(tx_task: TxTask) -> VaultSlotBal
         block_number=tx_task.chain.latest_block_number,
         reason="collect_task_confirm",
     )
+
+
+def vault_slot_collect_balance_gaps():
+    """返回仍有余额但没有 pending / 在途归集计划的快照。"""
+    matching_schedules = VaultSlotCollectSchedule.objects.filter(
+        chain_id=OuterRef("chain_id"),
+        vault_slot_id=OuterRef("vault_slot_id"),
+        crypto_id=OuterRef("crypto_id"),
+    )
+    active_schedules = matching_schedules.filter(
+        Q(tx_task__isnull=True) | Q(tx_task__status__in=ACTIVE_COLLECT_TASK_STATUSES)
+    )
+    failed_schedules = matching_schedules.filter(tx_task__status=TxTaskStatus.FAILED)
+    return (
+        VaultSlotBalance.objects.select_related("chain", "crypto", "vault_slot")
+        .annotate(
+            has_active_collect_schedule=Exists(active_schedules),
+            has_failed_collect_schedule=Exists(failed_schedules),
+        )
+        .filter(value__gt=0, has_active_collect_schedule=False)
+        .order_by("updated_at", "pk")
+    )
+
+
+def reconcile_vault_slot_collect_balance_gaps(*, limit: int = 32) -> dict:
+    """对账余额快照，补齐遗漏的归集计划并暴露失败归集的人工恢复入口。
+
+    已存在 FAILED 归集任务时不自动重试，避免黑名单 / 永久 revert 场景被周期任务
+    反复烧 gas；这类余额只输出告警，由后台 action 人工确认后重新排队。
+    """
+    created_count = 0
+    failed_blocked = []
+    for balance in vault_slot_collect_balance_gaps()[:limit]:
+        if balance.has_failed_collect_schedule:
+            failed_blocked.append(balance)
+            logger.warning(
+                "VaultSlot 余额仍未归集且最近存在失败归集任务，等待人工重试",
+                chain=balance.chain.code,
+                vault_slot_id=balance.vault_slot_id,
+                crypto=getattr(balance.crypto, "symbol", None),
+                balance_value=str(balance.value),
+            )
+            continue
+
+        schedule = VaultSlotCollectSchedule.ensure_pending_due_now(
+            chain=balance.chain,
+            vault_slot=balance.vault_slot,
+            crypto=balance.crypto,
+        )
+        created_count += 1
+        logger.info(
+            "VaultSlot 余额对账已补建归集计划",
+            schedule_id=schedule.pk,
+            chain=balance.chain.code,
+            vault_slot_id=balance.vault_slot_id,
+            crypto=getattr(balance.crypto, "symbol", None),
+            balance_value=str(balance.value),
+        )
+
+    return {
+        "created_count": created_count,
+        "failed_blocked_count": len(failed_blocked),
+        "recent_failed_blocked": failed_blocked,
+    }

@@ -251,6 +251,14 @@ def process_tron_receipt_task(task: TxTask) -> bool:
             task.status = TxTaskStatus.FAILED
             if task.tx_type == TxTaskType.VaultSlotDeploy:
                 mark_deployed_if_on_chain_for_task(task)
+            logger.warning(
+                "Tron 主动交易失败终局",
+                tx_task_id=task.pk,
+                tx_type=task.tx_type,
+                chain=task.chain.code,
+                sender=task.sender.address,
+                tx_hash=matched_tx_hash,
+            )
         return bool(updated)
 
     return False
@@ -266,7 +274,7 @@ def confirm_tron_receipt_tx_tasks() -> None:
     adapter.tx_result 查回执推进终局,并在成功终局时按类型回调 SaaS 计费。
     """
     tasks = (
-        TxTask.objects.select_related("chain")
+        TxTask.objects.select_related("chain", "sender")
         .prefetch_related("tx_hashes")
         .filter(
             chain__type=ChainType.TRON,

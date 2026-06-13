@@ -188,4 +188,13 @@ class EvmTaskPoller:
 
         if base_task.tx_type == TxTaskType.VaultSlotDeploy:
             mark_deployed_if_on_chain_for_task(base_task)
+        logger.warning(
+            "EVM 主动交易失败终局",
+            evm_task_id=locked_task.pk,
+            tx_task_id=base_task.pk,
+            tx_type=base_task.tx_type,
+            chain=locked_task.chain.code,
+            sender=locked_task.sender.address,
+            nonce=locked_task.nonce,
+        )
         return True
