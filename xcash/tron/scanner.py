@@ -176,10 +176,10 @@ class TronScanner:
         *,
         chain: Chain,
     ) -> dict[str, CryptoOnChain]:
-        """加载本链已激活的 TRC20 合约集合，按合约地址索引（对齐 EVM 扫描器）。
+        """加载本链已激活的 TRC20 合约集合，按合约地址索引。
 
-        只会配置一个 USDT 也照常走全量查询，避免把 symbol/地址写死，后续接入
-        其它 TRC20 无需改扫描器。
+        原生 TRX 由 _load_native_on_chain 单独加载；合约资产即使只配置一个 USDT
+        也照常走全量查询，避免把 symbol/地址写死，后续接入其它 TRC20 无需改扫描器。
         """
         token_rows = (
             CryptoOnChain.objects.select_related("crypto")

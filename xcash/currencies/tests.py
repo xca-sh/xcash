@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
+from django.test import override_settings
 from web3 import Web3
 
 from chains.capabilities import ChainProductCapabilityService
@@ -102,6 +103,50 @@ class CustomTokenPricingTests(TestCase):
         )
         self.assertFalse(
             ChainProductCapabilityService.supports_existing_invoice_method(
+                chain=tron, crypto=other_trc20
+            )
+        )
+
+    @override_settings(
+        TRON_VAULT_SLOT_NILE_VERIFIED=True,
+        TRON_VAULT_SLOT_FACTORY_ADDRESS="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        TRON_VAULT_SLOT_TEMPLATE_ADDRESS="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+        TRON_VAULT_SLOT_FEE_LIMIT=150_000_000,
+        TRON_VAULT_SLOT_DEPLOY_FEE_LIMIT=300_000_000,
+    )
+    def test_tron_deposit_address_allows_usdt_and_native_trx_only(self):
+        # Tron VaultSlot 充币地址放行 USDT 与原生 TRX；其余 TRC20 暂不开放。
+        tron = Chain.objects.create(
+            code=ChainCode.Tron, rpc="", tron_api_key="", active=False
+        )
+        other_trc20 = Crypto.objects.create(
+            name="DepositOtherTrc20", symbol="DOT", coingecko_id="deposit-other-trc20"
+        )
+        CryptoOnChain.objects.create(
+            crypto=self.usdt,
+            chain=tron,
+            address="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+            decimals=6,
+        )
+        CryptoOnChain.objects.create(
+            crypto=other_trc20,
+            chain=tron,
+            address="TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj",
+            decimals=6,
+        )
+
+        self.assertTrue(
+            ChainProductCapabilityService.supports_deposit_address(
+                chain=tron, crypto=tron.native_coin
+            )
+        )
+        self.assertTrue(
+            ChainProductCapabilityService.supports_deposit_address(
+                chain=tron, crypto=self.usdt
+            )
+        )
+        self.assertFalse(
+            ChainProductCapabilityService.supports_deposit_address(
                 chain=tron, crypto=other_trc20
             )
         )

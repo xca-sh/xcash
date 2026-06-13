@@ -34,7 +34,10 @@ class ChainProductCapabilityService:
         if chain.type in cls.DEPOSIT_CHAIN_TYPES:
             return True
         if chain.type == ChainType.TRON:
-            return crypto.symbol == "USDT" and tron_vault_slot_runtime_ready()
+            # Tron VaultSlot 已覆盖 TRC20 与原生 TRX：TRC20 走 Transfer 事件扫描，
+            # 原生 TRX 走 TransferContract 扫描并在部署后 collect(address(0)) 归集。
+            supported_asset = crypto.symbol == "USDT" or crypto.is_native
+            return supported_asset and tron_vault_slot_runtime_ready()
         return False
 
     @classmethod

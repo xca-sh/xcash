@@ -225,9 +225,9 @@ class Chain(models.Model):
     def _sync_tron_scan_cursor(self) -> None:
         """活跃 Tron 链在配置层即持有按链唯一的扫描游标，避免依赖首次 beat 扫描显式创建。
 
-        游标只锚定区块进度、与具体 TRC20 合约解耦：扫描器每轮按本链全量
-        CryptoOnChain 逐块拉取，新增/下架代币不影响游标，故这里无需
-        再依赖 USDT 是否已配置。
+        游标只锚定区块进度、与具体资产解耦：扫描器每轮按本链全量
+        CryptoOnChain 逐块拉取，新增/下架 TRC20 或原生 TRX 不影响游标，
+        故这里无需再依赖 USDT 是否已配置。
         """
         if self.type != ChainType.TRON or not self.active:
             return

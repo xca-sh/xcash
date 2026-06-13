@@ -1,7 +1,7 @@
 # xcash Tron VaultSlot Contracts
 
-这是 Tron / TVM 版本的 VaultSlot 合约资产。正式业务代码只支持 TRC20
-收款和归集；TRX 只作为部署、触发合约和 Energy/Bandwidth 的系统资源币。
+这是 Tron / TVM 版本的 VaultSlot 合约资产。正式业务代码支持 TRC20 与原生
+TRX 收款和归集；TRX 同时也是部署、触发合约和 Energy/Bandwidth 的系统资源币。
 
 ## 合约
 
@@ -11,8 +11,10 @@
 
 - `XcashVaultSlotTemplate`
   - 每个 clone 的 immutable args 中写入目标 `vault`。
-  - `collect(token)` 把 TRC20 全额归集到 `vault`。
-  - `receive()` 只用于转发误入 slot 的 TRX，不作为用户侧 TRX 支付入口。
+  - `collect(token)` 把 TRC20 全额归集到 `vault`；`collect(address(0))`
+    把 slot 内原生 TRX 全额归集到 `vault`。
+  - Tron 原生 TRX 转账走 TransferContract，不会进入 TVM `receive()`；
+    入账由扫描器逐块解析 TransferContract，归集靠显式调用 `collect(address(0))`。
 - `XcashVaultSlotFactory`
   - `deployVaultSlot(vault, salt)` 使用 OpenZeppelin Clones immutable args 和
     TVM CREATE2 部署 slot。部署与归集是两段式：先由部署交易落地 slot，

@@ -42,11 +42,11 @@ TRON_SIMULATION_REVERT_FAIL_MIN_WINDOW = timedelta(hours=4)
 
 
 class TronWatchCursor(models.Model):
-    """记录某条 Tron 链上 TRC20 扫描器的推进位置与最近错误。
+    """记录某条 Tron 链上资产扫描器的推进位置与最近错误。
 
     设计原则（与 EvmScanCursor 对齐）：
-    - 每条 Tron 链只维护一个扫描游标；本链所有 TRC20（CryptoOnChain）
-      在同一条区块进度上逐块扫描，故不再按合约地址拆分游标。
+    - 每条 Tron 链只维护一个扫描游标；本链所有 TRC20 与原生 TRX（CryptoOnChain）
+      在同一条区块进度上逐块扫描，故不再按合约地址或资产拆分游标。
     - last_scanned_block 记录已扫描推进到的最高块高。
     """
 

@@ -269,7 +269,7 @@ def process_tron_receipt_task(task: TxTask) -> bool:
 def confirm_tron_receipt_tx_tasks() -> None:
     """按回执收口 Tron 主动发起的链上任务(部署 / 归集)。
 
-    部署不产生 TRC20 入账,归集是 slot→vault(收款方为系统外 vault),二者都不会被
+    部署不产生用户资产入账,归集是 slot→vault(收款方为系统外 vault),二者都不会被
     扫描器当作「打入系统观察地址」的入账观测,无法靠扫描器确认;统一在此用
     adapter.tx_result 查回执推进终局,并在成功终局时按类型回调 SaaS 计费。
     """
@@ -294,18 +294,18 @@ def scan_tron_chain(chain_pk: int) -> None:
     if not chain.active:
         return
     if chain.type == ChainType.TRON and not chain.tron_api_key:
-        logger.warning("Tron TRC20 扫描跳过，缺少 API Key", chain=chain.code)
+        logger.warning("Tron 资产扫描跳过，缺少 API Key", chain=chain.code)
         return
 
     try:
         try:
             summary = TronScanner.scan_chain(chain=chain)
         except TronClientError:
-            logger.warning("Tron TRC20 扫描 RPC 失败", chain=chain.code)
+            logger.warning("Tron 资产扫描 RPC 失败", chain=chain.code)
             return
 
         logger.info(
-            "Tron TRC20 扫描完成",
+            "Tron 资产扫描完成",
             chain=chain.code,
             filter_addresses=summary.filter_addresses,
             blocks_scanned=summary.blocks_scanned,

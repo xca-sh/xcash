@@ -16,8 +16,9 @@ def main() -> None:
     """按生产「部署→归集」两段式路径做 Nile 验收。
 
     第一笔 deployVaultSlot 把 slot 部署到预测地址,第二笔对 slot 直调
-    collect(token) 清扫 TRC20。生产里这两步由独立 TxTask 承载;此脚本按相同
-    顺序各发一笔交易,验证预测地址、部署与重复归集路径在实链上的行为。
+    collect(token) 清扫 TRC20。原生 TRX 的 collect(address(0)) 由 A/B 激活
+    脚本覆盖。生产里这两步由独立 TxTask 承载;此脚本按相同顺序各发一笔交易,
+    验证预测地址、部署与重复归集路径在实链上的行为。
     """
     setup_django()
     from tron.adapter import TronAdapter

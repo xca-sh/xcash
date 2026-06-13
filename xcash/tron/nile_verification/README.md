@@ -67,6 +67,7 @@ cd ../../..
 `nile_deploy_compare.py` 和 `clone_collect_verify.py` 需要额外提供
 `TRON_VAULT_SLOT_SALT_HEX`。`clone_collect_verify.py` 按生产「部署→归集」两段式路径
 验收：slot 未部署时先发 `deployVaultSlot(vault,salt)`，确认后对 slot 直调
-`collect(token)` 清扫 TRC20；slot 已部署则跳过部署直接归集——同一 salt 重复执行
+`collect(token)` 清扫 TRC20；原生 TRX 的 `collect(address(0))` 由 A/B 激活脚本覆盖。
+slot 已部署则跳过部署直接归集——同一 salt 重复执行
 即验收「已部署槽位重复归集」。若同时提供 `TRON_VAULT_SLOT_ADDRESS`，脚本会校验它
 与预测地址一致。A/B 脚本会自行生成盐并打印预测地址。

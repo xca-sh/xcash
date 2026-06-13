@@ -25,7 +25,8 @@ def should_predeploy_on_address_exposure(
     """判断返回 VaultSlot 地址前是否必须部署合约。
 
     EVM 原生币入账必须依赖 receive() emit XcashNativeReceived 才能被系统识别；
-    ERC20/TRC20 Transfer 可以先打到 CREATE2 预测地址，scanner 观察到入账后再部署。
+    ERC20/TRC20 和 Tron 原生 TRX 可以先打到 CREATE2 预测地址，scanner 观察到
+    入账后再部署。
     """
     if chain.type != ChainType.EVM:
         return False

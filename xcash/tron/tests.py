@@ -1132,7 +1132,7 @@ class TronTxTaskSimulationRevertTests(TestCase):
 
 class TronWatchCursorTests(TestCase):
     def test_enabling_tron_chain_creates_scan_cursor(self):
-        # 游标按链唯一、与具体 TRC20 无关：激活 Tron 链即建出游标，
+        # 游标按链唯一、与具体资产无关：激活 Tron 链即建出游标，
         # 不依赖 USDT 是否已配置。
         chain = Chain.objects.create(
             code=ChainCode.Tron,
@@ -2169,7 +2169,7 @@ class TronTaskTests(TestCase):
         scan_tron_chain.run(tron_chain.pk)
 
         logger_info_mock.assert_called_once_with(
-            "Tron TRC20 扫描完成",
+            "Tron 资产扫描完成",
             chain=tron_chain.code,
             filter_addresses=3,
             blocks_scanned=7,
