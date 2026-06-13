@@ -23,9 +23,6 @@ contract XcashVaultSlotFactory {
         vaultSlotTemplate = vaultSlotTemplate_;
     }
 
-    /// @dev 本合约刻意不含任何链上地址预测：EVM(0xff) 与 TVM(0x41) 的 CREATE2
-    ///      preimage 前缀不同，链上预测无法共源。slot 地址一律由链下按链各自预测，
-    ///      链上唯一权威是 create2 指令本身；目标地址已有合约时 create2 失败并 revert。
     function deployVaultSlot(address payable vault, bytes32 salt)
         external
         returns (address vaultSlot)
