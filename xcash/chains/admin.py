@@ -358,7 +358,14 @@ class VaultSlotCollectScheduleAdmin(ReadOnlyModelAdmin):
         "updated_at",
     )
 
-    @admin.action(description="重新排队失败的归集计划", permissions=["view"])
+    def has_requeue_permission(self, request):
+        # 重新排队失败归集会新建 pending 计划并触发链上归集交易、消耗热钱包 gas，
+        # 属资金治理操作。ReadOnlyModelAdmin 已禁掉 change/add/delete，view 是所有
+        # 查看者的基线权限；若用 view 放行等于把动钱动作开放给只读审计员，故收口到
+        # 超管，与 SystemSettings / SystemWallet 等系统级治理入口口径一致。
+        return bool(request.user.is_active and request.user.is_superuser)
+
+    @admin.action(description="重新排队失败的归集计划", permissions=["requeue"])
     def requeue_failed_collect_schedules(self, request, queryset):
         requeued_count = 0
         skipped_count = 0

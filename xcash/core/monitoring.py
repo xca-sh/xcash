@@ -5,6 +5,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING
 
 import structlog
+from django.core.cache import cache
 from django.db.models import Q
 from django.utils import timezone
 
@@ -16,6 +17,17 @@ from core.runtime_settings import get_webhook_event_timeout
 from webhooks.models import WebhookEvent
 
 logger = structlog.get_logger()
+
+# EVM/Tron 资源水位需要多链实时 RPC，badge 等高频展示入口不能在每次页面渲染时
+# 触发。统一由异步巡检 scan_operational_risks 把计数写入缓存，展示层只读缓存。
+# TTL 取调度周期（默认 120s）的数倍：连续多轮巡检缺失即回落到 0（fail-open），
+# 避免 worker 长期停摆后 badge 永久卡在过期的风险态。
+RESOURCE_RISK_COUNT_CACHE_KEY = "operational_risk:resource_risk_counts"
+RESOURCE_RISK_COUNT_CACHE_TTL = 600
+EMPTY_RESOURCE_RISK_COUNTS = {
+    "evm_low_native_balance_count": 0,
+    "tron_low_resource_count": 0,
+}
 
 
 class OperationalRiskService:
@@ -248,4 +260,40 @@ class OperationalRiskService:
             "recent_evm_low_native_balance_alerts": evm_low_native_balance_alerts,
             "tron_low_resource_count": len(tron_low_resource_alerts),
             "recent_tron_low_resource_alerts": tron_low_resource_alerts,
+        }
+
+    @classmethod
+    def cache_resource_risk_counts(
+        cls,
+        *,
+        evm_low_native_balance_count: int,
+        tron_low_resource_count: int,
+    ) -> None:
+        """把异步巡检算出的资源水位计数写入缓存，供 badge 等展示入口低成本读取。
+
+        由 scan_operational_risks 每轮无条件调用（含清零），保证展示层读到的是
+        最近一次巡检结果，而非渲染时实时打多链 RPC。
+        """
+        cache.set(
+            RESOURCE_RISK_COUNT_CACHE_KEY,
+            {
+                "evm_low_native_balance_count": int(evm_low_native_balance_count),
+                "tron_low_resource_count": int(tron_low_resource_count),
+            },
+            RESOURCE_RISK_COUNT_CACHE_TTL,
+        )
+
+    @classmethod
+    def cached_resource_risk_counts(cls) -> dict:
+        """读取最近一次巡检缓存的资源水位计数；缓存缺失或损坏时回落到 0。"""
+        cached = cache.get(RESOURCE_RISK_COUNT_CACHE_KEY)
+        if not isinstance(cached, dict):
+            return dict(EMPTY_RESOURCE_RISK_COUNTS)
+        return {
+            "evm_low_native_balance_count": int(
+                cached.get("evm_low_native_balance_count") or 0
+            ),
+            "tron_low_resource_count": int(
+                cached.get("tron_low_resource_count") or 0
+            ),
         }

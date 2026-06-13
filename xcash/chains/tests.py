@@ -1345,6 +1345,43 @@ class VaultSlotReceivedFlagTests(TestCase):
         self.assertIsNone(pending_schedule.tx_task_id)
         self.assertLessEqual(pending_schedule.due_at, timezone.now())
 
+    def test_requeue_action_only_available_to_superuser(self):
+        # 重新排队失败归集会触发链上归集交易、消耗热钱包 gas，属资金治理操作。
+        # ReadOnlyModelAdmin 下 view 是所有查看者的基线权限，必须把该 action 收口到
+        # 超管，避免只读审计员借 view 权限触发动钱动作。
+        from django.contrib import admin as django_admin
+        from django.test import RequestFactory
+
+        from chains.admin import VaultSlotCollectScheduleAdmin
+        from users.models import User
+
+        admin_instance = VaultSlotCollectScheduleAdmin(
+            VaultSlotCollectSchedule, django_admin.site
+        )
+        request_factory = RequestFactory()
+
+        viewer = User.objects.create_user(
+            username="collect-viewer", password="secret", is_staff=True
+        )
+        viewer_request = request_factory.get("/")
+        viewer_request.user = viewer
+        self.assertFalse(admin_instance.has_requeue_permission(viewer_request))
+        self.assertNotIn(
+            "requeue_failed_collect_schedules",
+            admin_instance.get_actions(viewer_request),
+        )
+
+        superuser = User.objects.create_superuser(
+            username="collect-admin", password="secret"
+        )
+        superuser_request = request_factory.get("/")
+        superuser_request.user = superuser
+        self.assertTrue(admin_instance.has_requeue_permission(superuser_request))
+        self.assertIn(
+            "requeue_failed_collect_schedules",
+            admin_instance.get_actions(superuser_request),
+        )
+
 
 class TransferProcessQuickConfirmDispatchTests(TestCase):
     def setUp(self):

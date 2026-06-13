@@ -14,12 +14,12 @@ class HomeView(RedirectView):
     pattern_name = "admin:index"
 
 
-def _build_environment_badge(risk_summary: dict) -> list[str]:
+def _build_environment_badge(risk_summary: dict, resource_risk_counts: dict) -> list[str]:
     """为后台顶部角标生成轻量状态摘要，避免复用完整首页聚合。"""
     pending_count = (
         risk_summary["stalled_webhook_event_count"]
-        + risk_summary["evm_low_native_balance_count"]
-        + risk_summary["tron_low_resource_count"]
+        + resource_risk_counts["evm_low_native_balance_count"]
+        + resource_risk_counts["tron_low_resource_count"]
     )
     if pending_count > 0:
         return [_("存在高风险告警"), "danger"]
@@ -28,10 +28,12 @@ def _build_environment_badge(risk_summary: dict) -> list[str]:
 
 
 def environment_callback(request):
-    # 顶部 environment badge 只需要判断是否有高风险积压，
-    # 这里仅读取巡检计数，避免触发完整首页统计查询。
+    # 顶部 environment badge 只需要判断是否有高风险积压。webhook 堆积量是轻量 DB
+    # count，实时取即可；EVM/Tron 资源水位需多链实时 RPC，改读异步巡检写入的缓存，
+    # 避免每次页面渲染触发链上请求。
     risk_summary = OperationalRiskService.build_summary(limit=0)
-    return _build_environment_badge(risk_summary)
+    resource_risk_counts = OperationalRiskService.cached_resource_risk_counts()
+    return _build_environment_badge(risk_summary, resource_risk_counts)
 
 
 def _fmt_usd(amount) -> str:

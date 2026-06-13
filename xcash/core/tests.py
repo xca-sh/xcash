@@ -186,6 +186,61 @@ class OperationalRiskResourceTests(TestCase):
         self.assertEqual(alerts[0]["sender"], sender)
 
 
+class EnvironmentBadgeResourceRiskTests(TestCase):
+    """badge 的资源风险来自异步巡检写入的缓存，而非渲染时实时 RPC。
+
+    回归守卫：修复前 badge 调 build_summary(limit=0)，evm/tron 计数恒为 0，
+    资源告警是死代码——badge 永远不会因资源风险变红。
+    """
+
+    def setUp(self):
+        _cache.clear()
+
+    def tearDown(self):
+        _cache.clear()
+
+    def test_cached_resource_risk_counts_round_trip(self):
+        self.assertEqual(
+            OperationalRiskService.cached_resource_risk_counts(),
+            {"evm_low_native_balance_count": 0, "tron_low_resource_count": 0},
+        )
+        OperationalRiskService.cache_resource_risk_counts(
+            evm_low_native_balance_count=2,
+            tron_low_resource_count=3,
+        )
+        self.assertEqual(
+            OperationalRiskService.cached_resource_risk_counts(),
+            {"evm_low_native_balance_count": 2, "tron_low_resource_count": 3},
+        )
+
+    def test_badge_flags_danger_from_cached_resource_risk(self):
+        from django.test import RequestFactory
+
+        from core.dashboard import environment_callback
+
+        # 无 webhook 堆积，但缓存里有 EVM 资源风险 -> badge 必须告警。
+        OperationalRiskService.cache_resource_risk_counts(
+            evm_low_native_balance_count=1,
+            tron_low_resource_count=0,
+        )
+        request = RequestFactory().get("/")
+
+        badge = environment_callback(request)
+
+        self.assertEqual(badge[1], "danger")
+
+    def test_badge_normal_without_any_risk(self):
+        from django.test import RequestFactory
+
+        from core.dashboard import environment_callback
+
+        request = RequestFactory().get("/")
+
+        badge = environment_callback(request)
+
+        self.assertEqual(badge[1], "success")
+
+
 class DashboardMetricsTests(TestCase):
     def make_invoice(
         self,
