@@ -107,7 +107,10 @@ class Chain(models.Model):
             self.is_testnet = spec.is_testnet
             update_fields = kwargs.get("update_fields")
             if update_fields is not None:
-                kwargs["update_fields"] = set(update_fields) | {"type", "is_testnet"}
+                kwargs["update_fields"] = set(update_fields) | {  # noqa
+                    "type",
+                    "is_testnet",
+                }  # noqa
         self.full_clean()
         with db_transaction.atomic():
             result = super().save(*args, **kwargs)
@@ -150,7 +153,9 @@ class Chain(models.Model):
         """
         if self.type == ChainType.EVM:
             from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS  # noqa: PLC0415
-            from evm.constants import XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS  # noqa: PLC0415
+            from evm.constants import (
+                XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS,  # noqa: PLC0415
+            )
 
             return VaultSlotContractAddresses(
                 factory=XCASH_VAULT_SLOT_FACTORY_ADDRESS,
