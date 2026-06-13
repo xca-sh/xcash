@@ -2,12 +2,12 @@
 pragma solidity 0.8.35;
 
 import {Script, console} from "forge-std/Script.sol";
-import {XcashVaultSlotTemplate} from "../src/XcashVaultSlotTemplate.sol";
+import {XcashVaultSlot} from "../src/XcashVaultSlot.sol";
 import {XcashVaultSlotFactory} from "../src/XcashVaultSlotFactory.sol";
 
 /// @title DeployXcashVaultSlot
 /// @notice 通过 Foundry 默认的 Arachnid CREATE2 Deployer (0x4e59...4956C)
-///         以确定性方式部署 XcashVaultSlotTemplate 与 XcashVaultSlotFactory。
+///         以确定性方式部署 XcashVaultSlot 与 XcashVaultSlotFactory。
 ///         任何链跑这个脚本得到的地址都必须等于下面的 EXPECTED_* 常量，
 ///         否则脚本 revert，避免地址漂移破坏「跨链同地址」假设。
 contract DeployXcashVaultSlot is Script {
@@ -19,15 +19,16 @@ contract DeployXcashVaultSlot is Script {
     ///      地址依赖 foundry.toml 中 solc_version / optimizer_runs / via_ir /
     ///      evm_version / bytecode_hash / cbor_metadata 等编译参数，
     ///      以及合约源码本身——任何一项变动都会让 init_code 变、地址漂移。
-    address internal constant EXPECTED_TEMPLATE = 0x2ebe769C350b54e7d0411CA4f0576b490480cAe6;
-    address internal constant EXPECTED_FACTORY = 0x338afDDf1dd08E173C872f9b181237c4d20f4e82;
+    address internal constant EXPECTED_IMPLEMENTATION = 0x2ebe769C350b54e7d0411CA4f0576b490480cAe6;
+    address internal constant EXPECTED_FACTORY = 0xf986Cc31d5A520990dA8B6Df1c2Aca64d91d0a54;
 
     function run() external {
-        bytes32 templateInitHash = keccak256(type(XcashVaultSlotTemplate).creationCode);
-        address predictedTemplate = vm.computeCreate2Address(DEPLOY_SALT, templateInitHash);
+        bytes32 implementationInitHash = keccak256(type(XcashVaultSlot).creationCode);
+        address predictedImplementation =
+            vm.computeCreate2Address(DEPLOY_SALT, implementationInitHash);
 
         bytes memory factoryInit = abi.encodePacked(
-            type(XcashVaultSlotFactory).creationCode, abi.encode(predictedTemplate)
+            type(XcashVaultSlotFactory).creationCode, abi.encode(predictedImplementation)
         );
 
         bytes32 factoryInitHash = keccak256(factoryInit);
@@ -35,23 +36,28 @@ contract DeployXcashVaultSlot is Script {
 
         console.log("Salt:");
         console.logBytes32(DEPLOY_SALT);
-        console.log("Predicted template:", predictedTemplate);
+        console.log("Predicted implementation:", predictedImplementation);
         console.log("Predicted factory: ", predictedFactory);
 
-        if (EXPECTED_TEMPLATE != address(0)) {
-            require(predictedTemplate == EXPECTED_TEMPLATE, "template address drift");
+        if (EXPECTED_IMPLEMENTATION != address(0)) {
+            require(
+                predictedImplementation == EXPECTED_IMPLEMENTATION, "implementation address drift"
+            );
             require(predictedFactory == EXPECTED_FACTORY, "factory address drift");
         }
 
         vm.startBroadcast();
-        XcashVaultSlotTemplate template = new XcashVaultSlotTemplate{salt: DEPLOY_SALT}();
-        require(address(template) == predictedTemplate, "template deploy mismatch");
+        XcashVaultSlot implementation = new XcashVaultSlot{salt: DEPLOY_SALT}();
+        require(
+            address(implementation) == predictedImplementation, "implementation deploy mismatch"
+        );
 
-        XcashVaultSlotFactory factory = new XcashVaultSlotFactory{salt: DEPLOY_SALT}(address(template));
+        XcashVaultSlotFactory factory =
+            new XcashVaultSlotFactory{salt: DEPLOY_SALT}(address(implementation));
         require(address(factory) == predictedFactory, "factory deploy mismatch");
         vm.stopBroadcast();
 
-        console.log("Deployed template:", address(template));
+        console.log("Deployed implementation:", address(implementation));
         console.log("Deployed factory: ", address(factory));
     }
 }

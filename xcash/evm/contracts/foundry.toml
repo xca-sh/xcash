@@ -6,7 +6,7 @@ test = "test"
 script = "scripts"
 solc_version = "0.8.35"
 optimizer = true
-# VaultSlot 每次充币都 DELEGATECALL 进 template 热路径，runs 拉高换 runtime gas。
+# VaultSlot 每次充币都 DELEGATECALL 进 implementation 热路径，runs 拉高换 runtime gas。
 optimizer_runs = 1_000_000
 via_ir = true
 # 合约未使用 cancun 特有 opcode；锁 paris 以兼容部分尚未升级的 L2 / 侧链。

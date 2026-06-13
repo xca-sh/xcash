@@ -3,7 +3,7 @@
     "type": "constructor",
     "inputs": [
       {
-        "name": "vaultSlotTemplate_",
+        "name": "vaultSlotImplementation_",
         "type": "address",
         "internalType": "address"
       }
@@ -36,7 +36,7 @@
   },
   {
     "type": "function",
-    "name": "vaultSlotTemplate",
+    "name": "vaultSlotImplementation",
     "inputs": [],
     "outputs": [
       {
@@ -105,7 +105,7 @@
   },
   {
     "type": "error",
-    "name": "InvalidVaultSlotTemplate",
+    "name": "InvalidVaultSlotImplementation",
     "inputs": []
   },
   {

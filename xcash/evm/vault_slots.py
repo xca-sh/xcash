@@ -14,7 +14,7 @@ from evm.intents import build_vault_slot_collect_intent
 from evm.intents import build_vault_slot_deploy_intent
 from evm.models import EvmTxTask
 
-# 原生币在 CryptoOnChain 里 address=""，但 VaultSlot 模板用 collect(address(0))
+# 原生币在 CryptoOnChain 里 address=""，但 VaultSlot 用 collect(address(0))
 # 表示清扫合约当前原生币余额。这里必须按「本链 native_coin」判断，避免把其它链
 # 的原生币 Crypto 误映射成 address(0)。
 NATIVE_COLLECT_TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000"
@@ -33,7 +33,7 @@ def predict_address(*, chain: Chain, vault: str, salt: bytes) -> str:
         vault=vault,
         salt=salt,
         factory=addresses.factory,
-        vault_slot_template=addresses.template,
+        vault_slot_implementation=addresses.implementation,
     )
 
 

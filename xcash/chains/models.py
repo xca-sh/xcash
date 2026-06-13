@@ -143,18 +143,18 @@ class Chain(models.Model):
         return TRON_TESTNET_BASE_URL if self.is_testnet else TRON_MAINNET_BASE_URL
 
     def vault_slot_contract_addresses(self) -> VaultSlotContractAddresses:
-        """本链 VaultSlot Factory / Template 基础合约地址。
+        """本链 VaultSlot Factory / Implementation 基础合约地址。
 
         EVM 通过确定性 CREATE2 在所有 EVM 链上共享同一组地址；Tron / TVM 的部署地址
         按网络独立维护，调用方必须带着具体 chain 获取，避免主网与 Nile 混用。
         """
         if self.type == ChainType.EVM:
             from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS  # noqa: PLC0415
-            from evm.constants import XCASH_VAULT_SLOT_TEMPLATE_ADDRESS  # noqa: PLC0415
+            from evm.constants import XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS  # noqa: PLC0415
 
             return VaultSlotContractAddresses(
                 factory=XCASH_VAULT_SLOT_FACTORY_ADDRESS,
-                template=XCASH_VAULT_SLOT_TEMPLATE_ADDRESS,
+                implementation=XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS,
             )
         if self.type == ChainType.TRON:
             try:
@@ -919,7 +919,7 @@ class VaultSlot(models.Model):
         if usage == VaultSlotUsage.DEPOSIT:
             if customer is None:
                 raise ValueError("customer is required for deposit salt")
-            # 不掺 chain.code：同一链类型内的 factory/template/归集地址一致时，
+            # 不掺 chain.code：同一链类型内的 factory/implementation/归集地址一致时，
             # 同一业务身份在该链类型所有网络上得到一致 VaultSlot 地址。
             return keccak(
                 namespace

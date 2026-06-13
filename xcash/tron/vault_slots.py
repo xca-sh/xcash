@@ -14,7 +14,7 @@ from chains.models import VaultSlot
 from core.models import SystemWallet
 
 # 原生币在 CryptoOnChain 里 address=""，但归集要调 collect(address(0))；这里把空地址
-# 映射成 EVM 零地址，build_*_intent 会按 address(0) ABI 编码，命中模板的原生币清扫分支。
+# 映射成 EVM 零地址，build_*_intent 会按 address(0) ABI 编码，命中 VaultSlot 原生币清扫分支。
 NATIVE_COLLECT_TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
@@ -31,7 +31,7 @@ def predict_address(*, chain: Chain, vault: str, salt: bytes) -> str:
         vault=vault,
         salt=salt,
         factory=addresses.factory,
-        vault_slot_template=addresses.template,
+        vault_slot_implementation=addresses.implementation,
     )
 
 

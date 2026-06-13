@@ -51,7 +51,7 @@ class ChainSpec:
 @dataclass(frozen=True)
 class VaultSlotContractAddresses:
     factory: str = ""
-    template: str = ""
+    implementation: str = ""
 
 
 def _icon(slug: str) -> str:
@@ -147,8 +147,8 @@ TRON_CHAIN_CODES: tuple[str, ...] = tuple(
 TRON_VAULT_SLOT_CONTRACT_ADDRESSES: dict[str, VaultSlotContractAddresses] = {
     ChainCode.Tron: VaultSlotContractAddresses(),
     ChainCode.Nile: VaultSlotContractAddresses(
-        factory="TKGRiYck66Q8HGbAeo2fpr7jE1LEKBAdx6",
-        template="TCkffHajnPGXZxmbUcDUBcn9nz3j9ftVbR",
+        factory="TT6P5YyGYwfDyc4SE6HhQLyCsXcv7M9FyV",
+        implementation="THYuW8NBNSCAEN7UFqhz385vsYGssncsHz",
     ),
 }
 

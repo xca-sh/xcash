@@ -59,24 +59,24 @@ def test_clean_skips_for_tron():
 
 def test_vault_slot_contract_addresses_for_evm_chain():
     from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS
-    from evm.constants import XCASH_VAULT_SLOT_TEMPLATE_ADDRESS
+    from evm.constants import XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS
 
     chain = Chain(code=ChainCode.Ethereum, type=ChainType.EVM)
 
     addresses = chain.vault_slot_contract_addresses()
 
     assert addresses.factory == XCASH_VAULT_SLOT_FACTORY_ADDRESS
-    assert addresses.template == XCASH_VAULT_SLOT_TEMPLATE_ADDRESS
+    assert addresses.implementation == XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS
 
 
 def test_vault_slot_contract_addresses_for_tron_chain_uses_chain_code():
     mainnet_addresses = VaultSlotContractAddresses(
         factory="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-        template="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+        implementation="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
     )
     nile_addresses = VaultSlotContractAddresses(
         factory="TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj",
-        template="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        implementation="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
     )
 
     with patch.dict(

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.35;
+pragma solidity 0.8.26;
 
-import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
+import {OpenZeppelinClones} from "./OpenZeppelinClones.sol";
 import {XcashVaultSlot} from "./XcashVaultSlot.sol";
 
 /// @title XcashVaultSlotFactory
-/// @notice Deploys XcashVaultSlot addresses with immutable vault args at deterministic CREATE2 addresses.
+/// @notice Deploys Tron XcashVaultSlot addresses with immutable vault args.
 contract XcashVaultSlotFactory {
     error InvalidVaultSlotImplementation();
     error ZeroVault();
@@ -28,7 +28,8 @@ contract XcashVaultSlotFactory {
         returns (address vaultSlot)
     {
         if (vault == address(0)) revert ZeroVault();
-        vaultSlot = Clones.cloneDeterministicWithImmutableArgs(
+
+        vaultSlot = OpenZeppelinClones.cloneDeterministicWithImmutableArgs(
             vaultSlotImplementation, abi.encodePacked(vault), salt
         );
         emit XcashVaultSlotDeployed(vaultSlot, vault, salt);

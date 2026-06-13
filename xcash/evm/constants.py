@@ -11,9 +11,9 @@ EVM_PENDING_RECEIPT_POLL_DELAY = 32
 # SUBMITTED 状态的交易超过此时长（秒）仍无 receipt，视为已被 mempool 丢弃并触发重新广播。
 EVM_PENDING_REBROADCAST_TIMEOUT = 120
 
-# XcashVaultSlotTemplate / XcashVaultSlotFactory 全网统一地址。
+# XcashVaultSlot / XcashVaultSlotFactory 全网统一地址。
 # 通过 Foundry 默认 Arachnid CREATE2 Deployer + salt=keccak256("xcash:evm-vault-slot:v1")
 # 部署，所有 EVM 链必须落到同一地址；新链部署走 contracts/scripts/DeployXcashVaultSlot.s.sol，
 # 脚本内 EXPECTED_* 常量与下面两个值必须保持同步，任何偏差都会让 require revert。
-XCASH_VAULT_SLOT_TEMPLATE_ADDRESS = "0x2ebe769C350b54e7d0411CA4f0576b490480cAe6"
-XCASH_VAULT_SLOT_FACTORY_ADDRESS = "0x338afDDf1dd08E173C872f9b181237c4d20f4e82"
+XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS = "0x2ebe769C350b54e7d0411CA4f0576b490480cAe6"
+XCASH_VAULT_SLOT_FACTORY_ADDRESS = "0xf986Cc31d5A520990dA8B6Df1c2Aca64d91d0a54"

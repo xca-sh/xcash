@@ -3,9 +3,9 @@ pragma solidity 0.8.35;
 
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 
-/// @title XcashVaultSlotTemplate
+/// @title XcashVaultSlot
 /// @notice Native coin and ERC20 vault slot that forwards funds to its slot-encoded vault.
-contract XcashVaultSlotTemplate {
+contract XcashVaultSlot {
     error ZeroVault();
     error InvalidVaultArgs();
     error ForwardFailed();

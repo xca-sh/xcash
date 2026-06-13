@@ -1,4 +1,4 @@
-"""本地 VaultSlot 工厂 / 模板确定性部署的行为测试。
+"""本地 VaultSlot 工厂 / 实现合约确定性部署的行为测试。
 
 核心不变性：编译产物（artifacts/*.bin）+ 统一 salt + CREATE2 deployer 必须恰好
 推导出 evm.constants 里的全网统一地址。这条断言把「本地部署地址」与「Python 侧
@@ -14,11 +14,11 @@ from hexbytes import HexBytes
 from web3 import Web3
 
 from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS
-from evm.constants import XCASH_VAULT_SLOT_TEMPLATE_ADDRESS
+from evm.constants import XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS
 from evm.local_vault_slot import CREATE2_DEPLOYER_ADDRESS
 from evm.local_vault_slot import XCASH_VAULT_SLOT_DEPLOY_SALT
+from evm.local_vault_slot import build_implementation_init_code
 from evm.local_vault_slot import build_factory_init_code
-from evm.local_vault_slot import build_template_init_code
 from evm.local_vault_slot import ensure_local_vault_slot_contracts
 from evm.local_vault_slot import predict_create2_address
 
@@ -26,15 +26,15 @@ from evm.local_vault_slot import predict_create2_address
 class VaultSlotAddressInvariantTests(SimpleTestCase):
     def test_artifacts_predict_expected_constant_addresses(self):
         """artifacts + salt 推导出的地址必须等于全网统一常量地址。"""
-        template_address = predict_create2_address(build_template_init_code())
+        implementation_address = predict_create2_address(build_implementation_init_code())
         self.assertEqual(
-            template_address,
-            Web3.to_checksum_address(XCASH_VAULT_SLOT_TEMPLATE_ADDRESS),
+            implementation_address,
+            Web3.to_checksum_address(XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS),
         )
 
-        # 工厂构造参数引用模板地址，模板漂移会连带让工厂地址漂移。
+        # 工厂构造参数引用实现合约地址，实现合约漂移会连带让工厂地址漂移。
         factory_address = predict_create2_address(
-            build_factory_init_code(template_address=template_address)
+            build_factory_init_code(implementation_address=implementation_address)
         )
         self.assertEqual(
             factory_address,
@@ -81,7 +81,7 @@ class EnsureLocalVaultSlotContractsTests(SimpleTestCase):
             )
             self.assertTrue(tx["data"].startswith(XCASH_VAULT_SLOT_DEPLOY_SALT))
         self.assertIn(
-            Web3.to_checksum_address(XCASH_VAULT_SLOT_TEMPLATE_ADDRESS), deployed
+            Web3.to_checksum_address(XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS), deployed
         )
         self.assertIn(
             Web3.to_checksum_address(XCASH_VAULT_SLOT_FACTORY_ADDRESS), deployed
@@ -89,7 +89,7 @@ class EnsureLocalVaultSlotContractsTests(SimpleTestCase):
 
     def test_idempotent_when_already_deployed(self):
         w3, deployed, sent = self._make_w3()
-        deployed.add(Web3.to_checksum_address(XCASH_VAULT_SLOT_TEMPLATE_ADDRESS))
+        deployed.add(Web3.to_checksum_address(XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS))
         deployed.add(Web3.to_checksum_address(XCASH_VAULT_SLOT_FACTORY_ADDRESS))
 
         ensure_local_vault_slot_contracts(w3=w3)

@@ -1,7 +1,7 @@
 """Tron XcashVaultSlot init_code 与 CREATE2 地址预测。
 
 Tron TVM 的 CREATE2 地址 preimage 使用 0x41 前缀；这里刻意不调用链上
-OpenZeppelin predict 视图，因为 OZ Clones 在 Solidity 汇编里使用 EVM 0xff。
+EVM-style predict 视图，因为 Solidity 汇编里的常规 CREATE2 预测使用 EVM 0xff。
 """
 
 from __future__ import annotations
@@ -32,12 +32,12 @@ def tron_address_to_20_bytes(address: str) -> bytes:
 
 def build_tron_vault_slot_init_code(
     *,
-    vault_slot_template: str,
+    vault_slot_implementation: str,
     vault: str,
 ) -> bytes:
     """用 Tron 地址构造与 EVM VaultSlot 相同结构的 clone immutable init_code。"""
     return build_xcash_vault_slot_init_code(
-        vault_slot_template=tron_base58_to_evm_address(vault_slot_template),
+        vault_slot_implementation=tron_base58_to_evm_address(vault_slot_implementation),
         vault=tron_base58_to_evm_address(vault),
     )
 
@@ -47,7 +47,7 @@ def predict_tron_vault_slot_address(
     vault: str,
     salt: bytes,
     factory: str,
-    vault_slot_template: str,
+    vault_slot_implementation: str,
 ) -> str:
     """预测 Tron XcashVaultSlotFactory.deployVaultSlot(vault, salt) 的 Base58 地址。"""
     if len(salt) != 32:
@@ -55,11 +55,10 @@ def predict_tron_vault_slot_address(
 
     factory_bytes = tron_address_to_20_bytes(factory)
     init_code = build_tron_vault_slot_init_code(
-        vault_slot_template=vault_slot_template,
+        vault_slot_implementation=vault_slot_implementation,
         vault=vault,
     )
     digest = keccak(b"\x41" + factory_bytes + bytes(salt) + keccak(init_code))
     return TronAddressCodec.hex41_to_base58(
         f"{TronAddressCodec.ADDRESS_HEX_PREFIX}{digest[-20:].hex()}"
     )
-

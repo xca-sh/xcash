@@ -1,8 +1,8 @@
-"""本地联调：把 XcashVaultSlot 工厂 / 模板确定性部署到本地 EVM 链。
+"""本地联调：把 XcashVaultSlot 工厂 / 实现合约确定性部署到本地 EVM 链。
 
 生产 / 测试网由 `contracts/scripts/DeployXcashVaultSlot.s.sol` 经 Foundry 部署；
 本地 compose 会持久化 anvil state，使系统热钱包 nonce、合约代码和数据库同生命周期。
-`ensure_local_chains` 仍在 bootstrap 时用同一套 CREATE2 规则幂等检查并部署工厂 / 模板，
+`ensure_local_chains` 仍在 bootstrap 时用同一套 CREATE2 规则幂等检查并部署工厂 / 实现合约，
 覆盖首次启动或显式重建本地链后的初始化，让合约账单 / 充币的 VaultSlot 归集链路
 （deployVaultSlot + collect）在本地可用。
 
@@ -22,7 +22,7 @@ from eth_utils import to_canonical_address
 from web3 import Web3
 
 from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS
-from evm.constants import XCASH_VAULT_SLOT_TEMPLATE_ADDRESS
+from evm.constants import XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS
 
 logger = structlog.get_logger()
 
@@ -31,7 +31,7 @@ logger = structlog.get_logger()
 CREATE2_DEPLOYER_ADDRESS = "0x4e59b44847b379578588920cA78FbF26c0B4956C"
 
 # 全网统一 salt，必须与 contracts/scripts/DeployXcashVaultSlot.s.sol 的 DEPLOY_SALT 一致：
-# keccak256("xcash:evm-vault-slot:v1")。改动会让工厂 / 模板地址漂移，破坏跨链同地址假设。
+# keccak256("xcash:evm-vault-slot:v1")。改动会让工厂 / 实现合约地址漂移，破坏跨链同地址假设。
 XCASH_VAULT_SLOT_DEPLOY_SALT = keccak(b"xcash:evm-vault-slot:v1")
 
 # 本地一次性部署给足 gas，避免对 CREATE2 deployer 代理做 estimateGas 的边界问题。
@@ -46,17 +46,17 @@ def _load_creation_code(filename: str) -> bytes:
     return bytes.fromhex(raw.removeprefix("0x"))
 
 
-def build_template_init_code() -> bytes:
-    """XcashVaultSlotTemplate 无构造参数，init_code 即 creationCode。"""
-    return _load_creation_code("XcashVaultSlotTemplate.bin")
+def build_implementation_init_code() -> bytes:
+    """XcashVaultSlot 无构造参数，init_code 即 creationCode。"""
+    return _load_creation_code("XcashVaultSlot.bin")
 
 
-def build_factory_init_code(*, template_address: str) -> bytes:
-    """XcashVaultSlotFactory 构造参数为 template 地址（ABI 左填充 32 字节）。"""
+def build_factory_init_code(*, implementation_address: str) -> bytes:
+    """XcashVaultSlotFactory 构造参数为 implementation 地址（ABI 左填充 32 字节）。"""
     return (
         _load_creation_code("XcashVaultSlotFactory.bin")
         + bytes(12)
-        + to_canonical_address(template_address)
+        + to_canonical_address(implementation_address)
     )
 
 
@@ -72,7 +72,7 @@ def predict_create2_address(init_code: bytes) -> str:
 
 
 def ensure_local_vault_slot_contracts(*, w3: Web3) -> None:
-    """把工厂 / 模板确定性部署到本地 EVM 链；幂等：地址已有代码则跳过。
+    """把工厂 / 实现合约确定性部署到本地 EVM 链；幂等：地址已有代码则跳过。
 
     依赖 CREATE2 deployer 已在链上（anvil 创世内置）。部署后断言落地地址等于
     `evm.constants` 的全网统一地址，编译产物漂移立即抛错，避免本地与生产地址错位。
@@ -85,25 +85,25 @@ def ensure_local_vault_slot_contracts(*, w3: Web3) -> None:
 
     sender = w3.eth.accounts[0]
 
-    # 1. 模板：无构造参数。
-    template_init = build_template_init_code()
-    template_address = predict_create2_address(template_init)
+    # 1. 实现合约：无构造参数。
+    implementation_init = build_implementation_init_code()
+    implementation_address = predict_create2_address(implementation_init)
     _assert_no_address_drift(
-        predicted=template_address,
-        expected=XCASH_VAULT_SLOT_TEMPLATE_ADDRESS,
-        label="template",
+        predicted=implementation_address,
+        expected=XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS,
+        label="implementation",
     )
     _deploy_via_create2(
         w3=w3,
         sender=sender,
         deployer=deployer,
-        init_code=template_init,
-        expected_address=template_address,
-        label="template",
+        init_code=implementation_init,
+        expected_address=implementation_address,
+        label="implementation",
     )
 
-    # 2. 工厂：构造参数引用上面部署的模板地址。
-    factory_init = build_factory_init_code(template_address=template_address)
+    # 2. 工厂：构造参数引用上面部署的实现合约地址。
+    factory_init = build_factory_init_code(implementation_address=implementation_address)
     factory_address = predict_create2_address(factory_init)
     _assert_no_address_drift(
         predicted=factory_address,

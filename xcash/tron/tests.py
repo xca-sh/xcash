@@ -72,12 +72,12 @@ class VaultSlotCodecTests(SimpleTestCase):
         from tron.contracts_codec import tron_address_to_20_bytes
 
         factory = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
-        template = "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb"
+        implementation = "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb"
         vault = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
         salt = b"\x11" * 32
 
         init_code = build_tron_vault_slot_init_code(
-            vault_slot_template=template,
+            vault_slot_implementation=implementation,
             vault=vault,
         )
         expected_digest = keccak(
@@ -92,7 +92,7 @@ class VaultSlotCodecTests(SimpleTestCase):
             vault=vault,
             salt=salt,
             factory=factory,
-            vault_slot_template=template,
+            vault_slot_implementation=implementation,
         )
 
         self.assertEqual(predicted, expected)
@@ -2593,7 +2593,7 @@ class TronReceiptConfirmTaskTests(TestCase):
     {
         ChainCode.Tron: VaultSlotContractAddresses(
             factory="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-            template="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+            implementation="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
         )
     },
 )

@@ -7,7 +7,7 @@ from eth_utils import to_canonical_address
 from eth_utils import to_checksum_address
 
 from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS
-from evm.constants import XCASH_VAULT_SLOT_TEMPLATE_ADDRESS
+from evm.constants import XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS
 
 ZERO_ADDRESS: bytes = b"\x00" * 20
 OZ_CONTRACTS_VERSION = "v5.6.1"
@@ -17,14 +17,14 @@ _OZ_CLONE_IMMUTABLE_ARGS_RUNTIME_LENGTH = 0x2D
 
 def build_xcash_vault_slot_init_code(
     *,
-    vault_slot_template: str,
+    vault_slot_implementation: str,
     vault: str,
 ) -> bytes:
     """按 OpenZeppelin Contracts v5.6.1 Clones immutable args 构造 slot init_code。"""
-    template_bytes = to_canonical_address(vault_slot_template)
+    implementation_bytes = to_canonical_address(vault_slot_implementation)
     vault_bytes = to_canonical_address(vault)
-    if template_bytes == ZERO_ADDRESS:
-        raise ValueError("vault_slot_template address must not be zero")
+    if implementation_bytes == ZERO_ADDRESS:
+        raise ValueError("vault_slot_implementation address must not be zero")
     if vault_bytes == ZERO_ADDRESS:
         raise ValueError("vault address must not be zero")
 
@@ -37,7 +37,7 @@ def build_xcash_vault_slot_init_code(
             bytes.fromhex("61"),
             (len(args) + _OZ_CLONE_IMMUTABLE_ARGS_RUNTIME_LENGTH).to_bytes(2, "big"),
             bytes.fromhex("3d81600a3d39f3363d3d373d3d3d363d73"),
-            template_bytes,
+            implementation_bytes,
             bytes.fromhex("5af43d82803e903d91602b57fd5bf3"),
             args,
         )
@@ -49,7 +49,7 @@ def predict_xcash_vault_slot_address(
     vault: str,
     salt: bytes,
     factory: str = XCASH_VAULT_SLOT_FACTORY_ADDRESS,
-    vault_slot_template: str = XCASH_VAULT_SLOT_TEMPLATE_ADDRESS,
+    vault_slot_implementation: str = XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS,
 ) -> str:
     """预测 XcashVaultSlotFactory.deployVaultSlot(vault, salt) 的 slot 地址。"""
     if len(salt) != 32:
@@ -57,7 +57,7 @@ def predict_xcash_vault_slot_address(
 
     factory_bytes = to_canonical_address(factory)
     init_code = build_xcash_vault_slot_init_code(
-        vault_slot_template=vault_slot_template,
+        vault_slot_implementation=vault_slot_implementation,
         vault=vault,
     )
     digest = keccak(b"\xff" + factory_bytes + bytes(salt) + keccak(init_code))

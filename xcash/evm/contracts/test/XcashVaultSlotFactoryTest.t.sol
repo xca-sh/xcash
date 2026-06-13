@@ -3,7 +3,7 @@ pragma solidity 0.8.35;
 
 import {Test} from "forge-std/Test.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
-import {XcashVaultSlotTemplate} from "../src/XcashVaultSlotTemplate.sol";
+import {XcashVaultSlot} from "../src/XcashVaultSlot.sol";
 import {XcashVaultSlotFactory} from "../src/XcashVaultSlotFactory.sol";
 import {MockERC20} from "./helpers/MockERC20.sol";
 
@@ -16,28 +16,28 @@ contract XcashVaultSlotFactoryTest is Test {
 
     address payable internal vault = payable(address(0xBEEF));
     address payable internal secondVault = payable(address(0xCAFE));
-    XcashVaultSlotTemplate internal vaultSlotTemplate;
+    XcashVaultSlot internal vaultSlotImplementation;
     XcashVaultSlotFactory internal factory;
 
     function setUp() public {
-        vaultSlotTemplate = new XcashVaultSlotTemplate();
-        factory = new XcashVaultSlotFactory(address(vaultSlotTemplate));
+        vaultSlotImplementation = new XcashVaultSlot();
+        factory = new XcashVaultSlotFactory(address(vaultSlotImplementation));
     }
 
-    function test_reverts_when_vaultSlotTemplate_is_zero() public {
-        vm.expectRevert(XcashVaultSlotFactory.InvalidVaultSlotTemplate.selector);
+    function test_reverts_when_vaultSlotImplementation_is_zero() public {
+        vm.expectRevert(XcashVaultSlotFactory.InvalidVaultSlotImplementation.selector);
         new XcashVaultSlotFactory(address(0));
     }
 
-    function test_reverts_when_vaultSlotTemplate_has_no_code() public {
-        vm.expectRevert(XcashVaultSlotFactory.InvalidVaultSlotTemplate.selector);
+    function test_reverts_when_vaultSlotImplementation_has_no_code() public {
+        vm.expectRevert(XcashVaultSlotFactory.InvalidVaultSlotImplementation.selector);
         new XcashVaultSlotFactory(address(0x1234));
     }
 
-    function test_reverts_when_vaultSlotTemplate_has_unexpected_codehash() public {
+    function test_reverts_when_vaultSlotImplementation_has_unexpected_codehash() public {
         MockERC20 wrongTemplate = new MockERC20();
 
-        vm.expectRevert(XcashVaultSlotFactory.InvalidVaultSlotTemplate.selector);
+        vm.expectRevert(XcashVaultSlotFactory.InvalidVaultSlotImplementation.selector);
         new XcashVaultSlotFactory(address(wrongTemplate));
     }
 
@@ -85,7 +85,7 @@ contract XcashVaultSlotFactoryTest is Test {
         vm.expectEmit(true, true, true, true, deployed);
         emit XcashCollected(address(token), 1000e18);
 
-        XcashVaultSlotTemplate(payable(deployed)).collect(address(token));
+        XcashVaultSlot(payable(deployed)).collect(address(token));
 
         assertEq(token.balanceOf(vault), 1000e18);
         assertEq(token.balanceOf(deployed), 0);
@@ -103,7 +103,7 @@ contract XcashVaultSlotFactoryTest is Test {
 
         vm.expectEmit(true, true, true, true, deployed);
         emit XcashCollected(address(token), 1000e18);
-        XcashVaultSlotTemplate(payable(deployed)).collect(address(token));
+        XcashVaultSlot(payable(deployed)).collect(address(token));
 
         assertEq(deployed, predicted);
         assertEq(token.balanceOf(vault), 1000e18);
@@ -121,7 +121,7 @@ contract XcashVaultSlotFactoryTest is Test {
 
         vm.expectEmit(true, true, true, true, deployed);
         emit XcashCollected(address(0), 1.5 ether);
-        XcashVaultSlotTemplate(payable(deployed)).collect(address(0));
+        XcashVaultSlot(payable(deployed)).collect(address(0));
 
         assertEq(deployed, predicted);
         assertEq(vault.balance, 1.5 ether);
@@ -145,7 +145,7 @@ contract XcashVaultSlotFactoryTest is Test {
         assertEq(deployed.balance, 0);
 
         vm.recordLogs();
-        XcashVaultSlotTemplate(payable(deployed)).collect(address(0));
+        XcashVaultSlot(payable(deployed)).collect(address(0));
 
         assertEq(vm.getRecordedLogs().length, 0);
         assertEq(vault.balance, 1 ether);
@@ -190,7 +190,7 @@ contract XcashVaultSlotFactoryTest is Test {
 
     function _predict(address payable vault_, bytes32 salt) private view returns (address) {
         return Clones.predictDeterministicAddressWithImmutableArgs(
-            address(vaultSlotTemplate), abi.encodePacked(vault_), salt, address(factory)
+            address(vaultSlotImplementation), abi.encodePacked(vault_), salt, address(factory)
         );
     }
 }

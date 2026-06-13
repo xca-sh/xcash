@@ -7,7 +7,7 @@ import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 contract DumpXcashVaultSlotFixtures is Script {
     function run() external {
         address factory = 0xfAcadE0000000000000000000000000000000000;
-        address vaultSlotTemplate = 0x1eA7090000000000000000000000000000000000;
+        address vaultSlotImplementation = 0x1eA7090000000000000000000000000000000000;
         bytes32 salt = bytes32(uint256(0xC0DE));
 
         address vault1 = 0x4444444444444444444444444444444444444444;
@@ -18,21 +18,21 @@ contract DumpXcashVaultSlotFixtures is Script {
         string memory firstCase = _caseJson(
             "xcash_vault_slot",
             factory,
-            vaultSlotTemplate,
+            vaultSlotImplementation,
             vault1,
             vaultArgs1,
             Clones.predictDeterministicAddressWithImmutableArgs(
-                vaultSlotTemplate, vaultArgs1, salt, factory
+                vaultSlotImplementation, vaultArgs1, salt, factory
             )
         );
         string memory secondCase = _caseJson(
             "xcash_vault_slot_second_vault",
             factory,
-            vaultSlotTemplate,
+            vaultSlotImplementation,
             vault2,
             vaultArgs2,
             Clones.predictDeterministicAddressWithImmutableArgs(
-                vaultSlotTemplate, vaultArgs2, salt, factory
+                vaultSlotImplementation, vaultArgs2, salt, factory
             )
         );
 
@@ -45,7 +45,7 @@ contract DumpXcashVaultSlotFixtures is Script {
     function _caseJson(
         string memory name,
         address factory,
-        address vaultSlotTemplate,
+        address vaultSlotImplementation,
         address vault,
         bytes memory vaultArgs,
         address predicted
@@ -55,19 +55,19 @@ contract DumpXcashVaultSlotFixtures is Script {
             name,
             '":{"factory":"',
             vm.toString(factory),
-            '","vault_slot_template":"',
-            vm.toString(vaultSlotTemplate),
+            '","vault_slot_implementation":"',
+            vm.toString(vaultSlotImplementation),
             '","vault":"',
             vm.toString(vault),
             '","slot_init_code":"',
-            vm.toString(_slotInitCodeWithImmutableArgs(vaultSlotTemplate, vaultArgs)),
+            vm.toString(_slotInitCodeWithImmutableArgs(vaultSlotImplementation, vaultArgs)),
             '","predicted":"',
             vm.toString(predicted),
             '"}'
         );
     }
 
-    function _slotInitCodeWithImmutableArgs(address vaultSlotTemplate, bytes memory args)
+    function _slotInitCodeWithImmutableArgs(address vaultSlotImplementation, bytes memory args)
         private
         pure
         returns (bytes memory)
@@ -76,7 +76,7 @@ contract DumpXcashVaultSlotFixtures is Script {
             hex"61",
             uint16(args.length + 0x2d),
             hex"3d81600a3d39f3363d3d373d3d3d363d73",
-            vaultSlotTemplate,
+            vaultSlotImplementation,
             hex"5af43d82803e903d91602b57fd5bf3",
             args
         );

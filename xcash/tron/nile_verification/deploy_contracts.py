@@ -33,29 +33,31 @@ def main() -> None:
 
     client = TronHttpClient(chain=chain)
 
-    template_artifact = load_artifact(
-        "XcashVaultSlotTemplate.sol",
-        "XcashVaultSlotTemplate",
+    implementation_artifact = load_artifact(
+        "XcashVaultSlot.sol",
+        "XcashVaultSlot",
     )
-    template_unsigned = client.deploy_contract(
+    implementation_unsigned = client.deploy_contract(
         owner_address=owner,
-        name="XcashVaultSlotTemplate",
-        abi=template_artifact["abi"],
-        bytecode=artifact_bytecode(template_artifact),
+        name="XcashVaultSlot",
+        abi=implementation_artifact["abi"],
+        bytecode=artifact_bytecode(implementation_artifact),
         fee_limit=fee_limit,
     )
-    template_tx_id = sign_and_broadcast(
+    implementation_tx_id = sign_and_broadcast(
         client=client,
         private_key=private_key,
-        transaction=extract_transaction(template_unsigned),
+        transaction=extract_transaction(implementation_unsigned),
         broadcast=True,
     )
-    template_receipt = wait_tx_info(client=client, tx_id=template_tx_id) if args.wait else {}
-    template_address = extract_contract_address(
-        tron_address_codec=TronAddressCodec,
-        payloads=(template_unsigned, template_receipt),
+    implementation_receipt = (
+        wait_tx_info(client=client, tx_id=implementation_tx_id) if args.wait else {}
     )
-    emit(f"TRON_VAULT_SLOT_TEMPLATE_ADDRESS={template_address}")
+    implementation_address = extract_contract_address(
+        tron_address_codec=TronAddressCodec,
+        payloads=(implementation_unsigned, implementation_receipt),
+    )
+    emit(f"TRON_VAULT_SLOT_IMPLEMENTATION_ADDRESS={implementation_address}")
 
     factory_artifact = load_artifact(
         "XcashVaultSlotFactory.sol",
@@ -63,7 +65,7 @@ def main() -> None:
     )
     factory_parameter = eth_abi.encode(
         ["address"],
-        [tron_base58_to_evm_address(template_address)],
+        [tron_base58_to_evm_address(implementation_address)],
     ).hex()
     factory_unsigned = client.deploy_contract(
         owner_address=owner,
@@ -87,7 +89,7 @@ def main() -> None:
     emit(f"TRON_VAULT_SLOT_FACTORY_ADDRESS={factory_address}")
     emit("")
     emit("回填到 xcash/tron/nile_verification/.env：")
-    emit(f"TRON_VAULT_SLOT_TEMPLATE_ADDRESS={template_address}")
+    emit(f"TRON_VAULT_SLOT_IMPLEMENTATION_ADDRESS={implementation_address}")
     emit(f"TRON_VAULT_SLOT_FACTORY_ADDRESS={factory_address}")
 
 

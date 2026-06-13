@@ -19,7 +19,7 @@ def main() -> None:
     args = parser.parse_args()
 
     factory = env_required("TRON_VAULT_SLOT_FACTORY_ADDRESS")
-    template = env_required("TRON_VAULT_SLOT_TEMPLATE_ADDRESS")
+    implementation = env_required("TRON_VAULT_SLOT_IMPLEMENTATION_ADDRESS")
     owner = env_required("TRON_NILE_OWNER_ADDRESS")
     vault = nile_vault_address(owner_address=owner)
 
@@ -30,7 +30,7 @@ def main() -> None:
             vault=vault,
             salt=salt,
             factory=factory,
-            vault_slot_template=template,
+            vault_slot_implementation=implementation,
         )
         emit(f"{index},{salt.hex()},{predicted}")
 

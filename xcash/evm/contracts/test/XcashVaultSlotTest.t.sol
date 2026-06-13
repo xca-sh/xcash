@@ -2,7 +2,7 @@
 pragma solidity 0.8.35;
 
 import {Test} from "forge-std/Test.sol";
-import {XcashVaultSlotTemplate} from "../src/XcashVaultSlotTemplate.sol";
+import {XcashVaultSlot} from "../src/XcashVaultSlot.sol";
 import {XcashVaultSlotFactory} from "../src/XcashVaultSlotFactory.sol";
 import {MockERC20} from "./helpers/MockERC20.sol";
 import {MockFalseReturnERC20} from "./helpers/MockFalseReturnERC20.sol";
@@ -17,8 +17,8 @@ contract XcashVaultSlotTest is Test {
     XcashVaultSlotFactory internal factory;
 
     function setUp() public {
-        XcashVaultSlotTemplate vaultSlotTemplate = new XcashVaultSlotTemplate();
-        factory = new XcashVaultSlotFactory(address(vaultSlotTemplate));
+        XcashVaultSlot vaultSlotImplementation = new XcashVaultSlot();
+        factory = new XcashVaultSlotFactory(address(vaultSlotImplementation));
     }
 
     function test_reverts_when_vault_is_zero() public {
@@ -27,7 +27,7 @@ contract XcashVaultSlotTest is Test {
     }
 
     function test_receive_forwards_native_coin_to_vault_and_emits_event() public {
-        XcashVaultSlotTemplate slot = _deployVaultSlot("receive-native");
+        XcashVaultSlot slot = _deployVaultSlot("receive-native");
         address payer = address(0xA11CE);
         vm.deal(payer, 2 ether);
 
@@ -45,7 +45,7 @@ contract XcashVaultSlotTest is Test {
     }
 
     function test_receive_forwards_full_balance_including_preexisting_native() public {
-        XcashVaultSlotTemplate slot = _deployVaultSlot("existing-native");
+        XcashVaultSlot slot = _deployVaultSlot("existing-native");
         vm.deal(address(slot), 0.4 ether);
         address payer = address(0xA11CE);
         vm.deal(payer, 0.6 ether);
@@ -64,7 +64,7 @@ contract XcashVaultSlotTest is Test {
     }
 
     function test_receive_noop_when_amount_is_zero() public {
-        XcashVaultSlotTemplate slot = _deployVaultSlot("zero-amount");
+        XcashVaultSlot slot = _deployVaultSlot("zero-amount");
 
         vm.recordLogs();
         (bool ok, bytes memory data) = address(slot).call{value: 0}("");
@@ -78,20 +78,19 @@ contract XcashVaultSlotTest is Test {
 
     function test_reverts_when_vault_rejects_native_coin() public {
         RejectingVault rejectingVault = new RejectingVault();
-        XcashVaultSlotTemplate slot =
-            _deployVaultSlot(payable(address(rejectingVault)), "reject-native");
+        XcashVaultSlot slot = _deployVaultSlot(payable(address(rejectingVault)), "reject-native");
 
         (bool ok, bytes memory data) = address(slot).call{value: 1 ether}("");
 
         assertFalse(ok);
-        assertEq(data, abi.encodeWithSelector(XcashVaultSlotTemplate.ForwardFailed.selector));
+        assertEq(data, abi.encodeWithSelector(XcashVaultSlot.ForwardFailed.selector));
         assertEq(address(slot).balance, 0);
         assertEq(address(rejectingVault).balance, 0);
     }
 
     function test_unknown_selector_with_value_reverts_without_fallback() public {
         // 移除 fallback() 后，带未知 selector 的调用必须直接 revert，资金不能被吞掉。
-        XcashVaultSlotTemplate slot = _deployVaultSlot("no-fallback");
+        XcashVaultSlot slot = _deployVaultSlot("no-fallback");
         address payer = address(0xCAFE);
         vm.deal(payer, 1 ether);
 
@@ -105,7 +104,7 @@ contract XcashVaultSlotTest is Test {
     }
 
     function test_collect_native_transfers_balance_to_vault() public {
-        XcashVaultSlotTemplate slot = _deployVaultSlot("collect-native");
+        XcashVaultSlot slot = _deployVaultSlot("collect-native");
         vm.deal(address(slot), 1.5 ether);
 
         vm.expectEmit(true, true, true, true, address(slot));
@@ -118,7 +117,7 @@ contract XcashVaultSlotTest is Test {
     }
 
     function test_collect_native_noop_when_balance_is_zero() public {
-        XcashVaultSlotTemplate slot = _deployVaultSlot("collect-native-zero");
+        XcashVaultSlot slot = _deployVaultSlot("collect-native-zero");
 
         vm.recordLogs();
         slot.collect(address(0));
@@ -130,11 +129,11 @@ contract XcashVaultSlotTest is Test {
 
     function test_collect_native_reverts_when_vault_rejects() public {
         RejectingVault rejectingVault = new RejectingVault();
-        XcashVaultSlotTemplate slot =
+        XcashVaultSlot slot =
             _deployVaultSlot(payable(address(rejectingVault)), "collect-native-reject");
         vm.deal(address(slot), 1 ether);
 
-        vm.expectRevert(XcashVaultSlotTemplate.ForwardFailed.selector);
+        vm.expectRevert(XcashVaultSlot.ForwardFailed.selector);
         slot.collect(address(0));
 
         assertEq(address(slot).balance, 1 ether);
@@ -142,7 +141,7 @@ contract XcashVaultSlotTest is Test {
     }
 
     function test_collect_erc20_transfers_full_balance_to_vault() public {
-        XcashVaultSlotTemplate slot = _deployVaultSlot("erc20-standard");
+        XcashVaultSlot slot = _deployVaultSlot("erc20-standard");
         MockERC20 token = new MockERC20();
         token.mint(address(slot), 1000e18);
 
@@ -156,7 +155,7 @@ contract XcashVaultSlotTest is Test {
     }
 
     function test_collect_erc20_supports_usdt_like_token() public {
-        XcashVaultSlotTemplate slot = _deployVaultSlot("erc20-usdt-like");
+        XcashVaultSlot slot = _deployVaultSlot("erc20-usdt-like");
         MockUsdtLike token = new MockUsdtLike();
         token.mint(address(slot), 500e6);
 
@@ -172,7 +171,7 @@ contract XcashVaultSlotTest is Test {
     function test_collect_erc20_noop_when_balance_is_zero() public {
         // 空收是良性幂等（前序归集已把余额扫空）：collect 必须安静收尾——不 revert、
         // 不 emit、余额保持 0，避免把"无事可做"误报成 FAILED 任务。
-        XcashVaultSlotTemplate slot = _deployVaultSlot("erc20-zero");
+        XcashVaultSlot slot = _deployVaultSlot("erc20-zero");
         MockERC20 token = new MockERC20();
 
         vm.recordLogs();
@@ -184,34 +183,32 @@ contract XcashVaultSlotTest is Test {
     }
 
     function test_collect_erc20_reverts_when_token_returns_false() public {
-        XcashVaultSlotTemplate slot = _deployVaultSlot("erc20-false");
+        XcashVaultSlot slot = _deployVaultSlot("erc20-false");
         MockFalseReturnERC20 token = new MockFalseReturnERC20();
         token.mint(address(slot), 1);
 
-        vm.expectRevert(XcashVaultSlotTemplate.ERC20TransferFailed.selector);
+        vm.expectRevert(XcashVaultSlot.ERC20TransferFailed.selector);
         slot.collect(address(token));
     }
 
     function test_collect_erc20_reverts_when_token_returns_malformed_bool() public {
-        XcashVaultSlotTemplate slot = _deployVaultSlot("erc20-malformed");
+        XcashVaultSlot slot = _deployVaultSlot("erc20-malformed");
         MockMalformedReturnERC20 token = new MockMalformedReturnERC20();
         token.mint(address(slot), 1);
 
-        vm.expectRevert(XcashVaultSlotTemplate.ERC20TransferFailed.selector);
+        vm.expectRevert(XcashVaultSlot.ERC20TransferFailed.selector);
         slot.collect(address(token));
     }
 
-    function _deployVaultSlot(string memory saltLabel) private returns (XcashVaultSlotTemplate) {
+    function _deployVaultSlot(string memory saltLabel) private returns (XcashVaultSlot) {
         return _deployVaultSlot(vault, saltLabel);
     }
 
     function _deployVaultSlot(address payable vault_, string memory saltLabel)
         private
-        returns (XcashVaultSlotTemplate)
+        returns (XcashVaultSlot)
     {
-        return XcashVaultSlotTemplate(
-            payable(factory.deployVaultSlot(vault_, keccak256(bytes(saltLabel))))
-        );
+        return XcashVaultSlot(payable(factory.deployVaultSlot(vault_, keccak256(bytes(saltLabel)))));
     }
 }
 

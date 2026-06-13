@@ -1,15 +1,14 @@
 [profile.default]
-# 与 EVM 共用同一套 Solidity 源码（单一真相）。TVM 兼容该字节码（evm_version=paris）。
-src = "../../evm/contracts/src"
+# Tron/TVM 专用源码，独立于 EVM 合约维护和编译。
+src = "src"
 out = "out"
 libs = ["../../evm/contracts/lib"]
-solc_version = "0.8.35"
+test = "test"
+solc_version = "0.8.26"
 optimizer = true
 optimizer_runs = 1_000_000
 via_ir = true
 evm_version = "paris"
-bytecode_hash = "none"
-cbor_metadata = false
 auto_detect_remappings = false
 skip = ["yul"]
 

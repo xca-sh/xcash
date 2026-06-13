@@ -2,9 +2,10 @@
 
 这些脚本用于正式开发完成后由人工在 Nile 验收 Tron VaultSlot 链上行为。所有私钥走环境变量，脚本只打印 txID 和 receipt，不打印私钥。
 
-正式合约源码与 EVM 共用，在 `xcash/evm/contracts/src/`（`tron/contracts` 工程已通过
-`src` 指向它）。先 `cd xcash/tron/contracts && forge build`，部署
-`XcashVaultSlotTemplate` 和 `XcashVaultSlotFactory`（见 `deploy_contracts.py`），再运行本目录脚本。
+正式合约源码独立维护在 `xcash/tron/contracts/src/`。先用官方 Tron
+`solc.tron 0.8.26+commit.733b4d28` 编译，部署 `XcashVaultSlot` 和
+`XcashVaultSlotFactory`（见 `deploy_contracts.py`），再运行本目录脚本。不要使用
+`--no-metadata`，Tronscan 表单验证需要 Solidity 默认 CBOR metadata。
 
 ## 环境变量
 
@@ -24,14 +25,14 @@
 - `TRON_VAULT_SLOT_TEST_VAULT` 为空时默认使用 `TRON_NILE_OWNER_ADDRESS`
 - `TRON_VAULT_SLOT_DEPLOY_FEE_LIMIT` 为空时默认 `1500000000`
 - `TRON_VAULT_SLOT_FEE_LIMIT` 为空时验收脚本默认 `300000000`
-- `TRON_VAULT_SLOT_FACTORY_ADDRESS` / `TRON_VAULT_SLOT_TEMPLATE_ADDRESS` 是部署脚本输出，不是部署前输入
+- `TRON_VAULT_SLOT_FACTORY_ADDRESS` / `TRON_VAULT_SLOT_IMPLEMENTATION_ADDRESS` 是部署脚本输出，不是部署前输入
 
 - `DJANGO_SETTINGS_MODULE=config.settings.dev`
 - `TRON_API_KEY`
 - `TRON_NILE_OWNER_ADDRESS`
 - `TRON_NILE_PRIVATE_KEY`
 - `TRON_VAULT_SLOT_FACTORY_ADDRESS`
-- `TRON_VAULT_SLOT_TEMPLATE_ADDRESS`
+- `TRON_VAULT_SLOT_IMPLEMENTATION_ADDRESS`
 - `TRON_VAULT_SLOT_FEE_LIMIT`
 - `TRON_VAULT_SLOT_DEPLOY_FEE_LIMIT`
 - `TRON_VAULT_SLOT_TEST_VAULT`
@@ -40,15 +41,16 @@
 
 ## 命令
 
-首次 Nile 验收时，factory/template 地址由部署脚本生成。先编译合约：
+首次 Nile 验收时，factory/implementation 地址由部署脚本生成。先编译合约：
 
 ```bash
+TRON_SOLC=/private/tmp/tron-solc-0.8.26
 cd xcash/tron/contracts
-forge build
+forge build --use "$TRON_SOLC"
 cd ../../..
 ```
 
-再部署 template 和 factory，并把脚本输出的两个地址回填到 `.env`：
+再部署 implementation 和 factory，并把脚本输出的两个地址回填到 `.env`：
 
 ```bash
 .venv/bin/python xcash/tron/nile_verification/deploy_contracts.py

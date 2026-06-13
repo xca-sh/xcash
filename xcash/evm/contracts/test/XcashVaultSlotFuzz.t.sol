@@ -3,7 +3,7 @@ pragma solidity 0.8.35;
 
 import {Test} from "forge-std/Test.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
-import {XcashVaultSlotTemplate} from "../src/XcashVaultSlotTemplate.sol";
+import {XcashVaultSlot} from "../src/XcashVaultSlot.sol";
 import {XcashVaultSlotFactory} from "../src/XcashVaultSlotFactory.sol";
 import {MockERC20} from "./helpers/MockERC20.sol";
 
@@ -15,14 +15,14 @@ contract XcashVaultSlotFuzzTest is Test {
     XcashVaultSlotFactory internal factory;
 
     function setUp() public {
-        XcashVaultSlotTemplate vaultSlotTemplate = new XcashVaultSlotTemplate();
-        factory = new XcashVaultSlotFactory(address(vaultSlotTemplate));
+        XcashVaultSlot vaultSlotImplementation = new XcashVaultSlot();
+        factory = new XcashVaultSlotFactory(address(vaultSlotImplementation));
     }
 
     /// 任意正数金额下，receive 必须把 msg.value 全额转给 vault，slot 不留存。
     function testFuzz_receive_forwards_any_native_amount(uint256 amount) public {
         amount = bound(amount, 1, type(uint128).max);
-        XcashVaultSlotTemplate slot = _deployVaultSlot(vault, "fuzz-receive");
+        XcashVaultSlot slot = _deployVaultSlot(vault, "fuzz-receive");
         address payer = address(0xA11CE);
         vm.deal(payer, amount);
 
@@ -37,7 +37,7 @@ contract XcashVaultSlotFuzzTest is Test {
     /// 任意正数余额下，collect(native) 必须清空 slot 并全额转给 vault。
     function testFuzz_collect_native_sweeps_full_balance(uint256 amount) public {
         amount = bound(amount, 1, type(uint128).max);
-        XcashVaultSlotTemplate slot = _deployVaultSlot(vault, "fuzz-collect-native");
+        XcashVaultSlot slot = _deployVaultSlot(vault, "fuzz-collect-native");
         vm.deal(address(slot), amount);
 
         slot.collect(address(0));
@@ -49,7 +49,7 @@ contract XcashVaultSlotFuzzTest is Test {
     /// 任意正数余额下，collect(erc20) 必须把全部代币转给 vault。
     function testFuzz_collect_erc20_sweeps_full_balance(uint256 amount) public {
         amount = bound(amount, 1, type(uint128).max);
-        XcashVaultSlotTemplate slot = _deployVaultSlot(vault, "fuzz-collect-erc20");
+        XcashVaultSlot slot = _deployVaultSlot(vault, "fuzz-collect-erc20");
         MockERC20 token = new MockERC20();
         token.mint(address(slot), amount);
 
@@ -68,7 +68,7 @@ contract XcashVaultSlotFuzzTest is Test {
         vm.assume(vaultArg.code.length == 0); // 无代码地址恒可收原生币，排除会 revert 的合约
         amount = bound(amount, 1, type(uint128).max);
 
-        XcashVaultSlotTemplate slot = _deployVaultSlot(payable(vaultArg), "fuzz-any-vault");
+        XcashVaultSlot slot = _deployVaultSlot(payable(vaultArg), "fuzz-any-vault");
         uint256 balanceBefore = vaultArg.balance;
         vm.deal(address(slot), amount);
 
@@ -91,7 +91,10 @@ contract XcashVaultSlotFuzzTest is Test {
     }
 
     /// 同一 vault 下，任意两个不同 salt 必须派生出不同的 slot 地址。
-    function testFuzz_distinct_salts_yield_distinct_slots(bytes32 saltA, bytes32 saltB) public view {
+    function testFuzz_distinct_salts_yield_distinct_slots(bytes32 saltA, bytes32 saltB)
+        public
+        view
+    {
         vm.assume(saltA != saltB);
 
         address slotA = _predict(vault, saltA);
@@ -102,16 +105,14 @@ contract XcashVaultSlotFuzzTest is Test {
 
     function _deployVaultSlot(address payable vault_, string memory saltLabel)
         private
-        returns (XcashVaultSlotTemplate)
+        returns (XcashVaultSlot)
     {
-        return XcashVaultSlotTemplate(
-            payable(factory.deployVaultSlot(vault_, keccak256(bytes(saltLabel))))
-        );
+        return XcashVaultSlot(payable(factory.deployVaultSlot(vault_, keccak256(bytes(saltLabel)))));
     }
 
     function _predict(address payable vault_, bytes32 salt) private view returns (address) {
         return Clones.predictDeterministicAddressWithImmutableArgs(
-            factory.vaultSlotTemplate(), abi.encodePacked(vault_), salt, address(factory)
+            factory.vaultSlotImplementation(), abi.encodePacked(vault_), salt, address(factory)
         );
     }
 }

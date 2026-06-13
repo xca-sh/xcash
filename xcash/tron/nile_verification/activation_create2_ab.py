@@ -13,7 +13,7 @@ from verification_common import sign_and_broadcast
 from verification_common import wait_tx_info
 
 # collect(address(0)) 的原生币零地址。build_vault_slot_collect_intent 内部会把它
-# ABI 编码成 address(0)，命中 XcashVaultSlotTemplate.collect 的原生币分支。
+# ABI 编码成 address(0)，命中 XcashVaultSlot.collect 的原生币分支。
 NATIVE_TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
@@ -48,7 +48,7 @@ def main() -> None:
     owner = env_required("TRON_NILE_OWNER_ADDRESS")
     private_key = env_required("TRON_NILE_PRIVATE_KEY")
     factory = env_required("TRON_VAULT_SLOT_FACTORY_ADDRESS")
-    template = env_required("TRON_VAULT_SLOT_TEMPLATE_ADDRESS")
+    implementation = env_required("TRON_VAULT_SLOT_IMPLEMENTATION_ADDRESS")
     vault = nile_vault_address(owner_address=owner)
     token = env_required("TRON_USDT_CONTRACT_ADDRESS")
     fee_limit = env_int("TRON_VAULT_SLOT_FEE_LIMIT", 300_000_000)
@@ -59,7 +59,7 @@ def main() -> None:
         vault=vault,
         salt=salt,
         factory=factory,
-        vault_slot_template=template,
+        vault_slot_implementation=implementation,
     )
     emit(f"case={args.case}")
     emit(f"salt_hex={salt.hex()}")

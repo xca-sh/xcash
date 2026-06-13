@@ -36,7 +36,7 @@ def main() -> None:
     owner = env_required("TRON_NILE_OWNER_ADDRESS")
     private_key = env_required("TRON_NILE_PRIVATE_KEY")
     factory = env_required("TRON_VAULT_SLOT_FACTORY_ADDRESS")
-    template = env_required("TRON_VAULT_SLOT_TEMPLATE_ADDRESS")
+    implementation = env_required("TRON_VAULT_SLOT_IMPLEMENTATION_ADDRESS")
     vault = nile_vault_address(owner_address=owner)
     salt_hex = env_required("TRON_VAULT_SLOT_SALT_HEX")
     salt = bytes.fromhex(salt_hex.removeprefix("0x"))
@@ -44,7 +44,7 @@ def main() -> None:
         vault=vault,
         salt=salt,
         factory=factory,
-        vault_slot_template=template,
+        vault_slot_implementation=implementation,
     )
     configured_slot = env_optional("TRON_VAULT_SLOT_ADDRESS")
     if configured_slot and configured_slot != expected_slot:

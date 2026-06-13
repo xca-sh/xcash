@@ -13,9 +13,9 @@ deps:
 build: deps
 	$(FORGE) build --offline
 	@mkdir -p artifacts
-	@cp out/XcashVaultSlotTemplate.sol/XcashVaultSlotTemplate.json artifacts/XcashVaultSlotTemplate.json
-	@python3 -c "import json; d=json.load(open('artifacts/XcashVaultSlotTemplate.json')); print(d['bytecode']['object'])" > artifacts/XcashVaultSlotTemplate.bin
-	@python3 -c "import json; d=json.load(open('artifacts/XcashVaultSlotTemplate.json')); print(json.dumps(d['abi'], indent=2, ensure_ascii=False))" > artifacts/XcashVaultSlotTemplate.abi.json
+	@cp out/XcashVaultSlot.sol/XcashVaultSlot.json artifacts/XcashVaultSlot.json
+	@python3 -c "import json; d=json.load(open('artifacts/XcashVaultSlot.json')); print(d['bytecode']['object'])" > artifacts/XcashVaultSlot.bin
+	@python3 -c "import json; d=json.load(open('artifacts/XcashVaultSlot.json')); print(json.dumps(d['abi'], indent=2, ensure_ascii=False))" > artifacts/XcashVaultSlot.abi.json
 	@cp out/XcashVaultSlotFactory.sol/XcashVaultSlotFactory.json artifacts/XcashVaultSlotFactory.json
 	@python3 -c "import json; d=json.load(open('artifacts/XcashVaultSlotFactory.json')); print(d['bytecode']['object'])" > artifacts/XcashVaultSlotFactory.bin
 	@python3 -c "import json; d=json.load(open('artifacts/XcashVaultSlotFactory.json')); print(json.dumps(d['abi'], indent=2, ensure_ascii=False))" > artifacts/XcashVaultSlotFactory.abi.json
