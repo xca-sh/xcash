@@ -147,8 +147,8 @@ TRON_CHAIN_CODES: tuple[str, ...] = tuple(
 TRON_VAULT_SLOT_CONTRACT_ADDRESSES: dict[str, VaultSlotContractAddresses] = {
     ChainCode.Tron: VaultSlotContractAddresses(),
     ChainCode.Nile: VaultSlotContractAddresses(
-        factory="TT6P5YyGYwfDyc4SE6HhQLyCsXcv7M9FyV",
-        implementation="THYuW8NBNSCAEN7UFqhz385vsYGssncsHz",
+        factory="THLZfngQPW5zMcxCnaS7CPKuTESD3JMmu8",
+        implementation="TVWbugJAKxAxBMKPap7iZDZn6iYvmFwoUX",
     ),
 }
 

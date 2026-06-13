@@ -121,13 +121,53 @@ class TronAdapterTests(SimpleTestCase):
     def test_is_contract_reads_contract_payload(self, client_cls):
         from tron.adapter import TronAdapter
 
-        client_cls.return_value.get_contract.return_value = {"bytecode": "00"}
+        client_cls.return_value.get_contract.return_value = {
+            "bytecode": "00",
+            "code_hash": "ab",
+        }
         chain = SimpleNamespace(code="tron", tron_api_key="")
 
         self.assertTrue(
             TronAdapter().is_contract(
                 chain,
                 "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+            )
+        )
+
+    @patch("tron.adapter.TronHttpClient")
+    def test_is_contract_true_for_create2_clone_without_bytecode(self, client_cls):
+        # Tron 的 wallet/getcontract 对 CREATE2 内部创建的 clone 不回填 bytecode/abi，
+        # 只回填 code_hash。VaultSlot 全部是工厂 CREATE2 clone，必须据 code_hash 判活，
+        # 否则已部署 slot 会被误判为未部署，触发重复部署（CREATE2 撞地址 revert 烧 gas）
+        # 与归集前置闸门空转。
+        from tron.adapter import TronAdapter
+
+        client_cls.return_value.get_contract.return_value = {
+            "abi": "",
+            "code_hash": "9f3c",
+            "contract_address": "TVYuZLAUCSLWaydSC67KQQcqKvkRiHa6G9",
+        }
+        chain = SimpleNamespace(code="tron", tron_api_key="")
+
+        self.assertTrue(
+            TronAdapter().is_contract(
+                chain,
+                "TVYuZLAUCSLWaydSC67KQQcqKvkRiHa6G9",
+            )
+        )
+
+    @patch("tron.adapter.TronHttpClient")
+    def test_is_contract_false_for_undeployed_address(self, client_cls):
+        # 未部署的反事实地址：wallet/getcontract 返回空 payload，无 code_hash。
+        from tron.adapter import TronAdapter
+
+        client_cls.return_value.get_contract.return_value = {}
+        chain = SimpleNamespace(code="tron", tron_api_key="")
+
+        self.assertFalse(
+            TronAdapter().is_contract(
+                chain,
+                "TMrsM1EyGrm5W8c1e2aQHFUrwKbneQEjnX",
             )
         )
 

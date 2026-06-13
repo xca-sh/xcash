@@ -25,7 +25,11 @@ class TronAdapter(AdapterInterface):
             payload = TronHttpClient(chain=chain).get_contract(address=address)
         except TronClientError:
             return False
-        return bool(payload.get("bytecode") or payload.get("abi"))
+        # wallet/getcontract 只对顶层 DeployContract 部署回填 bytecode/abi；工厂用
+        # CREATE2 内部创建的 VaultSlot clone 不带这两个字段，只回填 code_hash。非合约
+        # 地址（EOA / 未部署的反事实地址）返回空 payload，code_hash 缺失。故以 code_hash
+        # 作为「链上存在合约代码」的判据，同时覆盖顶层合约与 CREATE2 clone 两种部署。
+        return bool(payload.get("code_hash"))
 
     def get_balance(self, address, chain, crypto) -> int:
         if not self.validate_address(address):
