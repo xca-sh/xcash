@@ -80,7 +80,10 @@ class TronAdapter(AdapterInterface):
             block_number=block_number,
         )
         result = receipt.get("result")
-        if result == "SUCCESS":
+        # 原生 TRX TransferContract 成功回执可能没有 result；tx 已入块即视为成功。
+        if result in (None, "", "SUCCESS"):
+            if block_number is None:
+                return TxCheckStatus.MISSING
             return TxCheckResult(
                 status=TxCheckStatus.SUCCEEDED,
                 block_number=block_number,

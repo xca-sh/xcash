@@ -43,7 +43,9 @@ from chains.models import Address
 from chains.models import AddressUsage
 from chains.models import Chain
 from chains.models import ChainType
+from chains.models import ConfirmMode
 from chains.models import Transfer
+from chains.models import TransferStatus
 from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
@@ -193,6 +195,88 @@ class TronAdapterTests(SimpleTestCase):
                 block_hash="b" * 64,
             ),
         )
+
+    @patch("tron.adapter.TronHttpClient")
+    def test_tx_result_treats_confirmed_native_transfer_without_result_as_success(
+        self, client_cls
+    ):
+        from tron.adapter import TronAdapter
+
+        client = client_cls.return_value
+        client.get_transaction_info_by_id.return_value = {
+            "id": "a" * 64,
+            "blockNumber": 123,
+            "receipt": {"net_usage": 268},
+        }
+        client.get_solid_block_id.return_value = "b" * 64
+
+        result = TronAdapter().tx_result(SimpleNamespace(code="tron"), "a" * 64)
+
+        self.assertEqual(
+            result,
+            TxCheckResult(
+                status=TxCheckStatus.SUCCEEDED,
+                block_number=123,
+                block_hash="b" * 64,
+            ),
+        )
+
+    @patch("tron.adapter.TronHttpClient")
+    def test_tx_result_without_result_and_block_number_stays_missing(self, client_cls):
+        from tron.adapter import TronAdapter
+
+        client = client_cls.return_value
+        client.get_transaction_info_by_id.return_value = {
+            "id": "a" * 64,
+            "receipt": {"net_usage": 268},
+        }
+
+        result = TronAdapter().tx_result(SimpleNamespace(code="tron"), "a" * 64)
+
+        self.assertEqual(result, TxCheckStatus.MISSING)
+
+
+class TronTransferConfirmationTests(TestCase):
+    @patch("tron.adapter.TronHttpClient")
+    def test_confirm_transfer_accepts_native_receipt_without_result(
+        self, client_cls
+    ):
+        from chains.tasks import confirm_transfer
+
+        chain = Chain.objects.create(
+            code=ChainCode.Tron,
+            tron_api_key="tron-key",
+            active=True,
+            latest_block_number=200,
+        )
+        transfer = Transfer.objects.create(
+            chain=chain,
+            block=100,
+            block_hash="b" * 64,
+            hash="a" * 64,
+            crypto=chain.native_coin,
+            from_address="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            to_address="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+            value=Decimal("1000000"),
+            amount=Decimal("1"),
+            timestamp=1_700_000_000,
+            datetime=timezone.now(),
+            status=TransferStatus.CONFIRMING,
+            confirm_mode=ConfirmMode.FULL,
+            processed_at=timezone.now(),
+        )
+        client = client_cls.return_value
+        client.get_transaction_info_by_id.return_value = {
+            "id": "a" * 64,
+            "blockNumber": 100,
+            "receipt": {"net_usage": 268},
+        }
+        client.get_solid_block_id.return_value = "b" * 64
+
+        confirm_transfer.run(transfer.pk)
+
+        transfer.refresh_from_db()
+        self.assertEqual(transfer.status, TransferStatus.CONFIRMED)
 
 
 @override_settings(TRON_RPC_TIMEOUT=3.0)
