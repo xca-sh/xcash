@@ -47,7 +47,8 @@ def create_active_evm_test_chain(*, code=ChainCode.BSC) -> Chain:
 
 
 class EvmErc20ScanWindowTests(SimpleTestCase):
-    def test_erc20_compute_scan_window_initial_cursor_starts_from_first_batch(self):
+    def test_erc20_compute_scan_window_initial_cursor_anchors_to_chain_head(self):
+        # 新建游标只从当前链头开始观测，绝不从创世块全量回扫历史日志。
         cursor = EvmScanCursor(last_scanned_block=0)
         from_block, to_block = EvmLogScanner._compute_scan_window(
             cursor=cursor,
@@ -55,8 +56,8 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
             batch_size=100,
         )
 
-        self.assertEqual(from_block, 1)
-        self.assertEqual(to_block, 100)
+        self.assertEqual(from_block, 1999)
+        self.assertEqual(to_block, 1999)
 
     def test_erc20_compute_scan_window_batch_size_is_net_forward_progress(self):
         cursor = EvmScanCursor(last_scanned_block=1000)
@@ -260,7 +261,7 @@ class EvmErc20ScannerTests(TestCase):
         _get_block_timestamp_mock,
         _enqueue_processing_mock,
     ):
-        # 首次创建统一日志游标时从首个批次开始推进。
+        # 首次创建统一日志游标时锚定链头，只观测最新确认块，不回扫历史。
         get_latest_block_number_mock.return_value = 100
         get_logs_mock.return_value = []
 
@@ -269,7 +270,7 @@ class EvmErc20ScannerTests(TestCase):
         cursor = EvmScanCursor.objects.get(
             chain=self.chain,
         )
-        self.assertEqual(cursor.last_scanned_block, 32)
+        self.assertEqual(cursor.last_scanned_block, 99)
 
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_transaction_receipt")
@@ -313,7 +314,7 @@ class EvmErc20ScannerTests(TestCase):
             transfer.to_address, Web3.to_checksum_address(self.vault_slot.address)
         )
         self.assertEqual(transfer.amount, Decimal("1"))
-        self.assertEqual(cursor.last_scanned_block, 32)
+        self.assertEqual(cursor.last_scanned_block, 99)
 
     @patch("chains.service.TransferService.create_observed_transfer")
     def test_scan_range_skips_malformed_erc20_logs_without_blocking_batch(
@@ -908,7 +909,7 @@ class EvmErc20ScannerTests(TestCase):
             chain=self.chain,
         )
         self.assertIsNone(result)
-        self.assertEqual(cursor.last_scanned_block, 32)
+        self.assertEqual(cursor.last_scanned_block, 99)
         self.assertEqual(get_logs_mock.call_count, 1)
         self.assertIsNone(get_logs_mock.call_args.kwargs["addresses"])
 

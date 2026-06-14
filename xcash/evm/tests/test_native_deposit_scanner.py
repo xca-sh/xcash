@@ -22,7 +22,8 @@ from projects.models import Project
 
 
 class EvmNativeDepositScanWindowTests(SimpleTestCase):
-    def test_native_compute_scan_window_initial_cursor_starts_from_first_batch(self):
+    def test_native_compute_scan_window_initial_cursor_anchors_to_chain_head(self):
+        # 新建游标只从当前链头开始观测，绝不从创世块全量回扫历史日志。
         cursor = EvmScanCursor(last_scanned_block=0)
         from_block, to_block = EvmLogScanner._compute_scan_window(
             cursor=cursor,
@@ -30,8 +31,8 @@ class EvmNativeDepositScanWindowTests(SimpleTestCase):
             batch_size=100,
         )
 
-        self.assertEqual(from_block, 1)
-        self.assertEqual(to_block, 100)
+        self.assertEqual(from_block, 1999)
+        self.assertEqual(to_block, 1999)
 
     def test_native_compute_scan_window_batch_size_is_net_forward_progress(self):
         cursor = EvmScanCursor(last_scanned_block=1000)
@@ -339,6 +340,7 @@ class EvmLogScannerTests(TestCase):
 
         cursor = EvmScanCursor.objects.get(chain=self.chain)
         self.assertIsNone(result)
-        self.assertEqual(cursor.last_scanned_block, 32)
+        # 首扫锚定链头：latest=200 时仅观测最新确认块 199。
+        self.assertEqual(cursor.last_scanned_block, 199)
         get_logs_mock.assert_called_once()
         self.assertIsNone(get_logs_mock.call_args.kwargs["addresses"])

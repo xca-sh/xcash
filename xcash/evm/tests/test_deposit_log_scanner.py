@@ -161,15 +161,16 @@ class EvmLogScannerTests(TestCase):
 
         self.assertEqual(EvmScanCursor.objects.filter(chain=self.chain).count(), 1)
         cursor = EvmScanCursor.objects.get(chain=self.chain)
-        self.assertEqual(cursor.last_scanned_block, 32)
+        # 首扫锚定链头：latest=100 时仅观测最新确认块 99。
+        self.assertEqual(cursor.last_scanned_block, 99)
         self.assertIsNone(result)
         self.assertEqual(Transfer.objects.count(), 2)
         log_calls = [call.kwargs for call in get_logs_mock.call_args_list]
         self.assertEqual(len(log_calls), 2)
         self.assertIn(
             {
-                "from_block": 1,
-                "to_block": 32,
+                "from_block": 99,
+                "to_block": 99,
                 "addresses": None,
                 "topic0": XCASH_NATIVE_RECEIVED_TOPIC0,
                 "summary": "获取 EVM Xcash 原生币入账日志失败",
@@ -178,8 +179,8 @@ class EvmLogScannerTests(TestCase):
         )
         self.assertIn(
             {
-                "from_block": 1,
-                "to_block": 32,
+                "from_block": 99,
+                "to_block": 99,
                 "addresses": [self.token_on_chain.address],
                 "topic0": ERC20_TRANSFER_TOPIC0,
                 "summary": "获取 EVM ERC20 Transfer 日志失败",
@@ -202,20 +203,21 @@ class EvmLogScannerTests(TestCase):
         result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
         cursor = EvmScanCursor.objects.get(chain=self.chain)
-        self.assertEqual(cursor.last_scanned_block, 32)
+        # 首扫锚定链头：latest=120 时仅观测最新确认块 119。
+        self.assertEqual(cursor.last_scanned_block, 119)
         self.assertIsNone(result)
         get_logs_mock.assert_has_calls(
             [
                 call(
-                    from_block=1,
-                    to_block=32,
+                    from_block=119,
+                    to_block=119,
                     addresses=None,
                     topic0=XCASH_NATIVE_RECEIVED_TOPIC0,
                     summary="获取 EVM Xcash 原生币入账日志失败",
                 ),
                 call(
-                    from_block=1,
-                    to_block=32,
+                    from_block=119,
+                    to_block=119,
                     addresses=[self.token_on_chain.address],
                     topic0=ERC20_TRANSFER_TOPIC0,
                     summary="获取 EVM ERC20 Transfer 日志失败",

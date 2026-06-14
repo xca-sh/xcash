@@ -237,22 +237,22 @@ class EvmLogScanner:
         latest_block: int,
         batch_size: int,
     ) -> tuple[int, int] | None:
-        """根据游标和批次大小算出本轮扫描区间；永远只扫到最新块前一块。"""
+        """根据游标和批次大小算出本轮扫描区间；永远只扫到最新块前一块。
+
+        新建游标（last_scanned_block<=0）只把扫描起点锚定到当前链头，绝不从
+        创世块全量回扫历史日志：首轮仅观测最新确认块，之后再按批次正向推进。
+        """
         target_block = latest_block - 1
         if target_block <= 0:
             return None
 
+        # 首次扫描：游标尚未锚定，直接对齐链头，避免从区块 1 全量回扫历史。
         if cursor.last_scanned_block <= 0:
-            base_from_block = 1
-        else:
-            base_from_block = cursor.last_scanned_block + 1
+            return target_block, target_block
 
         forward_batch_size = max(1, batch_size)
-        if cursor.last_scanned_block > 0:
-            to_block = min(target_block, cursor.last_scanned_block + forward_batch_size)
-        else:
-            to_block = min(target_block, base_from_block + forward_batch_size - 1)
-        from_block = max(1, base_from_block - LOG_SCAN_REPLAY_BLOCKS)
+        to_block = min(target_block, cursor.last_scanned_block + forward_batch_size)
+        from_block = max(1, cursor.last_scanned_block + 1 - LOG_SCAN_REPLAY_BLOCKS)
         if from_block > to_block:
             return None
         return from_block, to_block
