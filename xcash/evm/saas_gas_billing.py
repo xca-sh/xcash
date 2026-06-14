@@ -70,9 +70,9 @@ def _load_receipt_and_tx(*, chain: Chain, tx_hash: str) -> tuple[dict, dict | No
         raise TransactionNotFound(tx_hash)
     try:
         tx = chain.w3.eth.get_transaction(tx_hash)  # noqa: SLF001
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa
         tx = None
-    return dict(receipt), dict(tx) if tx is not None else None
+    return dict(receipt), dict(tx) if tx is not None else None  # noqa
 
 
 def _build_tx_detail(*, chain: Chain, tx_hash: str) -> GasTxDetail:
@@ -119,8 +119,8 @@ def notify_vault_slot_deploy_gas_fee(*, tx_task: TxTask) -> None:
 
 
 def send_vault_slot_deploy_gas_fee(*, tx_task: TxTask) -> None:
-    slot = (
-        VaultSlot.objects.select_related("project", "chain").get(deploy_tx_task=tx_task)
+    slot = VaultSlot.objects.select_related("project", "chain").get(
+        deploy_tx_task=tx_task
     )
     tx_detail = _build_tx_detail(chain=slot.chain, tx_hash=tx_task.tx_hash)
     send_saas_callback(
@@ -187,7 +187,7 @@ def retry_vault_slot_deploy_gas_fee(self, tx_task_id: int) -> None:
             error=str(exc),
             retry=self.request.retries,  # noqa
         )
-        raise self.retry(
+        raise self.retry(  # noqa
             exc=exc,
             countdown=GAS_FEE_CALLBACK_RETRY_BACKOFF_SECONDS
             * (2**self.request.retries),  # noqa
@@ -207,7 +207,7 @@ def retry_vault_slot_collect_gas_fee(self, tx_task_id: int) -> None:
             error=str(exc),
             retry=self.request.retries,  # noqa
         )
-        raise self.retry(
+        raise self.retry(  # noqa
             exc=exc,
             countdown=GAS_FEE_CALLBACK_RETRY_BACKOFF_SECONDS
             * (2**self.request.retries),  # noqa
