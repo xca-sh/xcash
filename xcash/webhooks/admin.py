@@ -6,7 +6,6 @@ from unfold.decorators import display
 
 from common.admin import ReadOnlyModelAdmin
 from core.monitoring import OperationalRiskService
-from projects.models import Project
 from webhooks.models import DeliveryAttempt
 from webhooks.models import WebhookEvent
 
@@ -122,13 +121,8 @@ class WebhookEventAdmin(ReadOnlyModelAdmin):
     @admin.action(description=_("重新投递"))
     def mark_as_pending(self, request, queryset):
         queryset = queryset.filter(status=WebhookEvent.Status.FAILED)
-        project_pks = list(queryset.values_list("project", flat=True).distinct())
-        # Bug Fix 4：重置熔断状态时必须同时清零 failed_count，否则下次失败立刻再次触发熔断。
-        # Bug Fix 5（轻微）：改为批量 update，消除 N+1 查询。
-        Project.objects.filter(pk__in=project_pks).update(
-            webhook_open=True, failed_count=0
-        )
-        # 清除调度/投递锁，避免事件在退避窗口或旧 worker claim 内仍被跳过
+        # 重新投递只影响选中的事件；Project.webhook_open 是商户/管理员开关。
+        # 清除调度/投递锁，避免事件在退避窗口或旧 worker claim 内仍被跳过。
         queryset.update(
             status=WebhookEvent.Status.PENDING,
             schedule_locked_until=None,

@@ -35,7 +35,6 @@ class SystemSettingsAdmin(ModelAdmin):
             "Webhook 投递",
             {
                 "fields": (
-                    "webhook_delivery_breaker_threshold",
                     "webhook_delivery_max_retries",
                     "webhook_delivery_max_backoff_seconds",
                 )

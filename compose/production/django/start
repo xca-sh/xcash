@@ -20,5 +20,6 @@ exec gunicorn config.wsgi:application \
   --worker-class gthread \
   --workers "${GUNICORN_WORKERS}" \
   --threads "${GUNICORN_THREADS}" \
+  --no-control-socket \
   --max-requests 1000 \
   --max-requests-jitter 200

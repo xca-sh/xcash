@@ -127,7 +127,6 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
             "name",
             "webhook",
             "webhook_open",
-            "failed_count",
             "ip_white_list",
             "hmac_key",
             "fast_confirm_threshold",

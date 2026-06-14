@@ -403,7 +403,6 @@ signature = HMAC-SHA256(message, hmac_key).hexdigest()
 - EPay V1 通知成功响应：HTTP `200`，响应体去除首尾空白后等于 `success`。
 - 单次 HTTP 请求超时为 5 秒。
 - 只有网络错误或 5xx 会按指数退避重试；2xx 非 200、3xx、4xx 不重试。
-- 连续失败达到系统阈值后，项目 Webhook 会被熔断关闭。
 
 ### 账单收款 Webhook
 

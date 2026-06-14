@@ -31,12 +31,6 @@ class SystemSettings(models.Model):
         validators=[MinValueValidator(1)],
         help_text=_("管理员登录后台后，超过该时间无操作需重新登录。"),
     )
-    webhook_delivery_breaker_threshold = models.PositiveIntegerField(
-        _("Webhook 熔断阈值"),
-        default=30,
-        validators=[MinValueValidator(1)],
-        help_text=_("连续失败达到该次数后，自动关闭项目 Webhook 投递。"),
-    )
     webhook_delivery_max_retries = models.PositiveIntegerField(
         _("Webhook 最大重试次数"),
         default=5,

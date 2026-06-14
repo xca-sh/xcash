@@ -804,10 +804,6 @@ msgstr "Used by this gateway to send notifications to your project backend"
 msgid "通知状态"
 msgstr "Event status"
 
-#: xcash/projects/models.py:58
-msgid "连续失败次数"
-msgstr "Failed count"
-
 #: xcash/projects/models.py:61
 msgid "开启预通知"
 msgstr "Enable pre-notification"

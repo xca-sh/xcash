@@ -39,7 +39,6 @@ from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from core.models import SystemSettings
 from core.models import SystemWallet
 from core.monitoring import OperationalRiskService
-from core.runtime_settings import get_webhook_delivery_breaker_threshold
 from core.runtime_settings import get_webhook_delivery_max_backoff_seconds
 from core.runtime_settings import get_webhook_delivery_max_retries
 from currencies.models import CryptoOnChain
@@ -70,12 +69,10 @@ class SystemSettingsRuntimeTests(TestCase):
     def test_runtime_settings_use_database_override_before_settings_fallback(self):
         # 系统运行参数中心存在记录时，业务读取应优先采用数据库值，而不是继续回退到 settings 常量。
         SystemSettings.objects.create(
-            webhook_delivery_breaker_threshold=12,
             webhook_delivery_max_retries=9,
             webhook_delivery_max_backoff_seconds=45,
         )
 
-        self.assertEqual(get_webhook_delivery_breaker_threshold(), 12)
         self.assertEqual(get_webhook_delivery_max_retries(), 9)
         self.assertEqual(get_webhook_delivery_max_backoff_seconds(), 45)
 

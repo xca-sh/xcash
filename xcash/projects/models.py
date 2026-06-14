@@ -52,10 +52,6 @@ class Project(models.Model):
         help_text=_("用于本网关发送通知到商户后端"),
     )
     webhook_open = models.BooleanField(verbose_name=_("通知状态"), default=True)
-    failed_count = models.PositiveIntegerField(
-        default=0,
-        verbose_name=_("连续失败次数"),
-    )
     fast_confirm_threshold = models.DecimalField(
         max_digits=10,
         decimal_places=2,

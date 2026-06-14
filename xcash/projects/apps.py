@@ -6,6 +6,3 @@ class ProjectsConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "projects"
     verbose_name = _("项目")
-
-    def ready(self):
-        import projects.signals  # noqa

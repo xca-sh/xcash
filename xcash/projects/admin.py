@@ -35,7 +35,6 @@ class ProjectForm(forms.ModelForm):
             "ip_white_list",
             "webhook",
             "webhook_open",
-            "failed_count",
             "fast_confirm_threshold",
             "hmac_key",
             "evm_vault",
@@ -199,7 +198,6 @@ class ProjectAdmin(ModelAdmin):
         "display_ready_status",
         "display_environment",
         "webhook",
-        "failed_count",
         "webhook_open",
         "active",
     )
@@ -235,7 +233,6 @@ class ProjectAdmin(ModelAdmin):
         if obj:  # 修改项目
             readonly_fields = (
                 "appid",
-                "failed_count",
                 "display_ready_detail",
             )
             if obj.evm_vault:
@@ -309,7 +306,6 @@ class ProjectAdmin(ModelAdmin):
             {
                 "fields": (
                     "webhook",
-                    "failed_count",
                     "webhook_open",
                 ),
             },

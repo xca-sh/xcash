@@ -38,13 +38,6 @@ def get_admin_session_timeout_seconds() -> int:
     return 10 * 60
 
 
-def get_webhook_delivery_breaker_threshold() -> int:
-    system_settings = get_system_settings()
-    if system_settings is not None:
-        return int(system_settings.webhook_delivery_breaker_threshold)
-    return 30
-
-
 def get_webhook_delivery_max_retries() -> int:
     system_settings = get_system_settings()
     if system_settings is not None:

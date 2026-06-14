@@ -19,10 +19,8 @@ from common.consts import SIGNATURE_HEADER
 from common.consts import TIMESTAMP_HEADER
 from common.crypto import calc_hmac
 from common.decorators import singleton_task
-from core.runtime_settings import get_webhook_delivery_breaker_threshold
 from core.runtime_settings import get_webhook_delivery_max_backoff_seconds
 from core.runtime_settings import get_webhook_delivery_max_retries
-from projects.models import Project
 from webhooks.models import DeliveryAttempt
 from webhooks.models import WebhookEvent
 
@@ -159,7 +157,7 @@ def _execute_http_delivery(
                     buf.extend(chunk)
                 resp_text = bytes(buf).decode("utf-8", errors="replace")
             # 商户的 PHP/Java 框架 echo "success" 时常带回车 / BOM / 前后空白，
-            # 严格相等会把这些合法响应判为失败、触发重试与误熔断；strip 后精确匹配
+            # 严格相等会把这些合法响应判为失败、触发重试；strip 后精确匹配
             # 兼顾兼容性与匹配严格度（仍区分大小写、不允许中间夹杂内容）。
             ok = status_code == 200 and resp_text.strip() == expected_response_body
     except httpx.RequestError as e:
@@ -207,7 +205,7 @@ def deliver_event(event_pk):
     project = event.project
     target_url = event.delivery_url or project.webhook
 
-    # 同时检查熔断开关和投递地址是否已配置
+    # 同时检查商户通知开关和投递地址是否已配置
     if not project.webhook_open or not target_url:
         reason = (
             "Endpoint not open."
@@ -285,43 +283,20 @@ def deliver_event(event_pk):
         )
 
         if ok:
-            # 投递成功：标记事件完成，重置熔断计数
+            # 投递成功只完成当前事件。Project.webhook_open 是商户/管理员开关，
+            # 不由单次投递结果自动改写。
             WebhookEvent.objects.filter(pk=event_pk).update(
                 status=WebhookEvent.Status.SUCCEEDED,
                 last_error="",
                 delivered_at=timezone.now(),
                 delivery_locked_until=None,
             )
-            # 使用 select_for_update 与失败路径保持一致，防止并发投递时成功路径的无锁重置覆盖失败路径的计数累加
-            locked_project = (
-                Project.objects.select_for_update()
-                .only("failed_count", "webhook_open")
-                .get(pk=project.pk)
-            )
-            Project.objects.filter(pk=locked_project.pk).update(
-                webhook_open=True, failed_count=0
-            )
             return
-
-        # 失败：累加失败计数，超过阈值则触发熔断
-        locked_project = (
-            Project.objects.select_for_update()
-            .only("failed_count", "webhook_open")
-            .get(pk=project.pk)
-        )
-        locked_project.failed_count += 1
-        if locked_project.failed_count >= get_webhook_delivery_breaker_threshold():
-            locked_project.webhook_open = False
-        Project.objects.filter(pk=locked_project.pk).update(
-            failed_count=locked_project.failed_count,
-            webhook_open=locked_project.webhook_open,
-        )
 
         # 仅 5xx / 网络错误可重试；2xx(非200)、3xx、4xx 均视为不可恢复
         retryable = (
             (status_code is None or status_code >= 500)
             and try_number < get_webhook_delivery_max_retries()
-            and locked_project.webhook_open
         )
         error_msg = err_text or f"status={status_code}"
         if retryable:
