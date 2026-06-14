@@ -115,9 +115,6 @@ function SummaryBar({ invoice, isDark, toggleTheme }) {
               </span>
             )}
           </div>
-          {invoice?.title && (
-            <div className="text-xs text-muted-foreground truncate mt-0.5">{invoice.title}</div>
-          )}
           <div className="mt-1 flex min-w-0 flex-wrap items-center justify-center gap-x-2 gap-y-1">
             <Badge variant={variant} className="shrink-0">
               {PULSING.has(displayStatus) && (
