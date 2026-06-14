@@ -86,6 +86,7 @@ function PaymentStepper({
   }, [naturalStep])
 
   const handleStepClick = (step) => {
+    if (isCompleted) return
     if (step >= naturalStep) return
     if (!isSingleMethod && step === 1 && naturalStep >= 2) {
       resetSelection()
@@ -112,6 +113,7 @@ function PaymentStepper({
             naturalStep={naturalStep}
             onStepClick={handleStepClick}
             stepCount={stepCount}
+            lockBack={isCompleted}
           />
         </div>
 

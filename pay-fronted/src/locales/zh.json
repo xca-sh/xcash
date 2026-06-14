@@ -11,12 +11,14 @@
   },
   "invoice": {
     "title": "账单收款详情",
-    "stepLabel": "账单收款",
+    "stepLabel": "账单",
     "completedLabel": "完成",
+    "basicInfo": "账单信息",
+    "subject": "账单",
     "orderNumber": "订单号",
     "systemNumber": "系统单号",
     "amountDue": "应付金额",
-    "paymentToken": "账单收款代币",
+    "paymentToken": "账单收款加密货币",
     "blockchainNetwork": "区块链网络",
     "paymentIrreversible": "请仔细核对金额与订单信息，账单收款完成后无法撤销",
     "status": {
@@ -32,10 +34,10 @@
     "stepLabel": "账单收款方式",
     "sendLabel": "发送",
     "selectMethod": "选择账单收款方式",
-    "selectMethodDesc": "请选择您要使用的代币和网络",
+    "selectMethodDesc": "请选择您要使用的加密货币和网络",
     "step": "步骤",
-    "selectToken": "选择代币",
-    "selectTokenDesc": "选择账单收款使用的加密货币",
+    "selectToken": "选择加密货币",
+    "selectTokenDesc": "选择用于账单收款的加密货币",
     "selectNetwork": "选择网络",
     "selectNetworkDesc": "选择您钱包中可用的区块链网络",
     "gettingPaymentInfo": "正在获取账单收款信息...",
@@ -83,12 +85,12 @@
     "fetchFailed": "获取账单收款信息失败"
   },
   "selector": {
-    "noTokens": "暂无可用代币",
-    "selectToken": "选择账单收款代币",
+    "noTokens": "暂无可用加密货币",
+    "selectToken": "选择账单收款加密货币",
     "networks": "个网络",
     "selectNetwork": "选择区块链网络",
-    "selectTokenFirst": "请先选择代币",
-    "noNetworks": "该代币暂无可用网络",
+    "selectTokenFirst": "请先选择加密货币",
+    "noNetworks": "该加密货币暂无可用网络",
     "testNetwork": "测试网络",
     "mainNetwork": "主网络"
   }

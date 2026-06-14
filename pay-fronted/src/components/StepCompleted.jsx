@@ -12,6 +12,13 @@ function StepCompleted({ invoice }) {
   const progress = confirmingProgress.progress || 0
   const hasConfirmedCount = confirmingProgress.has_confirmed_count || 0
   const needConfirmedCount = confirmingProgress.need_confirmed_count || 0
+  const invoiceAmount = [invoice?.amount, invoice?.currency].filter(Boolean).join(" ")
+  const invoiceRows = [
+    invoice?.title && { label: t("invoice.subject"), value: invoice.title },
+    invoice?.out_no && { label: t("invoice.orderNumber"), value: invoice.out_no, mono: true },
+    invoice?.sys_no && { label: t("invoice.systemNumber"), value: invoice.sys_no, mono: true },
+    invoiceAmount && { label: t("invoice.amountDue"), value: invoiceAmount },
+  ].filter(Boolean)
 
   return (
     <div className="animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
@@ -31,6 +38,28 @@ function StepCompleted({ invoice }) {
               </p>
             </div>
           </div>
+
+          {/* Basic invoice info */}
+          {invoiceRows.length > 0 && (
+            <div className="bg-muted rounded-lg p-4 flex flex-col gap-3">
+              <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                {t("invoice.basicInfo")}
+              </div>
+              <dl className="flex flex-col gap-2">
+                {invoiceRows.map((row) => (
+                  <div key={row.label} className="grid grid-cols-[5rem_minmax(0,1fr)] gap-3 items-start">
+                    <dt className="text-xs text-muted-foreground">{row.label}</dt>
+                    <dd className={row.mono
+                      ? "text-right text-xs font-mono break-all"
+                      : "text-right text-sm font-medium break-all"}
+                    >
+                      {row.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          )}
 
           {/* Block confirmation progress */}
           <div className="bg-muted rounded-lg p-4 flex flex-col gap-2">

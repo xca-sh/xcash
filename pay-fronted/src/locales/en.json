@@ -13,10 +13,12 @@
     "title": "Invoice Details",
     "stepLabel": "Invoice",
     "completedLabel": "Completed",
+    "basicInfo": "Invoice Information",
+    "subject": "Invoice",
     "orderNumber": "Order Number",
     "systemNumber": "System Number",
     "amountDue": "Amount Due",
-    "paymentToken": "Payment Token",
+    "paymentToken": "Payment Cryptocurrency",
     "blockchainNetwork": "Blockchain Network",
     "paymentIrreversible": "Please verify the amount carefully. Payments cannot be reversed.",
     "status": {
@@ -32,9 +34,9 @@
     "stepLabel": "Method",
     "sendLabel": "Send",
     "selectMethod": "Select Payment Method",
-    "selectMethodDesc": "Please select the token and network you want to use",
+    "selectMethodDesc": "Please select the cryptocurrency and network you want to use",
     "step": "Step",
-    "selectToken": "Select Token",
+    "selectToken": "Select Cryptocurrency",
     "selectTokenDesc": "Choose the cryptocurrency you want to pay with",
     "selectNetwork": "Select Network",
     "selectNetworkDesc": "Choose the blockchain network available in your wallet",
@@ -83,12 +85,12 @@
     "fetchFailed": "Failed to fetch invoice information"
   },
   "selector": {
-    "noTokens": "No tokens available",
-    "selectToken": "Select payment token",
+    "noTokens": "No cryptocurrencies available",
+    "selectToken": "Select payment cryptocurrency",
     "networks": "networks",
     "selectNetwork": "Select blockchain network",
-    "selectTokenFirst": "Please select a token first",
-    "noNetworks": "No networks available for this token",
+    "selectTokenFirst": "Please select a cryptocurrency first",
+    "noNetworks": "No networks available for this cryptocurrency",
     "testNetwork": "Testnet",
     "mainNetwork": "Mainnet"
   }

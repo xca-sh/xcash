@@ -3,7 +3,7 @@ import { selectPayMethod } from "@/lib/api"
 
 /**
  * 支付方式选择 Hook
- * 负责管理代币和公链的选择及自动提交
+ * 负责管理加密货币和公链的选择及自动提交
  */
 export function usePaymentMethod(invoice, sysNo, onInvoiceUpdate) {
   const [selectedCrypto, setSelectedCrypto] = useState("")
@@ -19,7 +19,7 @@ export function usePaymentMethod(invoice, sysNo, onInvoiceUpdate) {
     setSelectedChain(invoice.chain ?? "")
   }, [invoice, isEditing])
 
-  // 选择代币时清空公链并进入编辑模式
+  // 选择加密货币时清空公链并进入编辑模式
   const handleCryptoChange = useCallback((value) => {
     setSelectedCrypto(value)
     setSelectedChain("")
@@ -51,7 +51,7 @@ export function usePaymentMethod(invoice, sysNo, onInvoiceUpdate) {
     }
   }, [sysNo, selectedCrypto, selectedChain, isSelecting, onInvoiceUpdate])
 
-  // 自动提交 - 当选择完代币和公链后
+  // 自动提交 - 当选择完加密货币和公链后
   useEffect(() => {
     if (!invoice || !selectedCrypto || !selectedChain || isSelecting) return
     if (invoice.status !== "waiting") return

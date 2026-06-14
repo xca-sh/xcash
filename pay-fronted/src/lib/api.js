@@ -49,7 +49,7 @@ export const selectPayMethod = async (sysNo, crypto, chain) => {
     })
     return await handleResponse(response, '设置支付方式失败')
   } catch (error) {
-    console.error('选择代币和公链失败:', error)
+    console.error('选择加密货币和公链失败:', error)
     throw error
   }
 }

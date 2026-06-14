@@ -39,7 +39,7 @@ function PaymentAddress({ invoice, onReset }) {
       return
     }
 
-    // EVM 账单优先用 EIP-681 URI（含链/代币/金额），扫码即预填，
+    // EVM 账单优先用 EIP-681 URI（含链/加密货币/金额），扫码即预填，
     // 大幅减少手输金额导致的「付款金额不符」；无 URI（如 Tron）时退回纯地址。
     const qrValue = invoice.payment_uri || invoice.pay_address
 
