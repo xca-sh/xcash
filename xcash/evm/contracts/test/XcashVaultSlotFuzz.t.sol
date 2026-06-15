@@ -19,8 +19,8 @@ contract XcashVaultSlotFuzzTest is Test {
         factory = new XcashVaultSlotFactory(address(vaultSlotImplementation));
     }
 
-    /// 任意正数金额下，receive 必须把 msg.value 全额转给 vault，slot 不留存。
-    function testFuzz_receive_forwards_any_native_amount(uint256 amount) public {
+    /// 任意正数金额下，receive 必须只记录入账并把原生币留在 slot。
+    function testFuzz_receive_records_any_native_amount(uint256 amount) public {
         amount = bound(amount, 1, type(uint128).max);
         XcashVaultSlot slot = _deployVaultSlot(vault, "fuzz-receive");
         address payer = address(0xA11CE);
@@ -30,8 +30,8 @@ contract XcashVaultSlotFuzzTest is Test {
         (bool ok,) = address(slot).call{value: amount}("");
 
         assertTrue(ok);
-        assertEq(vault.balance, amount);
-        assertEq(address(slot).balance, 0);
+        assertEq(vault.balance, 0);
+        assertEq(address(slot).balance, amount);
     }
 
     /// 任意正数余额下，collect(native) 必须清空 slot 并全额转给 vault。

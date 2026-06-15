@@ -1,13 +1,13 @@
-from decimal import Decimal
 import time
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core.cache import cache
 from django.db.models.deletion import ProtectedError
-from django.test import override_settings
 from django.test import SimpleTestCase
 from django.test import TestCase
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory
 from web3 import Web3
@@ -21,6 +21,7 @@ from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.models import VaultSlot
+from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.models import Wallet
 from chains.tests_fixtures import make_evm_chain
@@ -189,7 +190,7 @@ class DepositNotificationTests(TestCase):
 
     @patch("deposits.service.send_saas_callback")
     @patch("deposits.service.WebhookService.create_event")
-    def test_confirm_deposit_does_not_create_collect_task_for_native(
+    def test_confirm_deposit_schedules_collect_for_native(
         self, create_event_mock, send_saas_callback_mock
     ):
         context = create_deposit_context(native=True)
@@ -202,6 +203,10 @@ class DepositNotificationTests(TestCase):
         DepositService.confirm_deposit(deposit)
 
         self.assertFalse(EvmTxTask.objects.exists())
+        schedule = VaultSlotCollectSchedule.objects.get()
+        self.assertEqual(schedule.chain, context.chain)
+        self.assertEqual(schedule.vault_slot, context.slot)
+        self.assertEqual(schedule.crypto, context.chain.native_coin)
 
     @patch.object(VaultSlot, "schedule_collect_for_deposit")
     def test_schedule_collect_for_completed_deposit_calls_collect_for_erc20(
@@ -219,7 +224,7 @@ class DepositNotificationTests(TestCase):
         schedule_collect.assert_called_once_with(deposit.pk)
 
     @patch.object(VaultSlot, "schedule_collect_for_deposit")
-    def test_schedule_collect_for_completed_deposit_skips_native(
+    def test_schedule_collect_for_completed_deposit_allows_evm_native(
         self, schedule_collect
     ):
         context = create_deposit_context(native=True)
@@ -230,8 +235,8 @@ class DepositNotificationTests(TestCase):
 
         scheduled = DepositService.schedule_collect_for_completed_deposit(deposit)
 
-        self.assertFalse(scheduled)
-        schedule_collect.assert_not_called()
+        self.assertTrue(scheduled)
+        schedule_collect.assert_called_once_with(deposit.pk)
 
     @patch.object(VaultSlot, "schedule_collect_for_deposit")
     def test_schedule_collect_for_completed_deposit_allows_tron_native(
@@ -388,15 +393,15 @@ def create_deposit_context(*, native: bool = False, confirmed: bool = True):
             ),
             decimals=6,
         )
-        VaultSlot.objects.create(
-            customer=customer,
-            chain=chain,
-            usage=VaultSlotUsage.DEPOSIT,
-            address=Web3.to_checksum_address(
-                "0x0000000000000000000000000000000000000a11"
-            ),
-            salt=b"\x11" * 32,
-        )
+    slot = VaultSlot.objects.create(
+        customer=customer,
+        chain=chain,
+        usage=VaultSlotUsage.DEPOSIT,
+        address=Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000a11"
+        ),
+        salt=b"\x11" * 32,
+    )
     transfer = Transfer.objects.create(
         chain=chain,
         block=1,
@@ -423,6 +428,7 @@ def create_deposit_context(*, native: bool = False, confirmed: bool = True):
         chain=chain,
         crypto=crypto,
         transfer=transfer,
+        slot=slot,
     )
 
 

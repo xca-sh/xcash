@@ -1124,6 +1124,40 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(schedule.crypto, self.token)
         self.assertIsNone(schedule.tx_task)
 
+    def test_schedule_collect_for_invoice_uses_contract_slot_and_native_coin(self):
+        slot = VaultSlot.objects.create(
+            project=self.project,
+            chain=self.chain,
+            usage=VaultSlotUsage.INVOICE,
+            invoice_index=1,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000a22"
+            ),
+            salt=b"\x22" * 32,
+        )
+        invoice = Invoice.objects.create(
+            project=self.project,
+            out_no="invoice-slot-native-collect",
+            title="Invoice slot native collect",
+            currency=self.chain.native_coin.symbol,
+            amount="10.00000000",
+            methods={self.chain.native_coin.symbol: [self.chain.code]},
+            crypto=self.chain.native_coin,
+            chain=self.chain,
+            pay_amount="10.00000000",
+            pay_address=slot.address,
+            status=InvoiceStatus.COMPLETED,
+            expires_at=timezone.now(),
+        )
+
+        with self.patch_address_derivation():
+            schedule = VaultSlot.schedule_collect_for_invoice(invoice.pk)
+
+        self.assertEqual(schedule.chain, self.chain)
+        self.assertEqual(schedule.vault_slot, slot)
+        self.assertEqual(schedule.crypto, self.chain.native_coin)
+        self.assertIsNone(schedule.tx_task)
+
     def test_schedule_collect_for_deposit_is_idempotent_for_pending_schedule(self):
         slot = self._create_vault_slot()
         deposit = self._create_deposit(slot=slot)
@@ -1584,19 +1618,21 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertIsNone(schedule.tx_task_id)
         self.assertGreater(schedule.due_at, timezone.now())
 
-    def test_schedule_collect_for_deposit_skips_native_deposit(self):
+    def test_schedule_collect_for_deposit_schedules_native_deposit(self):
         slot = self._create_vault_slot()
         deposit = self._create_deposit(slot=slot, crypto=self.chain.native_coin)
 
-        task = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+        schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
 
-        self.assertIsNone(task)
+        self.assertEqual(schedule.chain, self.chain)
+        self.assertEqual(schedule.vault_slot, slot)
+        self.assertEqual(schedule.crypto, self.chain.native_coin)
+        self.assertIsNone(schedule.tx_task)
         self.assertFalse(
             EvmTxTask.objects.filter(
                 base_task__tx_type=TxTaskType.VaultSlotCollect
             ).exists()
         )
-        self.assertFalse(VaultSlotCollectSchedule.objects.exists())
 
     def test_collect_matcher_decodes_slot_collect_call(self):
         from evm.contracts_codec import predict_xcash_vault_slot_address

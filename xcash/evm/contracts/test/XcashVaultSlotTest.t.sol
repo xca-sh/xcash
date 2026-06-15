@@ -26,25 +26,23 @@ contract XcashVaultSlotTest is Test {
         factory.deployVaultSlot(payable(address(0)), keccak256("zero-vault"));
     }
 
-    function test_receive_forwards_native_coin_to_vault_and_emits_event() public {
+    function test_receive_records_native_coin_and_keeps_balance() public {
         XcashVaultSlot slot = _deployVaultSlot("receive-native");
         address payer = address(0xA11CE);
         vm.deal(payer, 2 ether);
 
         vm.expectEmit(true, true, true, true, address(slot));
         emit XcashNativeReceived(payer, 2 ether);
-        vm.expectEmit(true, true, true, true, address(slot));
-        emit XcashCollected(address(0), 2 ether);
 
         vm.prank(payer);
         (bool ok,) = address(slot).call{value: 2 ether}("");
 
         assertTrue(ok);
-        assertEq(vault.balance, 2 ether);
-        assertEq(address(slot).balance, 0);
+        assertEq(vault.balance, 0);
+        assertEq(address(slot).balance, 2 ether);
     }
 
-    function test_receive_forwards_full_balance_including_preexisting_native() public {
+    function test_receive_preserves_preexisting_native_balance() public {
         XcashVaultSlot slot = _deployVaultSlot("existing-native");
         vm.deal(address(slot), 0.4 ether);
         address payer = address(0xA11CE);
@@ -52,39 +50,41 @@ contract XcashVaultSlotTest is Test {
 
         vm.expectEmit(true, true, true, true, address(slot));
         emit XcashNativeReceived(payer, 0.6 ether);
-        vm.expectEmit(true, true, true, true, address(slot));
-        emit XcashCollected(address(0), 1 ether);
 
         vm.prank(payer);
         (bool ok,) = address(slot).call{value: 0.6 ether}("");
 
         assertTrue(ok);
-        assertEq(vault.balance, 1 ether);
-        assertEq(address(slot).balance, 0);
+        assertEq(vault.balance, 0);
+        assertEq(address(slot).balance, 1 ether);
     }
 
-    function test_receive_noop_when_amount_is_zero() public {
+    function test_receive_emits_event_when_amount_is_zero() public {
         XcashVaultSlot slot = _deployVaultSlot("zero-amount");
 
-        vm.recordLogs();
+        vm.expectEmit(true, true, true, true, address(slot));
+        emit XcashNativeReceived(address(this), 0);
+
         (bool ok, bytes memory data) = address(slot).call{value: 0}("");
 
         assertTrue(ok);
         assertEq(data.length, 0);
-        assertEq(vm.getRecordedLogs().length, 0);
         assertEq(vault.balance, 0);
         assertEq(address(slot).balance, 0);
     }
 
-    function test_reverts_when_vault_rejects_native_coin() public {
+    function test_receive_succeeds_when_vault_rejects_native_coin() public {
         RejectingVault rejectingVault = new RejectingVault();
         XcashVaultSlot slot = _deployVaultSlot(payable(address(rejectingVault)), "reject-native");
 
+        vm.expectEmit(true, true, true, true, address(slot));
+        emit XcashNativeReceived(address(this), 1 ether);
+
         (bool ok, bytes memory data) = address(slot).call{value: 1 ether}("");
 
-        assertFalse(ok);
-        assertEq(data, abi.encodeWithSelector(XcashVaultSlot.ForwardFailed.selector));
-        assertEq(address(slot).balance, 0);
+        assertTrue(ok);
+        assertEq(data.length, 0);
+        assertEq(address(slot).balance, 1 ether);
         assertEq(address(rejectingVault).balance, 0);
     }
 

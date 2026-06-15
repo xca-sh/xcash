@@ -54,7 +54,7 @@ contract XcashVaultSlotFactoryTest is Test {
         assertGt(deployed.code.length, 0);
     }
 
-    function test_deployed_vault_slot_forwards_native_coin_and_emits_from_vault_slot() public {
+    function test_deployed_vault_slot_records_native_coin_from_vault_slot() public {
         bytes32 salt = keccak256("native-deposit");
         address payable predicted = payable(_predict(vault, salt));
         address payer = address(0xA11CE);
@@ -64,15 +64,13 @@ contract XcashVaultSlotFactoryTest is Test {
 
         vm.expectEmit(true, true, true, true, predicted);
         emit XcashNativeReceived(payer, 1 ether);
-        vm.expectEmit(true, true, true, true, predicted);
-        emit XcashCollected(address(0), 1 ether);
 
         vm.prank(payer);
         (bool ok,) = predicted.call{value: 1 ether}("");
 
         assertTrue(ok);
-        assertEq(vault.balance, 1 ether);
-        assertEq(predicted.balance, 0);
+        assertEq(vault.balance, 0);
+        assertEq(predicted.balance, 1 ether);
     }
 
     function test_deployed_vault_slot_collects_erc20_to_vault() public {
@@ -128,8 +126,8 @@ contract XcashVaultSlotFactoryTest is Test {
         assertEq(deployed.balance, 0);
     }
 
-    function test_collect_native_noop_after_receive_sweeps_preexisting_balance() public {
-        // 对应部署后系统已排 collect(address(0))，但付款先到并由 receive() 抢先全额扫走。
+    function test_collect_native_sweeps_preexisting_and_received_balance() public {
+        // 对应部署后系统已排 collect(address(0))，付款先到时仍由独立 collect 清扫全额余额。
         bytes32 salt = keccak256("receive-race-native");
         address payable predicted = payable(_predict(vault, salt));
         vm.deal(predicted, 0.4 ether);
@@ -141,13 +139,13 @@ contract XcashVaultSlotFactoryTest is Test {
         vm.prank(payer);
         (bool ok,) = predicted.call{value: 0.6 ether}("");
         assertTrue(ok);
-        assertEq(vault.balance, 1 ether);
-        assertEq(deployed.balance, 0);
+        assertEq(vault.balance, 0);
+        assertEq(deployed.balance, 1 ether);
 
-        vm.recordLogs();
+        vm.expectEmit(true, true, true, true, deployed);
+        emit XcashCollected(address(0), 1 ether);
         XcashVaultSlot(payable(deployed)).collect(address(0));
 
-        assertEq(vm.getRecordedLogs().length, 0);
         assertEq(vault.balance, 1 ether);
         assertEq(deployed.balance, 0);
     }
@@ -174,7 +172,9 @@ contract XcashVaultSlotFactoryTest is Test {
         assertEq(second, secondPredicted);
     }
 
-    function test_deployed_vault_slot_forwards_native_coin_to_its_own_vault_arg() public {
+    function test_deployed_vault_slot_keeps_native_coin_until_collect_to_its_own_vault_arg()
+        public
+    {
         bytes32 salt = keccak256("second-vault-native");
         address payable slot = payable(factory.deployVaultSlot(secondVault, salt));
         address payer = address(0xA11CE);
@@ -185,7 +185,14 @@ contract XcashVaultSlotFactoryTest is Test {
 
         assertTrue(ok);
         assertEq(vault.balance, 0);
+        assertEq(secondVault.balance, 0);
+        assertEq(slot.balance, 1 ether);
+
+        XcashVaultSlot(slot).collect(address(0));
+
+        assertEq(vault.balance, 0);
         assertEq(secondVault.balance, 1 ether);
+        assertEq(slot.balance, 0);
     }
 
     function _predict(address payable vault_, bytes32 salt) private view returns (address) {

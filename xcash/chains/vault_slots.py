@@ -259,9 +259,9 @@ def mark_deployed(slot: VaultSlot) -> bool:
 def reconcile_deployed_native_balance(slot_pk: int) -> bool:
     """EVM VaultSlot 部署确认后主动补扫部署前滞留的原生币余额。
 
-    正常 receive() 会把本次入账连同合约余额一起转发到 vault；这里兜底的是
-    CREATE2 预测地址在部署前已收到原生币的场景。余额读取放在 mark_deployed 的
-    on_commit 回调里执行，避免在行锁事务内等待链上 RPC。
+    CREATE2 预测地址在部署前已收到原生币时，部署本身不会触发 receive() 事件；
+    这里在部署确认后刷新链上余额并排队 collect(address(0))。余额读取放在
+    mark_deployed 的 on_commit 回调里执行，避免在行锁事务内等待链上 RPC。
     """
     from chains.vault_slot_balances import refresh_vault_slot_balance_safely
 
@@ -368,9 +368,6 @@ def schedule_collect_for_deposit(deposit_pk: int) -> VaultSlotCollectSchedule | 
     chain = transfer.chain
     crypto = transfer.crypto
 
-    if crypto == chain.native_coin and chain.type != ChainType.TRON:
-        return None
-
     try:
         slot = VaultSlot.objects.get(
             chain=chain,
@@ -402,8 +399,6 @@ def schedule_collect_for_invoice(invoice_pk: int) -> VaultSlotCollectSchedule | 
 
     chain = invoice.chain
     crypto = invoice.crypto
-    if crypto == chain.native_coin and chain.type != ChainType.TRON:
-        return None
 
     try:
         slot = VaultSlot.objects.get(
