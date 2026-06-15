@@ -24,6 +24,9 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
+EVM_INITIAL_GAS_PRICE_MULTIPLIER_BPS = 10500
+BPS_DENOMINATOR = 10000
+
 
 class EvmScanCursor(models.Model):
     """记录某条 EVM 链上日志扫描器的推进位置与最近错误。
@@ -260,14 +263,23 @@ class EvmTxTask(UndeletableModel):
         bumped = (old_gas_price * 1125 + 999) // 1000
         return max(int(current_gas_price), bumped)
 
+    @staticmethod
+    def _initial_gas_price(current_gas_price: int) -> int:
+        return (
+            int(current_gas_price) * EVM_INITIAL_GAS_PRICE_MULTIPLIER_BPS
+            + BPS_DENOMINATOR
+            - 1
+        ) // BPS_DENOMINATOR
+
     def _ensure_signed_with_latest_gas_price(self) -> None:
         """首次广播时签名并生成首个 tx_hash；重试时仅在 gas 提升时重签。"""
         current_gas_price = self.chain.w3.eth.gas_price  # noqa: SLF001
         if not self.signed_payload or self.gas_price is None:
+            gas_price = self._initial_gas_price(current_gas_price)
             signed = self.sender.sign_evm_transaction(
-                tx_dict=self._build_transaction_dict(gas_price=current_gas_price),
+                tx_dict=self._build_transaction_dict(gas_price=gas_price),
             )
-            self.gas_price = current_gas_price
+            self.gas_price = gas_price
             self.signed_payload = signed.raw_transaction
             self.save(update_fields=["gas_price", "signed_payload"])
             self.base_task.append_tx_hash(signed.tx_hash)

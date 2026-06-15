@@ -181,7 +181,7 @@ class EvmTaskQueueTests(TestCase):
             status=TxTaskStatus.SUCCEEDED,
         )
 
-        stale_created_at = timezone.now() - timedelta(seconds=8)
+        stale_created_at = timezone.now() - timedelta(seconds=2)
         fresh_created_at = timezone.now()
         EvmTxTask.objects.filter(pk=due_queued.pk).update(
             created_at=stale_created_at,

@@ -217,7 +217,7 @@ class EvmChainScannerServiceTests(TestCase):
         self.assertEqual(history.hash, task.base_task.tx_hash)
         self.assertEqual(history.chain_id, chain.pk)
         self.assertEqual(task.signed_payload, "0xdeadbeef")
-        self.assertEqual(task.gas_price, 9)
+        self.assertEqual(task.gas_price, 10)
 
     @patch.object(Address, "sign_evm_transaction")
     def test_schedule_uses_next_nonce_after_highest_existing_nonce(

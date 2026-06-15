@@ -110,6 +110,59 @@ class EvmTxTaskTests(TestCase):
         tx_task.refresh_from_db()
         self.assertIsNotNone(tx_task.last_attempt_at)
 
+    @patch.object(Address, "sign_evm_transaction")
+    def test_first_broadcast_signs_with_five_percent_gas_price_bump(self, sign_mock):
+        chain = make_evm_chain(
+            code=ChainCode.Polygon,
+            rpc="http://localhost:8545",
+        )
+        chain.__dict__["w3"] = SimpleNamespace(
+            eth=SimpleNamespace(
+                gas_price=100,
+                get_balance=Mock(return_value=10**18),
+                send_raw_transaction=Mock(),
+            ),
+        )
+        sign_mock.return_value = SimpleNamespace(
+            tx_hash="0x" + "a5" * 32,
+            raw_transaction="0x02",
+        )
+        addr = Address.objects.create(
+            wallet=Wallet.objects.create(),
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.HotWallet,
+            bip44_account=1,
+            address_index=0,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000105"
+            ),
+        )
+        base_task = TxTask.objects.create(
+            chain=chain,
+            sender=addr,
+            tx_type=TxTaskType.VaultSlotDeploy,
+            status=TxTaskStatus.QUEUED,
+        )
+        tx_task = EvmTxTask.objects.create(
+            base_task=base_task,
+            sender=addr,
+            chain=chain,
+            nonce=0,
+            to=Web3.to_checksum_address("0x" + "b5" * 20),
+            value=0,
+            gas=120_000,
+            data="0xdeadbeef",
+        )
+
+        tx_task.broadcast()
+
+        tx_task.refresh_from_db()
+        self.assertEqual(tx_task.gas_price, 105)
+        self.assertEqual(
+            sign_mock.call_args.kwargs["tx_dict"]["gasPrice"],
+            105,
+        )
+
     def test_broadcast_preflight_skips_send_when_sender_balance_insufficient(self):
         chain = make_evm_chain(
             code=ChainCode.ArbitrumOne,

@@ -19,6 +19,7 @@ from evm.scanner.service import EvmScannerService
 logger = structlog.get_logger()
 
 EVM_QUEUED_STUCK_ALERT_AFTER_MINUTES = 30
+EVM_QUEUED_DISPATCH_ELIGIBLE_AFTER_SECONDS = 1
 
 
 @shared_task(ignore_result=True)
@@ -74,11 +75,12 @@ def _chain_dispatch_next(completed_task: EvmTxTask) -> None:
 @singleton_task(timeout=64)
 @db_transaction.atomic
 def dispatch_evm_tx_tasks() -> None:
-    """定时调度 QUEUED 状态的 EVM 交易任务（Celery Beat 每 5 秒）。
+    """定时调度 QUEUED 状态的 EVM 交易任务。
 
     调度规则：
     - 每个 (sender, chain) 只放行最低 nonce 的任务，保证 nonce 按顺序进入 mempool
     - pipeline 未满（同发送地址 SUBMITTED < EVM_PIPELINE_DEPTH）才放行
+    - 创建超过 1 秒的任务才放行，避开刚提交事务的短暂可见性抖动
     - 4 分钟内已尝试过的不重复投递
     - 每轮最多投递 8 笔
     """
@@ -87,7 +89,7 @@ def dispatch_evm_tx_tasks() -> None:
         .select_related("base_task")
         .filter(
             Q(last_attempt_at__isnull=True) | Q(last_attempt_at__lt=ago(minutes=4)),
-            created_at__lt=ago(seconds=4),
+            created_at__lt=ago(seconds=EVM_QUEUED_DISPATCH_ELIGIBLE_AFTER_SECONDS),
             base_task__status=TxTaskStatus.QUEUED,
         )
         .order_by("sender_id", "nonce", "created_at")

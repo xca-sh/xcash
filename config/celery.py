@@ -30,7 +30,7 @@ FALLBACK_PROCESS_TRANSFER_SCHEDULE_SECONDS = get_int_default(
 )
 EVM_BROADCAST_SCHEDULE_SECONDS = get_int_default(
     "CELERY_EVM_BROADCAST_SCHEDULE_SECONDS",
-    8,
+    2,
 )
 # 扫描调度器固定每 2 秒巡检一次活跃链；具体每条链多久扫一次由
 # ChainSpec.scan_interval_seconds 与 Chain.last_scanned_at 在任务内决定。
