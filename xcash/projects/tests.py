@@ -160,7 +160,7 @@ class ProjectReadinessTests(TestCase):
         ready, errors = project.is_ready
 
         self.assertFalse(ready)
-        self.assertIn("收款地址未配置", [str(error) for error in errors])
+        self.assertIn("钱包未配置", [str(error) for error in errors])
 
     def test_is_ready_does_not_report_missing_receiving_address_when_vault_exists(self):
         project = Project.objects.create(
@@ -170,9 +170,11 @@ class ProjectReadinessTests(TestCase):
 
         _, errors = project.is_ready
 
-        self.assertNotIn("收款地址未配置", [str(error) for error in errors])
+        self.assertNotIn("钱包未配置", [str(error) for error in errors])
 
-    def test_is_ready_does_not_report_missing_receiving_address_when_differ_exists(self):
+    def test_is_ready_does_not_report_missing_receiving_address_when_differ_exists(
+        self,
+    ):
         project = Project.objects.create(name="Differ Ready")
         DifferRecipientAddress.objects.create(
             project=project,
@@ -182,4 +184,4 @@ class ProjectReadinessTests(TestCase):
 
         _, errors = project.is_ready
 
-        self.assertNotIn("收款地址未配置", [str(error) for error in errors])
+        self.assertNotIn("钱包未配置", [str(error) for error in errors])

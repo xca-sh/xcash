@@ -837,9 +837,17 @@ msgstr "Webhook disabled"
 msgid "项目未启用"
 msgstr "Project disabled"
 
-#: xcash/projects/models.py:154
-msgid "账单收款地址未配置"
-msgstr "Payment address missing"
+#: xcash/projects/models.py:256
+msgid "钱包未配置"
+msgstr "Wallet not configured"
+
+#: xcash/projects/models.py:262
+msgid "EVM 归集地址未配置"
+msgstr "EVM collection address not configured"
+
+#: xcash/projects/models.py:268
+msgid "Tron 归集地址未配置"
+msgstr "TRON collection address not configured"
 
 #: xcash/projects/models.py:109
 msgid "完成"

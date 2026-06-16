@@ -253,7 +253,7 @@ class Project(models.Model):
             active=True,
         ).exists()
         if not has_differ_address and not self.evm_vault and not self.tron_vault:
-            errors.append(_("收款地址未配置"))  # noqa
+            errors.append(_("钱包未配置"))  # noqa
         if (
             self.resolved_invoice_receiving_mode(ChainType.EVM)
             == InvoiceReceivingMode.VaultSlot
