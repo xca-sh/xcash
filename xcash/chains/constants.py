@@ -65,10 +65,10 @@ def _icon(slug: str) -> str:
 
 CHAIN_SPECS: dict[str, ChainSpec] = {
     ChainCode.Ethereum: ChainSpec(
-        ChainType.EVM, 1, False, 12, "ETH", 18, 12, icon=_icon("ethereum")
+        ChainType.EVM, 1, False, 8, "ETH", 18, 12, icon=_icon("ethereum")
     ),
     ChainCode.BSC: ChainSpec(
-        ChainType.EVM, 56, True, 15, "BNB", 18, 6, icon=_icon("binance")
+        ChainType.EVM, 56, True, 6, "BNB", 18, 6, icon=_icon("binance")
     ),
     ChainCode.Polygon: ChainSpec(
         ChainType.EVM, 137, True, 128, "POL", 18, 6, icon=_icon("polygon")
@@ -96,13 +96,13 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
         ChainType.EVM, 31337, False, 8, "ETH", 18, 4, is_testnet=True
     ),
     ChainCode.Tron: ChainSpec(
-        ChainType.TRON, None, None, 16, "TRX", 6, 6, icon=_icon("tron")
+        ChainType.TRON, None, None, 0, "TRX", 6, 6, icon=_icon("tron")
     ),
     ChainCode.Sepolia: ChainSpec(
         ChainType.EVM, 11155111, False, 12, "ETH", 18, 12, is_testnet=True
     ),
     ChainCode.Nile: ChainSpec(
-        ChainType.TRON, None, None, 16, "TRX", 6, 6, is_testnet=True
+        ChainType.TRON, None, None, 0, "TRX", 6, 6, is_testnet=True
     ),
 }
 
