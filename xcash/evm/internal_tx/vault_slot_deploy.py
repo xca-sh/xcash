@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 import structlog
-from django.utils import timezone
 from web3 import Web3
 
 from chains.constants import EVM_UNKNOWN_SOURCE_ADDRESS
@@ -49,7 +47,7 @@ def process_vault_slot_initial_native_balance(
         .filter(
             chain=chain,
             deploy_tx_task=tx_task,
-            usage=VaultSlotUsage.DEPOSIT,
+            usage__in=[VaultSlotUsage.DEPOSIT, VaultSlotUsage.INVOICE],
         )
         .first()
     )
@@ -75,7 +73,8 @@ def process_vault_slot_initial_native_balance(
 
     block_number = parse_int(receipt["blockNumber"])
     block_hash = normalize_required_hash(receipt["blockHash"])
-    timestamp = get_block_timestamp(chain=chain, block_number=block_number)
+    payment_datetime = tx_task.created_at
+    timestamp = int(payment_datetime.timestamp())
     native_crypto = chain.native_coin
 
     result = TransferService.create_observed_transfer(
@@ -93,10 +92,7 @@ def process_vault_slot_initial_native_balance(
                 -native_crypto.get_decimals(chain)
             ),
             timestamp=timestamp,
-            datetime=datetime.fromtimestamp(
-                timestamp,
-                tz=timezone.get_current_timezone(),
-            ),
+            datetime=payment_datetime,
             source=VAULT_SLOT_INITIAL_NATIVE_BALANCE_SOURCE,
         )
     )
@@ -181,11 +177,6 @@ def find_initial_native_balance_log(
             event_index=event_index,
         )
     return None
-
-
-def get_block_timestamp(*, chain: Chain, block_number: int) -> int:
-    block = chain.w3.eth.get_block(block_number)
-    return parse_int(block["timestamp"])
 
 
 def topic_to_address(topic: Any) -> str:

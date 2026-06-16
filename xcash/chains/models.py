@@ -1394,10 +1394,20 @@ class Transfer(models.Model):
         # 避免系统归集/部署等主动交易污染 Invoice / Deposit 入账状态。
         tx_task = TxTask.resolve_by_hash(chain=self.chain, tx_hash=self.hash)
         if tx_task is not None:
-            if self.is_vault_slot_initial_native_balance_observation(tx_task):
-                from deposits.service import DepositService
+            initial_balance_slot = self.vault_slot_initial_native_balance_slot(tx_task)
+            if initial_balance_slot is not None:
+                if initial_balance_slot.usage == VaultSlotUsage.INVOICE:
+                    from invoices.service import InvoiceService
 
-                DepositService.try_match_deposit_transfer(self)
+                    InvoiceService.try_match_vault_slot_initial_native_balance(
+                        transfer=self,
+                        slot=initial_balance_slot,
+                        payment_datetime=tx_task.created_at,
+                    )
+                elif initial_balance_slot.usage == VaultSlotUsage.DEPOSIT:
+                    from deposits.service import DepositService
+
+                    DepositService.try_match_deposit_transfer(self)
                 self._mark_processed()
                 return
             logger.warning(
@@ -1440,24 +1450,24 @@ class Transfer(models.Model):
         except ValueError:
             return False
 
-    def is_vault_slot_initial_native_balance_observation(
+    def vault_slot_initial_native_balance_slot(
         self,
         tx_task: TxTask,
-    ) -> bool:
+    ) -> VaultSlot | None:
         if self.chain.type != ChainType.EVM:
-            return False
+            return None
         if tx_task.tx_type != TxTaskType.VaultSlotDeploy:
-            return False
+            return None
         if self.crypto_id != self.chain.native_coin.pk:
-            return False
+            return None
         if not self.has_unknown_source_address():
-            return False
+            return None
         return VaultSlot.objects.filter(
             chain=self.chain,
             deploy_tx_task=tx_task,
-            usage=VaultSlotUsage.DEPOSIT,
+            usage__in=[VaultSlotUsage.DEPOSIT, VaultSlotUsage.INVOICE],
             address__iexact=self.to_address,
-        ).exists()
+        ).first()
 
     @db_transaction.atomic
     def confirm(self):

@@ -285,16 +285,21 @@ class Invoice(models.Model):
                 f"project={self.project_id}, chain={chain.code} 智能合约收款归集地址未配置"
             )
 
-        reusable_slots = VaultSlot.objects.filter(
-            project=self.project,
-            chain=chain,
-            usage=VaultSlotUsage.INVOICE,
-        ).order_by("invoice_index", "pk")
+        reusable_slots = list(
+            VaultSlot.objects.select_for_update(of=("self",))
+            .filter(
+                project=self.project,
+                chain=chain,
+                usage=VaultSlotUsage.INVOICE,
+            )
+            .order_by("invoice_index", "pk")
+        )
         for slot in reusable_slots:
             # 同一个合约收款槽位只在"币种 + 金额"重合且对方仍为 WAITING 时不可复用；
-            # 不同金额可以复用同一 VaultSlot 地址，因为账单匹配要求 pay_amount 精确相等。
-            if not self._current_payment_combo_is_occupied(
-                pay_address=slot.address,
+            # 不同金额通常可以复用同一 VaultSlot 地址，因为账单匹配要求 pay_amount
+            # 精确相等；未部署 EVM 原生币由 initialNativeBalance 的聚合余额限制单独收紧。
+            if self.contract_slot_is_available_for_payment(
+                slot=slot,
                 crypto=crypto,
                 chain=chain,
                 crypto_amount=crypto_amount,
@@ -313,26 +318,88 @@ class Invoice(models.Model):
                     )
                 return slot.address, crypto_amount
 
-        latest_index = reusable_slots.aggregate(max_index=Max("invoice_index"))[
-            "max_index"
-        ]
+        latest_index = reusable_slots[-1].invoice_index if reusable_slots else None
         invoice_index = 0 if latest_index is None else latest_index + 1
-        try:
-            VaultSlot.ensure_invoice_address(
-                project=self.project,
-                chain=chain,
-                invoice_index=invoice_index,
-                crypto=crypto,
+        for _retry in range(self.MAX_ALLOCATION_RETRY):
+            try:
+                VaultSlot.ensure_invoice_address(
+                    project=self.project,
+                    chain=chain,
+                    invoice_index=invoice_index,
+                    crypto=crypto,
+                )
+            except RuntimeError as exc:
+                raise self.InvoiceAllocationError(str(exc)) from exc
+            slot = (
+                VaultSlot.objects.select_for_update(of=("self",))
+                .get(
+                    project=self.project,
+                    chain=chain,
+                    usage=VaultSlotUsage.INVOICE,
+                    invoice_index=invoice_index,
+                )
             )
-        except RuntimeError as exc:
-            raise self.InvoiceAllocationError(str(exc)) from exc
-        slot = VaultSlot.objects.get(
-            project=self.project,
-            chain=chain,
-            usage=VaultSlotUsage.INVOICE,
-            invoice_index=invoice_index,
+            if self.contract_slot_is_available_for_payment(
+                slot=slot,
+                crypto=crypto,
+                chain=chain,
+                crypto_amount=crypto_amount,
+            ):
+                return slot.address, crypto_amount
+            invoice_index += 1
+
+        raise self.InvoiceAllocationError(
+            f"project={self.project_id}, chain={chain.code} 智能合约收款地址分配冲突"
         )
-        return slot.address, crypto_amount
+
+    def contract_slot_is_available_for_payment(
+        self,
+        *,
+        slot: VaultSlot,
+        crypto: "Crypto",
+        chain: "Chain",
+        crypto_amount: Decimal,
+    ) -> bool:
+        if self._current_payment_combo_is_occupied(
+            pay_address=slot.address,
+            crypto=crypto,
+            chain=chain,
+            crypto_amount=crypto_amount,
+        ):
+            return False
+        return not self.contract_slot_has_unresolved_native_invoice(
+            slot=slot,
+            crypto=crypto,
+            chain=chain,
+        )
+
+    def contract_slot_has_unresolved_native_invoice(
+        self,
+        *,
+        slot: VaultSlot,
+        crypto: "Crypto",
+        chain: "Chain",
+    ) -> bool:
+        from chains.vault_slots import should_predeploy_on_address_exposure
+
+        if slot.is_deployed:
+            return False
+        if not should_predeploy_on_address_exposure(chain=chain, crypto=crypto):
+            return False
+        # 部署前的 initialNativeBalance 只有聚合余额，没有逐笔付款事件。
+        # 因此未部署的 EVM 原生币 slot 在部署完成前只能绑定一个未终局账单；
+        # EXPIRED 也要挡住，因为用户可能已在过期前付款但尚未被部署事件观测到。
+        return (
+            Invoice.objects.filter(
+                project=self.project,
+                crypto=crypto,
+                chain=chain,
+                pay_address=slot.address,
+                status__in=[InvoiceStatus.WAITING, InvoiceStatus.EXPIRED],
+            )
+            .exclude(pk=self.pk)
+            .exists()
+        )
 
     def _allocate_differ_payment(
         self,

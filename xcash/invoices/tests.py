@@ -1890,6 +1890,138 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         self.assertIsNone(slot.customer_id)
         self.assertEqual(slot.project.evm_vault, vault_address)
 
+    def test_undeployed_native_contract_slot_not_reused_when_amount_differs(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F18"
+        )
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
+        native_crypto = self.chain.native_coin
+        first_invoice = self.create_test_invoice(out_no="contract-native-first")
+
+        with self.captureOnCommitCallbacks(execute=False):
+            first_pay_address, first_pay_amount = first_invoice._allocate_contract_slot(
+                native_crypto,
+                self.chain,
+                Decimal("10"),
+            )
+        self._set_invoice_payment(
+            first_invoice,
+            crypto=native_crypto,
+            chain=self.chain,
+            pay_address=first_pay_address,
+            pay_amount=first_pay_amount,
+        )
+        first_slot = VaultSlot.objects.get(address=first_pay_address, chain=self.chain)
+        self.assertFalse(first_slot.is_deployed)
+
+        second_invoice = self.create_test_invoice(out_no="contract-native-second")
+        with self.captureOnCommitCallbacks(execute=False):
+            second_pay_address, _ = second_invoice._allocate_contract_slot(
+                native_crypto,
+                self.chain,
+                Decimal("10.00000001"),
+            )
+
+        self.assertNotEqual(second_pay_address, first_pay_address)
+        second_slot = VaultSlot.objects.get(address=second_pay_address, chain=self.chain)
+        self.assertEqual(second_slot.invoice_index, first_slot.invoice_index + 1)
+        self.assertEqual(
+            VaultSlot.objects.filter(
+                project=self.project,
+                usage=VaultSlotUsage.INVOICE,
+                chain=self.chain,
+            ).count(),
+            2,
+        )
+
+    def test_undeployed_native_contract_slot_not_reused_for_expired_invoice(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F19"
+        )
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
+        native_crypto = self.chain.native_coin
+        first_invoice = self.create_test_invoice(
+            out_no="contract-native-expired-first",
+            status=InvoiceStatus.EXPIRED,
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        with self.captureOnCommitCallbacks(execute=False):
+            first_pay_address, first_pay_amount = first_invoice._allocate_contract_slot(
+                native_crypto,
+                self.chain,
+                Decimal("10"),
+            )
+        self._set_invoice_payment(
+            first_invoice,
+            crypto=native_crypto,
+            chain=self.chain,
+            pay_address=first_pay_address,
+            pay_amount=first_pay_amount,
+        )
+
+        second_invoice = self.create_test_invoice(
+            out_no="contract-native-expired-second",
+        )
+        with self.captureOnCommitCallbacks(execute=False):
+            second_pay_address, _ = second_invoice._allocate_contract_slot(
+                native_crypto,
+                self.chain,
+                Decimal("10.00000001"),
+            )
+
+        self.assertNotEqual(second_pay_address, first_pay_address)
+
+    def test_deployed_native_contract_slot_reuses_when_amount_differs(self):
+        vault_address = Web3.to_checksum_address(
+            "0x0000000000000000000000000000000000000F20"
+        )
+        self.project.evm_vault = vault_address
+        self.project.save(update_fields=["evm_vault"])
+        native_crypto = self.chain.native_coin
+        first_invoice = self.create_test_invoice(
+            out_no="contract-native-deployed-first",
+        )
+
+        with self.captureOnCommitCallbacks(execute=False):
+            first_pay_address, first_pay_amount = first_invoice._allocate_contract_slot(
+                native_crypto,
+                self.chain,
+                Decimal("10"),
+            )
+        self._set_invoice_payment(
+            first_invoice,
+            crypto=native_crypto,
+            chain=self.chain,
+            pay_address=first_pay_address,
+            pay_amount=first_pay_amount,
+        )
+        VaultSlot.objects.filter(address=first_pay_address, chain=self.chain).update(
+            is_deployed=True
+        )
+
+        second_invoice = self.create_test_invoice(
+            out_no="contract-native-deployed-second",
+        )
+        with self.captureOnCommitCallbacks(execute=False):
+            second_pay_address, _ = second_invoice._allocate_contract_slot(
+                native_crypto,
+                self.chain,
+                Decimal("10.00000001"),
+            )
+
+        self.assertEqual(second_pay_address, first_pay_address)
+        self.assertEqual(
+            VaultSlot.objects.filter(
+                project=self.project,
+                usage=VaultSlotUsage.INVOICE,
+                chain=self.chain,
+            ).count(),
+            1,
+        )
+
     def test_contract_slot_reuses_slot_when_existing_invoice_expired(self):
         # 旧账单已被过期任务翻成 EXPIRED 后，其 (pay_address, pay_amount) 组合脱离
         # uniq_invoice_active_payment 约束（约束只覆盖 status=WAITING），新合约账单

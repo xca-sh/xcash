@@ -629,12 +629,14 @@ class VaultSlotAddressSchedulingTests(TestCase):
         notify_gas_fee.assert_called_once()
 
     @patch("evm.internal_tx.processor.notify_vault_slot_deploy_gas_fee")
-    def test_confirmed_invoice_deploy_initial_native_balance_is_not_matched(
+    def test_confirmed_invoice_deploy_initial_native_balance_confirms_invoice(
         self,
         notify_gas_fee,
     ):
         from evm.poller import EvmTaskPoller
 
+        native_crypto = self.chain.native_coin
+        self._ensure_native_crypto_mapping()
         slot = VaultSlot.objects.create(
             project=self.project,
             usage=VaultSlotUsage.INVOICE,
@@ -645,6 +647,19 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ),
             salt=b"\x12" * 32,
         )
+        invoice = Invoice.objects.create(
+            project=self.project,
+            out_no="invoice-initial-native",
+            title="Invoice initial native",
+            currency_id="USD",
+            amount=Decimal("1"),
+            methods={native_crypto.symbol: [self.chain.code]},
+            crypto=native_crypto,
+            chain=self.chain,
+            pay_address=slot.address,
+            pay_amount=Decimal("1"),
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
         address_patch = self.patch_address_derivation()
         tx_hash = "0x" + "bb" * 32
         Chain.objects.filter(pk=self.chain.pk).update(latest_block_number=100)
@@ -654,6 +669,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             task = VaultSlot.schedule_deploy(slot.pk)
         task.append_tx_hash(tx_hash)
         TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.SUBMITTED)
+        task.refresh_from_db()
 
         receipt = self._deploy_receipt(
             slot=slot,
@@ -661,14 +677,21 @@ class VaultSlotAddressSchedulingTests(TestCase):
         )
         evm_task = task.evm_task
 
-        with patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock:
+        with (
+            patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock,
+            patch("chains.service.TransferService.enqueue_processing"),
+            patch("chains.vault_slot_balances.refresh_vault_slot_balance_for_transfer"),
+            patch(
+                "chains.models.VaultSlot.schedule_collect_for_invoice"
+            ) as schedule_collect,
+            patch("invoices.service.WebhookService.create_event"),
+            patch("invoices.service.screen_invoice_aml.delay"),
+            patch("invoices.service.send_saas_callback"),
+        ):
             w3_mock.return_value.eth.get_transaction.return_value = {
                 "hash": tx_hash,
                 "from": self.system_sender.address,
             }
-            w3_mock.return_value.eth.get_block.side_effect = AssertionError(
-                "invoice initialNativeBalance must not be inspected"
-            )
             processed = EvmTaskPoller.process_succeeded_receipt(
                 evm_task=evm_task,
                 tx_hash=tx_hash,
@@ -680,7 +703,25 @@ class VaultSlotAddressSchedulingTests(TestCase):
         slot.refresh_from_db()
         self.assertEqual(task.status, TxTaskStatus.SUCCEEDED)
         self.assertTrue(slot.is_deployed)
-        self.assertFalse(Transfer.objects.filter(hash=tx_hash).exists())
+        self.assertTrue(slot.has_received)
+
+        transfer = Transfer.objects.get(hash=tx_hash)
+        self.assertEqual(transfer.event_index, 1)
+        self.assertEqual(transfer.from_address, EVM_UNKNOWN_SOURCE_ADDRESS)
+        self.assertEqual(transfer.to_address, slot.address)
+        self.assertEqual(transfer.crypto, native_crypto)
+        self.assertEqual(transfer.value, Decimal(10**18))
+        self.assertEqual(transfer.amount, Decimal("1"))
+        self.assertEqual(transfer.datetime, task.created_at)
+        self.assertEqual(transfer.timestamp, int(task.created_at.timestamp()))
+        self.assertEqual(transfer.type, TransferType.Invoice)
+        self.assertEqual(transfer.status, TransferStatus.CONFIRMED)
+        self.assertIsNotNone(transfer.processed_at)
+
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.transfer, transfer)
+        self.assertEqual(invoice.status, InvoiceStatus.COMPLETED)
+        schedule_collect.assert_called_once_with(invoice.pk)
         notify_gas_fee.assert_called_once()
 
     @patch("evm.internal_tx.processor.notify_vault_slot_collect_gas_fee")

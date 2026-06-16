@@ -324,6 +324,72 @@ class InvoiceService:
         if not InvoiceService._transfer_matches_current_payment(invoice, transfer):
             return False
 
+        return InvoiceService.bind_transfer_to_invoice(
+            invoice=invoice,
+            transfer=transfer,
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def try_match_vault_slot_initial_native_balance(
+        *,
+        transfer: Transfer,
+        slot: VaultSlot,
+        payment_datetime,
+    ) -> bool:
+        """匹配 VaultSlot 部署前打入 CREATE2 地址的 EVM 原生币账单付款。
+
+        initialNativeBalance 是部署瞬间的余额快照，不携带真实付款时间与付款人；
+        因此只能在已知部署任务、slot 业务身份和单账单占用约束下，用 TxTask.created_at
+        作为这类付款事实的归因时间。
+        """
+        if slot.usage != VaultSlotUsage.INVOICE:
+            return False
+        if transfer.chain_id != slot.chain_id:
+            return False
+        if transfer.crypto_id != transfer.chain.native_coin.pk:
+            return False
+        if transfer.to_address != slot.address:
+            return False
+
+        base_filter = Invoice.objects.filter(
+            project=slot.project,
+            chain=transfer.chain,
+            crypto=transfer.crypto,
+            pay_address=slot.address,
+            pay_amount=transfer.amount,
+            started_at__lte=payment_datetime,
+            expires_at__gte=payment_datetime,
+            status__in=[InvoiceStatus.WAITING, InvoiceStatus.EXPIRED],
+        ).filter(Q(transfer__isnull=True) | Q(transfer=transfer))
+
+        candidate = base_filter.order_by("-started_at", "-pk").values("pk").first()
+        if candidate is None:
+            return False
+
+        invoice = (
+            Invoice.objects.select_for_update(of=("self",))
+            .select_related("project", "crypto", "chain")
+            .filter(pk=candidate["pk"])
+            .first()
+        )
+        if invoice is None:
+            return False
+        if not InvoiceService.vault_slot_initial_native_balance_matches_invoice(
+            invoice=invoice,
+            transfer=transfer,
+            slot=slot,
+            payment_datetime=payment_datetime,
+        ):
+            return False
+
+        return InvoiceService.bind_transfer_to_invoice(
+            invoice=invoice,
+            transfer=transfer,
+        )
+
+    @staticmethod
+    def bind_transfer_to_invoice(*, invoice: Invoice, transfer: Transfer) -> bool:
         confirm_mode = (
             ConfirmMode.QUICK
             if invoice.project.fast_confirm_threshold > invoice.worth
@@ -342,6 +408,31 @@ class InvoiceService:
         invoice.refresh_from_db()
 
         return True
+
+    @staticmethod
+    def vault_slot_initial_native_balance_matches_invoice(
+        *,
+        invoice: Invoice,
+        transfer: Transfer,
+        slot: VaultSlot,
+        payment_datetime,
+    ) -> bool:
+        if invoice.status not in [InvoiceStatus.WAITING, InvoiceStatus.EXPIRED]:
+            return False
+        if invoice.transfer_id is not None and invoice.transfer_id != transfer.pk:
+            return False
+        if invoice.project_id != slot.project_id:
+            return False
+        if (
+            invoice.crypto_id != transfer.crypto_id
+            or invoice.chain_id != transfer.chain_id
+        ):
+            return False
+        if invoice.pay_address != slot.address or transfer.to_address != slot.address:
+            return False
+        if not (invoice.started_at <= payment_datetime <= invoice.expires_at):
+            return False
+        return invoice.pay_amount == transfer.amount
 
     @staticmethod
     def _transfer_matches_current_payment(invoice: Invoice, transfer: Transfer) -> bool:
