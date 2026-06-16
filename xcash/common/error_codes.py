@@ -44,9 +44,7 @@ class ErrorCode(Enum):
     # Deposit
     # 修复：同上
     INVALID_UID = ErrorInfo("4000", _("无效UID"), 400)
-    RECIPIENT_NOT_CONFIGURED = ErrorInfo(
-        "4001", _("项目未配置该链的归集收款地址"), 400
-    )
+    RECIPIENT_NOT_CONFIGURED = ErrorInfo("4001", _("项目未配置该链的归集收款地址"), 400)
     DEPOSIT_CUSTOMER_LIMIT_REACHED = ErrorInfo(
         "4002", _("充值用户数已达到当前套餐上限"), 403
     )
@@ -61,7 +59,6 @@ class ErrorCode(Enum):
         "5008", _("无可用账单收款方式。请确保已设置账单收款地址且 methods 可用。"), 400
     )
     TOO_MANY_WAITING = ErrorInfo("5009", _("待支付记录过多，请勿滥用"), 400)
-    NO_AVAILABLE_METHOD = ErrorInfo("5010", _("无效的账单收款方式"), 400)
     INVOICE_NOT_EXIST = ErrorInfo("5011", _("账单收款不存在"), 400)
     INVOICE_EXPIRED = ErrorInfo("5012", _("账单收款已过期"), 400)
 
