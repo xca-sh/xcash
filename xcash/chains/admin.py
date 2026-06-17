@@ -49,7 +49,6 @@ class ChainAdmin(ModelAdmin):
     list_editable = (
         "sort_order",
         "active",
-        "evm_log_max_block_range",
     )
     list_filter = ("active", "is_testnet")
     search_fields = ("code",)
