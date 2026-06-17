@@ -95,11 +95,11 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
     ChainCode.Anvil: ChainSpec(
         ChainType.EVM, 31337, False, 8, "ETH", 18, 4, is_testnet=True
     ),
+    ChainCode.Sepolia: ChainSpec(
+        ChainType.EVM, 11155111, False, 6, "ETH", 18, 6, is_testnet=True
+    ),
     ChainCode.Tron: ChainSpec(
         ChainType.TRON, None, None, 0, "TRX", 6, 6, icon=_icon("tron")
-    ),
-    ChainCode.Sepolia: ChainSpec(
-        ChainType.EVM, 11155111, False, 12, "ETH", 18, 6, is_testnet=True
     ),
     ChainCode.Nile: ChainSpec(
         ChainType.TRON, None, None, 0, "TRX", 6, 6, is_testnet=True
