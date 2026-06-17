@@ -72,7 +72,7 @@ class SystemSettings(models.Model):
     )
     invoice_vault_slot_limit_per_project_chain = models.PositiveIntegerField(
         _("账单 VaultSlot 单项目单链上限"),
-        default=10,
+        default=100,
         validators=[MinValueValidator(1)],
         help_text=_(
             "单个项目在单条链上最多可创建的账单收款 VaultSlot 数量。"

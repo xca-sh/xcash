@@ -85,7 +85,7 @@ def get_invoice_vault_slot_limit_per_project_chain() -> int:
     system_settings = get_system_settings()
     if system_settings is not None:
         return int(system_settings.invoice_vault_slot_limit_per_project_chain)
-    return 10
+    return 100
 
 
 def get_aml_screening_enabled() -> bool:
