@@ -29,7 +29,7 @@ logger = structlog.get_logger()
 _SAAS_PERMISSION_PATH = "/callbacks/xcash/permission"
 
 # fetched_at 落后超过此秒数即派发异步刷新；同时也是去重锁 TTL
-REFRESH_AFTER = 60
+REFRESH_AFTER = 5
 
 _TIMEOUT = httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=5.0)
 
