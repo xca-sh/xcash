@@ -45,7 +45,6 @@ class ChainAdmin(ModelAdmin):
         "active",
         "confirm_block_count_display",
         "latest_block_number",
-        "evm_log_max_block_range",
     )
     list_editable = (
         "sort_order",
@@ -370,7 +369,9 @@ class VaultSlotCollectScheduleAdmin(ReadOnlyModelAdmin):
     def requeue_failed_collect_schedules(self, request, queryset):
         requeued_count = 0
         skipped_count = 0
-        for schedule in queryset.select_related("chain", "crypto", "vault_slot", "tx_task"):
+        for schedule in queryset.select_related(
+            "chain", "crypto", "vault_slot", "tx_task"
+        ):
             pending_schedule = schedule.requeue_failed_collect()
             if pending_schedule is None:
                 skipped_count += 1
@@ -380,9 +381,7 @@ class VaultSlotCollectScheduleAdmin(ReadOnlyModelAdmin):
         level = messages.WARNING if skipped_count else messages.SUCCESS
         self.message_user(
             request,
-            _(
-                "已重新排队 %(requeued)d 个失败归集计划，跳过 %(skipped)d 个非失败计划。"
-            )
+            _("已重新排队 %(requeued)d 个失败归集计划，跳过 %(skipped)d 个非失败计划。")
             % {"requeued": requeued_count, "skipped": skipped_count},
             level=level,
         )
