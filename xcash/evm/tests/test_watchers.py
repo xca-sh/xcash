@@ -16,6 +16,7 @@ from evm.scanner.watchers import clear_token_registry_cache
 from evm.scanner.watchers import load_owned_addresses_for_candidates
 from evm.scanner.watchers import load_token_registry
 from evm.tests._fixtures import make_evm_chain
+from evm.vault_slots import predict_address
 from invoices.models import DifferRecipientAddress
 from projects.models import Customer
 from projects.models import Project
@@ -207,4 +208,145 @@ class EvmTokenRegistryCacheTests(TestCase):
         return Project.objects.create(
             name=f"watcher-project-{suffix}",
             webhook="https://example.com/webhook",
+        )
+
+
+@override_settings(CACHES=WATCHER_TEST_CACHES)
+class CrossChainDepositSlotTests(TestCase):
+    """充值地址跨 EVM 链共用时，扫描应能识别并按需补建本链 VaultSlot。"""
+
+    def setUp(self):
+        cache.clear()
+        self.eth = make_evm_chain(code=ChainCode.Ethereum, rpc="http://eth.local")
+        self.bsc = make_evm_chain(code=ChainCode.BSC, rpc="http://bsc.local")
+        self.vault_address = Web3.to_checksum_address("0x" + "11" * 20)
+        self.project = Project.objects.create(
+            name="xchain-project",
+            webhook="https://example.com/webhook",
+            evm_vault=self.vault_address,
+        )
+        self.customer = Customer.objects.create(
+            project=self.project,
+            uid="xchain-customer",
+        )
+        self.salt = VaultSlot.build_salt(
+            usage=VaultSlotUsage.DEPOSIT,
+            customer=self.customer,
+        )
+        # 充值地址跨 EVM 链确定相同：用任一 EVM 链预测即可。
+        self.deposit_address = predict_address(
+            chain=self.eth,
+            vault=self.vault_address,
+            salt=self.salt,
+        )
+        # 客户只在 Ethereum 取过充值地址：仅有 ETH 行、无 BSC 行。
+        self.eth_slot = VaultSlot.objects.create(
+            customer=self.customer,
+            usage=VaultSlotUsage.DEPOSIT,
+            chain=self.eth,
+            address=self.deposit_address,
+            salt=self.salt,
+        )
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_cross_chain_deposit_is_recognized_and_slot_materialized(self):
+        owned = load_owned_addresses_for_candidates(
+            chain=self.bsc,
+            addresses={self.deposit_address},
+        )
+
+        self.assertEqual(owned, frozenset({self.deposit_address}))
+        slot = VaultSlot.objects.get(
+            chain=self.bsc,
+            customer=self.customer,
+            usage=VaultSlotUsage.DEPOSIT,
+        )
+        self.assertEqual(slot.address, self.deposit_address)
+        self.assertEqual(bytes(slot.salt), self.salt)
+        # ERC20 充值不预部署：补建只落行，部署留给归集前置闸门按需触发。
+        self.assertFalse(slot.is_deployed)
+
+    def test_materialize_is_idempotent_across_repeated_windows(self):
+        load_owned_addresses_for_candidates(
+            chain=self.bsc,
+            addresses={self.deposit_address},
+        )
+        owned = load_owned_addresses_for_candidates(
+            chain=self.bsc,
+            addresses={self.deposit_address},
+        )
+
+        self.assertEqual(owned, frozenset({self.deposit_address}))
+        self.assertEqual(
+            VaultSlot.objects.filter(
+                chain=self.bsc,
+                customer=self.customer,
+                usage=VaultSlotUsage.DEPOSIT,
+            ).count(),
+            1,
+        )
+
+    def test_recompute_mismatch_is_rejected(self):
+        # 源行地址与 (vault, salt) 不自洽：本链复算结果不等于该地址，拒绝补建，
+        # 避免把无法在本链部署归集的地址记成充值。
+        bogus_customer = Customer.objects.create(
+            project=self.project,
+            uid="xchain-bogus",
+        )
+        bogus_address = Web3.to_checksum_address("0x" + "22" * 20)
+        VaultSlot.objects.create(
+            customer=bogus_customer,
+            usage=VaultSlotUsage.DEPOSIT,
+            chain=self.eth,
+            address=bogus_address,
+            salt=b"\x09" * 32,
+        )
+
+        owned = load_owned_addresses_for_candidates(
+            chain=self.bsc,
+            addresses={bogus_address},
+        )
+
+        self.assertEqual(owned, frozenset())
+        self.assertFalse(
+            VaultSlot.objects.filter(
+                chain=self.bsc,
+                customer=bogus_customer,
+            ).exists()
+        )
+
+    def test_invoice_slot_is_not_materialized_cross_chain(self):
+        # 账单槽位跨链不自动补建：付错链与充值语义不同。
+        invoice_salt = VaultSlot.build_salt(
+            usage=VaultSlotUsage.INVOICE,
+            project_id=self.project.pk,
+            invoice_index=7,
+        )
+        invoice_address = predict_address(
+            chain=self.eth,
+            vault=self.vault_address,
+            salt=invoice_salt,
+        )
+        VaultSlot.objects.create(
+            usage=VaultSlotUsage.INVOICE,
+            chain=self.eth,
+            project=self.project,
+            invoice_index=7,
+            address=invoice_address,
+            salt=invoice_salt,
+        )
+
+        owned = load_owned_addresses_for_candidates(
+            chain=self.bsc,
+            addresses={invoice_address},
+        )
+
+        self.assertEqual(owned, frozenset())
+        self.assertFalse(
+            VaultSlot.objects.filter(
+                chain=self.bsc,
+                usage=VaultSlotUsage.INVOICE,
+            ).exists()
         )

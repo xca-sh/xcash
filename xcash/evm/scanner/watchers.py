@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import structlog
 from django.core.cache import cache
 
 from chains.models import Chain
 from chains.models import VaultSlot
+from chains.models import VaultSlotUsage
 from currencies.models import CryptoOnChain
+
+logger = structlog.get_logger()
 
 TOKEN_REGISTRY_CACHE_KEY_TEMPLATE = "evm:scanner:token_registry:{chain_id}"
 
@@ -60,17 +64,96 @@ def load_owned_addresses_for_candidates(
     if not addresses:
         return frozenset()
 
-    vault_slot_addresses = VaultSlot.objects.filter(
+    candidates = set(addresses)
+    vault_slot_addresses = set(
+        VaultSlot.objects.filter(
+            chain=chain,
+            address__in=candidates,
+        ).values_list("address", flat=True)
+    )
+    # 充值地址按 (project, customer) 在同一链类型内确定唯一、与具体网络无关（salt 不掺
+    # chain，factory/implementation 全网同址）。客户可能只在别的 EVM 链取过该地址，本链
+    # 尚无 VaultSlot 行，导致同地址的跨链充值被静默丢弃。这里对这类候选按需补建本链槽位，
+    # 把识别从「本链行已存在」解耦为「能复算认出客户」。
+    vault_slot_addresses |= ensure_cross_chain_deposit_slots(
         chain=chain,
-        address__in=addresses,
-    ).values_list("address", flat=True)
+        candidates=candidates - vault_slot_addresses,
+    )
     from invoices.models import DifferRecipientAddress
 
     differ_addresses = DifferRecipientAddress.matched_addresses_for_candidates(
         chain=chain,
-        candidates=set(addresses),
+        candidates=candidates,
     )
-    return frozenset(set(vault_slot_addresses) | differ_addresses)
+    return frozenset(vault_slot_addresses | differ_addresses)
+
+
+def ensure_cross_chain_deposit_slots(
+    *,
+    chain: Chain,
+    candidates: set[str],
+) -> set[str]:
+    """为「已是其它 EVM 链充值槽位、本链却无对应行」的候选地址按需补建本链 VaultSlot。
+
+    只处理 DEPOSIT 用途：账单（INVOICE）收款是按指定链发生的，跨链付款属于「付错链」，
+    语义不同，不在此自动补建。返回本轮成功补建（或已存在）的、确属本链可归集的地址集合。
+    """
+    if not candidates:
+        return set()
+
+    source_slots = (
+        VaultSlot.objects.filter(
+            usage=VaultSlotUsage.DEPOSIT,
+            chain__type=chain.type,
+            address__in=candidates,
+        )
+        .exclude(chain=chain)
+        .select_related("project", "customer", "chain")
+    )
+
+    materialized: set[str] = set()
+    for source in source_slots:
+        if materialize_deposit_slot_on_chain(chain=chain, source=source):
+            materialized.add(source.address)
+    return materialized
+
+
+def materialize_deposit_slot_on_chain(*, chain: Chain, source: VaultSlot) -> bool:
+    """把另一条 EVM 链上的充值槽位在本链落地为 VaultSlot 行，补建前做复算校验。
+
+    复算校验是这条跨链识别路径的安全闸门：用本链 factory/implementation/vault/salt
+    重新预测地址，必须与候选完全一致才补建。地址不符说明本链合约配置与全网不一致、该
+    地址在本链不可部署归集，拒绝补建以免记入一笔无法归集的充值。复算是纯本地计算，不打 RPC。
+    """
+    from evm.vault_slots import predict_address
+
+    vault_address = source.project.vault_address_for_chain_type(chain.type)
+    if not vault_address:
+        return False
+
+    salt = bytes(source.salt)
+    predicted = predict_address(chain=chain, vault=vault_address, salt=salt)
+    if predicted != source.address:
+        logger.warning(
+            "跨链充值地址在本链复算不一致，拒绝补建 VaultSlot",
+            chain=chain.code,
+            source_chain=source.chain.code,
+            address=source.address,
+            predicted=predicted,
+        )
+        return False
+
+    # get_or_create 受 (customer, chain) / (chain, address) 唯一约束保护，重放窗口或
+    # 多 worker 并发补建同一槽位时由唯一约束收口，IntegrityError 被 get_or_create 吞掉后
+    # 回退为 get，幂等安全。不在此触发部署：ERC20 充值的部署延迟到归集前置闸门按需进行。
+    VaultSlot.objects.get_or_create(
+        chain=chain,
+        project=source.project,
+        usage=VaultSlotUsage.DEPOSIT,
+        customer=source.customer,
+        defaults={"address": source.address, "salt": salt},
+    )
+    return True
 
 
 def _token_registry_cache_key(*, chain: Chain) -> str:
