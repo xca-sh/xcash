@@ -50,7 +50,7 @@ CORS_ALLOWED_ORIGINS = [f"{SCHEME}://{DOMAIN}"]
 # Redis broker 在 worker 收到 TERM 时，有活跃任务才进入 soft shutdown，
 # 避免空闲 worker 每次容器重建都固定等待；50s 仍小于 compose 里的 60s stop_grace_period。
 CELERY_WORKER_SOFT_SHUTDOWN_TIMEOUT = env.float(
-    "CELERY_WORKER_SOFT_SHUTDOWN_TIMEOUT", default=50.0
+    "CELERY_WORKER_SOFT_SHUTDOWN_TIMEOUT", default=10
 )
 CELERY_WORKER_ENABLE_SOFT_SHUTDOWN_ON_IDLE = env.bool(
     "CELERY_WORKER_ENABLE_SOFT_SHUTDOWN_ON_IDLE", default=False
