@@ -2507,6 +2507,39 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(detail.native_price, "0.1")
         self.assertEqual(detail.gas_cost, "0.4")
 
+    @patch("tron.saas_gas_billing.send_saas_callback")
+    @patch("tron.saas_gas_billing.build_tx_detail")
+    def test_gas_fee_callbacks_include_customer_uid(
+        self,
+        build_tx_detail_mock,
+        send_callback_mock,
+    ):
+        from tron.saas_gas_billing import TronTxDetail
+        from tron.saas_gas_billing import send_vault_slot_collect_gas_fee
+        from tron.saas_gas_billing import send_vault_slot_deploy_gas_fee
+
+        build_tx_detail_mock.return_value = TronTxDetail(
+            gas_cost="0.4",
+            tx_hash="c" * 64,
+            chain="Tron",
+            fee_sun=1_000_000,
+            energy_usage_total=65_000,
+            net_usage=300,
+            native_price="0.1",
+        )
+
+        cases = (
+            (self.create_deploy_task, send_vault_slot_deploy_gas_fee),
+            (self.create_collect_task, send_vault_slot_collect_gas_fee),
+        )
+        for create_task, send_callback in cases:
+            with self.subTest(operation=send_callback.__name__):
+                send_callback(tx_task=create_task())
+                callback = send_callback_mock.call_args.args[0]
+                self.assertEqual(callback.appid, self.project.appid)
+                self.assertEqual(callback.uid, self.customer.uid)
+                send_callback_mock.reset_mock()
+
     @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
     @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
     @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")

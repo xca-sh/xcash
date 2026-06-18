@@ -99,7 +99,9 @@ def notify_vault_slot_deploy_gas_fee(*, tx_task: TxTask) -> None:
 
 def send_vault_slot_deploy_gas_fee(*, tx_task: TxTask) -> None:
     slot = (
-        VaultSlot.objects.select_related("project", "chain").get(deploy_tx_task=tx_task)
+        VaultSlot.objects.select_related("project", "chain", "customer").get(
+            deploy_tx_task=tx_task
+        )
     )
     tx_detail = build_tx_detail(chain=slot.chain, tx_hash=tx_task.tx_hash)
     send_saas_callback(
@@ -109,6 +111,7 @@ def send_vault_slot_deploy_gas_fee(*, tx_task: TxTask) -> None:
             sys_no=f"tron-vault-slot-deploy:{tx_task.pk}",
             currency="USDT",
             tx_detail=asdict(tx_detail),
+            uid=slot.customer.uid if slot.customer_id else None,
         )
     )
 
@@ -144,6 +147,7 @@ def notify_vault_slot_collect_gas_fee(*, tx_task: TxTask) -> None:
 def send_vault_slot_collect_gas_fee(*, tx_task: TxTask) -> None:
     schedule = VaultSlotCollectSchedule.objects.select_related(
         "vault_slot__project",
+        "vault_slot__customer",
         "chain",
     ).get(tx_task=tx_task)
     slot = schedule.vault_slot
@@ -155,6 +159,7 @@ def send_vault_slot_collect_gas_fee(*, tx_task: TxTask) -> None:
             sys_no=f"tron-vault-slot-collect:{tx_task.pk}",
             currency="USDT",
             tx_detail=asdict(tx_detail),
+            uid=slot.customer.uid if slot.customer_id else None,
         )
     )
 

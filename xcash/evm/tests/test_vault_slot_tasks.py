@@ -974,6 +974,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         callback = send_callback_mock.call_args.args[0]
         self.assertEqual(callback.event, "gas_fee.vault_slot_deploy.confirmed")
         self.assertEqual(callback.appid, self.project.appid)
+        self.assertEqual(callback.uid, self.customer.uid)
         self.assertEqual(callback.currency, "USDT")
         self.assertIsNone(callback.worth)
         tx_detail = callback.tx_detail
@@ -1913,6 +1914,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         callback = send_callback_mock.call_args.args[0]
         self.assertEqual(callback.event, "gas_fee.vault_slot_collect.confirmed")
         self.assertEqual(callback.appid, self.project.appid)
+        self.assertEqual(callback.uid, self.customer.uid)
         self.assertEqual(callback.currency, "USDT")
         self.assertIsNone(callback.worth)
         tx_detail = callback.tx_detail

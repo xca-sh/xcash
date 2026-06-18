@@ -110,11 +110,14 @@ class SaasCallbackTest(TestCase):
             appid="XC-test",
             sys_no="vault-slot-deploy:1",
             currency="USDT",
+            uid="42",
             tx_detail={"gas_cost": "0.042"},
         ).to_payload()
         assert gas_payload["event"] == "gas_fee.vault_slot_deploy.confirmed"
+        assert gas_payload["uid"] == "42"
         assert gas_payload["tx_detail"] == {"gas_cost": "0.042"}
         assert "worth" not in gas_payload
+        assert "uid" not in worth_payload
 
     def test_invalid_event_value_is_rejected(self):
         import pytest

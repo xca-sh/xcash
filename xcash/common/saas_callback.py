@@ -47,6 +47,7 @@ class SaasCallback:
     「两者都为 None / 都给 / 与 event 不匹配」）：
     - invoice/deposit → worth（成交/充值等值金额）；
     - gas_fee → tx_detail（链上成本明细，含 gas_cost）。
+    uid 仅在 VaultSlot 能关联 Customer 时携带，供 SaaS 共享充值项目定位实际用户。
     """
 
     event: CallbackEvent
@@ -55,6 +56,7 @@ class SaasCallback:
     currency: str
     worth: str | None = None
     tx_detail: dict | None = None
+    uid: str | None = None
 
     def __post_init__(self) -> None:
         CallbackEvent(self.event)  # 限定 event 取值，非法值抛 ValueError
@@ -77,6 +79,8 @@ class SaasCallback:
             payload["worth"] = self.worth
         if self.tx_detail is not None:
             payload["tx_detail"] = self.tx_detail
+        if self.uid is not None:
+            payload["uid"] = self.uid
         return payload
 
 
