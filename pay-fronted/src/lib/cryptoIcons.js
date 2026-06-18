@@ -1,18 +1,10 @@
 /**
  * 加密货币和区块链图标工具
- * 主要使用 cryptocurrency-icons CDN，Cryptofonts 作为备用
+ * 代币图标用 cryptocurrency-icons CDN；链图标用 DefiLlama 链图标 CDN，
+ * 与后端 chains/constants.py 的 CHAIN_SPECS.icon 保持同一来源、同一 slug。
  */
 
 const CDN_BASE = 'https://cdn.jsdelivr.net/npm/cryptocurrency-icons@0.18.1/svg/color'
-
-/**
- * 特殊处理的图标映射（用于不在主 CDN 中的新币种）
- * 这些图标会使用官方 GitHub 源或 Cryptofonts 备用库
- */
-const SPECIAL_ICONS = {
-  'base': 'https://icons.llamao.fi/icons/chains/rsz_base.jpg',
-  'zksync': "https://icons.llamao.fi/icons/chains/rsz_zksync%20era.jpg",
-}
 
 /**
  * 加密货币符号到图标文件名的映射
@@ -42,58 +34,27 @@ const CRYPTO_ICON_MAP = {
 }
 
 /**
- * 区块链网络到图标的映射
- * 格式：链名-网络性质（如 ethereum-mainnet, ethereum-sepolia）
+ * 链 code 到 DefiLlama 图标 slug 的映射。
+ * 键为后端 Chain.code（裸链名，见 chains/constants.py 的 ChainCode），slug 与 code
+ * 不机械对应（bsc→binance、arbitrum-one→arbitrum），故逐条显式指定，与后端 _icon() 一致。
+ * 测试网/本地链复用其母网图标，便于支付页统一展示。
  */
-const CHAIN_ICON_MAP = {
-  // Ethereum
-  'ethereum-mainnet': 'eth',
-  'ethereum-sepolia': 'eth',
-  'ethereum-goerli': 'eth',
-  'ethereum-holesky': 'eth',
+const CHAIN_ICON_SLUG_MAP = {
+  ethereum: 'ethereum',
+  bsc: 'binance',
+  polygon: 'polygon',
+  'arbitrum-one': 'arbitrum',
+  optimism: 'optimism',
+  base: 'base',
+  avalanche: 'avalanche',
+  linea: 'linea',
+  scroll: 'scroll',
+  tron: 'tron',
 
-  // BNB Chain (BSC)
-  'bsc-mainnet': 'bnb',
-  'bsc-testnet': 'bnb',
-  'bnbchain-mainnet': 'bnb',
-  'bnbchain-testnet': 'bnb',
-
-  // Polygon
-  'polygon-mainnet': 'matic',
-  'polygon-amoy': 'matic',
-  'polygon-mumbai': 'matic',
-
-  // Arbitrum
-  'arbitrum-mainnet': 'arb',
-  'arbitrum-sepolia': 'arb',
-  'arbitrum-goerli': 'arb',
-
-  // Optimism
-  'optimism-mainnet': 'op',
-  'optimism-sepolia': 'op',
-  'optimism-goerli': 'op',
-
-  // Avalanche
-  'avalanche-mainnet': 'avax',
-  'avalanche-fuji': 'avax',
-
-  // Solana
-  'solana-mainnet': 'sol',
-  'solana-devnet': 'sol',
-  'solana-testnet': 'sol',
-
-  // Tron
-  'tron-mainnet': 'trx',
-  'tron-shasta': 'trx',
-  'tron-nile': 'trx',
-
-  // Base
-  'base-mainnet': 'base',
-  'base-sepolia': 'base',
-
-  // zkSync
-  'zksync-mainnet': 'zksync',
-  'zksync-sepolia': 'zksync',
+  // 测试网 / 本地链：复用母网图标
+  sepolia: 'ethereum',
+  anvil: 'ethereum',
+  nile: 'tron',
 }
 
 /**
@@ -112,23 +73,16 @@ export function getCryptoIconUrl(crypto) {
 
 /**
  * 获取区块链图标 URL
- * @param {string} chain - 链名称（如 ethereum, bsc）
+ * @param {string} chain - 链 code（后端裸链名，如 ethereum、bsc、tron、base）
  * @returns {string|null} - 图标 URL 或 null
  */
 export function getChainIconUrl(chain) {
   if (!chain) return null
 
-  const normalizedChain = chain.toLowerCase()
-  const iconName = CHAIN_ICON_MAP[normalizedChain]
+  const slug = CHAIN_ICON_SLUG_MAP[chain.toLowerCase()]
+  if (!slug) return null
 
-  if (!iconName) return null
-
-  // 检查是否有特殊图标映射
-  if (SPECIAL_ICONS[iconName]) {
-    return SPECIAL_ICONS[iconName]
-  }
-
-  return `${CDN_BASE}/${iconName}.svg`
+  return `https://icons.llamao.fi/icons/chains/rsz_${slug}.jpg`
 }
 
 /**
@@ -142,65 +96,39 @@ export function getCryptoDisplayName(crypto) {
 }
 
 /**
+ * 链 code 到显示名的映射，与后端 ChainCode 标签保持一致。
+ */
+const CHAIN_NAME_MAP = {
+  ethereum: 'Ethereum',
+  bsc: 'BNB Chain',
+  polygon: 'Polygon',
+  'arbitrum-one': 'Arbitrum One',
+  optimism: 'Optimism',
+  base: 'Base',
+  avalanche: 'Avalanche',
+  linea: 'Linea',
+  scroll: 'Scroll',
+  tron: 'Tron',
+  sepolia: 'Ethereum Sepolia',
+  nile: 'Tron Nile',
+  anvil: 'Anvil Local',
+}
+
+/**
+ * 测试网 / 本地链的 code 集合，与后端 CHAIN_SPECS.is_testnet 一致。
+ */
+const TESTNET_CHAINS = new Set(['sepolia', 'nile', 'anvil'])
+
+/**
  * 获取链显示名称
- * @param {string} chain - 链名称（格式：链名-网络性质）
+ * @param {string} chain - 链 code（后端裸链名）
  * @returns {string}
  */
 export function getChainDisplayName(chain) {
   if (!chain) return ''
 
-  const nameMap = {
-    // Ethereum
-    'ethereum-mainnet': 'Ethereum',
-    'ethereum-sepolia': 'Ethereum Sepolia',
-    'ethereum-goerli': 'Ethereum Goerli',
-    'ethereum-holesky': 'Ethereum Holesky',
-
-    // BNB Chain
-    'bsc-mainnet': 'BNB Chain',
-    'bsc-testnet': 'BNB Chain Testnet',
-    'bnbchain-mainnet': 'BNB Chain',
-    'bnbchain-testnet': 'BNB Chain Testnet',
-
-    // Polygon
-    'polygon-mainnet': 'Polygon',
-    'polygon-amoy': 'Polygon Amoy',
-    'polygon-mumbai': 'Polygon Mumbai',
-
-    // Arbitrum
-    'arbitrum-mainnet': 'Arbitrum',
-    'arbitrum-sepolia': 'Arbitrum Sepolia',
-    'arbitrum-goerli': 'Arbitrum Goerli',
-
-    // Optimism
-    'optimism-mainnet': 'Optimism',
-    'optimism-sepolia': 'Optimism Sepolia',
-    'optimism-goerli': 'Optimism Goerli',
-
-    // Avalanche
-    'avalanche-mainnet': 'Avalanche',
-    'avalanche-fuji': 'Avalanche Fuji',
-
-    // Solana
-    'solana-mainnet': 'Solana',
-    'solana-devnet': 'Solana Devnet',
-    'solana-testnet': 'Solana Testnet',
-
-    // Tron
-    'tron-mainnet': 'Tron',
-    'tron-shasta': 'Tron Shasta',
-    'tron-nile': 'Tron Nile',
-
-    // Base
-    'base-mainnet': 'Base',
-    'base-sepolia': 'Base Sepolia',
-
-    // zkSync
-    'zksync-mainnet': 'zkSync Era',
-    'zksync-sepolia': 'zkSync Era Sepolia',
-  }
-
-  return nameMap[chain.toLowerCase()] || chain
+  const lower = chain.toLowerCase()
+  return CHAIN_NAME_MAP[lower] || chain
     .split('-')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ')
@@ -208,25 +136,10 @@ export function getChainDisplayName(chain) {
 
 /**
  * 检查是否为测试网络
- * @param {string} chain - 链名称（格式：链名-网络性质）
+ * @param {string} chain - 链 code（后端裸链名）
  * @returns {boolean}
  */
 export function isTestnet(chain) {
   if (!chain) return false
-  const lower = chain.toLowerCase()
-
-  // mainnet 为主网
-  if (lower.endsWith('-mainnet')) return false
-
-  // 其他都视为测试网（testnet, sepolia, goerli, devnet, shasta, nile, amoy, mumbai, fuji, holesky 等）
-  return lower.includes('testnet') ||
-         lower.includes('sepolia') ||
-         lower.includes('goerli') ||
-         lower.includes('holesky') ||
-         lower.includes('mumbai') ||
-         lower.includes('amoy') ||
-         lower.includes('fuji') ||
-         lower.includes('devnet') ||
-         lower.includes('shasta') ||
-         lower.includes('nile')
+  return TESTNET_CHAINS.has(chain.toLowerCase())
 }
