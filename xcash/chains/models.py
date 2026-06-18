@@ -1047,20 +1047,20 @@ class VaultSlotBalance(models.Model):
     )
     value = models.DecimalField(
         _("链上最小单位余额"),
-        max_digits=80,
+        max_digits=32,
         decimal_places=0,
         default=0,
     )
     amount = models.DecimalField(
         _("余额"),
-        max_digits=80,
-        decimal_places=30,
+        max_digits=32,
+        decimal_places=8,
         default=0,
     )
     worth = models.DecimalField(
         _("价值(USD)"),
-        max_digits=80,
-        decimal_places=30,
+        max_digits=32,
+        decimal_places=4,
         default=0,
     )
     synced_block_number = models.PositiveIntegerField(
