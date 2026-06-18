@@ -841,7 +841,7 @@ class VaultSlot(models.Model):
     is_deployed = models.BooleanField(
         _("是否已部署"),
         default=False,
-        help_text=_("链上已观测到该 VaultSlot 合约 code。"),
+        help_text=_("链上观测到该 VaultSlot 合约 code。"),
     )
     has_received = models.BooleanField(
         _("是否收到过资金"),

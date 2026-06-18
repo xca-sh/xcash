@@ -203,7 +203,7 @@ class Migration(migrations.Migration):
                     "is_deployed",
                     models.BooleanField(
                         default=False,
-                        help_text="链上已观测到该 VaultSlot 合约 code。",
+                        help_text="链上观测到该 VaultSlot 合约 code。",
                         verbose_name="是否已部署",
                     ),
                 ),
