@@ -98,10 +98,14 @@ function SummaryBar({ invoice, isDark, toggleTheme }) {
     <div className="border-b px-5 py-3">
       <div className="mx-auto grid max-w-5xl grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] items-center gap-3">
         {/* Brand */}
-        <div className="flex min-w-0 items-center gap-2 justify-self-start">
+        <a
+          href="https://xca.sh"
+          className="flex min-w-0 items-center gap-2 justify-self-start rounded-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          aria-label="Xcash"
+        >
           <LogoMark size={20} />
           <span className="hidden font-semibold text-sm tracking-tight sm:inline">Xcash</span>
-        </div>
+        </a>
 
         {/* Amount */}
         <div className="min-w-0 justify-self-center text-center">
