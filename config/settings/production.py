@@ -41,9 +41,11 @@ SECURE_HSTS_PRELOAD = True
 # Django 要求 CSRF_TRUSTED_ORIGINS 带 scheme。
 CSRF_TRUSTED_ORIGINS = [f"{SCHEME}://{DOMAIN}"]
 
-# 生产环境严格限制跨域来源，仅允许自身域名。
+# 生产环境严格限制跨域来源，仅允许基础白名单与自身域名。
 CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGINS = [f"{SCHEME}://{DOMAIN}"]
+CORS_ALLOWED_ORIGINS = list(
+    dict.fromkeys([*CORS_ALLOWED_ORIGINS, f"{SCHEME}://{DOMAIN}"])
+)
 
 # Celery
 # ------------------------------------------------------------------------------

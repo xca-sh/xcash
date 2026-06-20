@@ -55,8 +55,9 @@ IS_SAAS = env.bool("IS_SAAS", default=bool(SAAS_API_TOKEN))
 SAAS_CALLBACK_URL = env.str("SAAS_CALLBACK_URL", default="http://xcash-saas-caddy")
 
 # https://docs.djangoproject.com/en/dev/ref/settings/#allowed-hosts
-# CORS 默认关闭，由各环境配置显式开启或配置白名单。
+# CORS 默认关闭全放行，基础白名单允许官网来源；各环境可继续追加自身域名。
 CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = ["https://xca.sh"]
 
 DEFAULT_SUPERUSER_USERNAME = "admin"
 DEFAULT_SUPERUSER_PASSWORD = env.str(
