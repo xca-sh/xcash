@@ -331,7 +331,7 @@ class EvmTxTaskTests(TestCase):
         # CONTRACT_CALL 的主动余额阈值按任务自身 gas 计算；余额刚好覆盖
         # 2 * task_gas * gas_price 时应通过并进入真实广播。
         chain = make_evm_chain(
-            code=ChainCode.Avalanche,
+            code=ChainCode.Base,
             rpc="http://localhost:8545",
         )
         addr = Address.objects.create(
@@ -442,7 +442,7 @@ class EvmTxTaskTests(TestCase):
 
     def test_balance_preflight_uses_signed_gas_price_not_current_lower_price(self):
         chain = make_evm_chain(
-            code=ChainCode.Linea,
+            code=ChainCode.Optimism,
             rpc="http://localhost:8545",
         )
         addr = Address.objects.create(
@@ -488,7 +488,7 @@ class EvmTxTaskTests(TestCase):
 
     def test_broadcast_skips_submitted_task(self):
         chain = make_evm_chain(
-            code=ChainCode.Scroll,
+            code=ChainCode.ArbitrumOne,
             rpc="http://localhost:8545",
         )
         addr = Address.objects.create(
@@ -532,7 +532,7 @@ class EvmTxTaskTests(TestCase):
         # 低 nonce 的 SUBMITTED 任务超时重播是为了释放同地址 pipeline；
         # 如果它也被 pipeline_full 阻断，满 pipeline 会无法自愈。
         chain = make_evm_chain(
-            code=ChainCode.Scroll,
+            code=ChainCode.ArbitrumOne,
             rpc="http://localhost:8545",
         )
         addr = Address.objects.create(

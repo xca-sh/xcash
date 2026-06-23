@@ -37,9 +37,6 @@
 | Arbitrum One | `arbitrum-one` | EVM | `ETH` | `42161` |
 | Optimism | `optimism` | EVM | `ETH` | `10` |
 | Base | `base` | EVM | `ETH` | `8453` |
-| Avalanche C-Chain | `avalanche` | EVM | `AVAX` | `43114` |
-| Linea | `linea` | EVM | `ETH` | `59144` |
-| Scroll | `scroll` | EVM | `ETH` | `534352` |
 | Tron | `tron` | Tron | `TRX` | - |
 | Sepolia | `sepolia` | EVM 测试网 | `ETH` | `11155111` |
 | Nile | `nile` | Tron 测试网 | `TRX` | - |
@@ -49,7 +46,7 @@
 
 ### Crypto Symbol
 
-`crypto` 使用币种 symbol，例如 `USDT`、`USDC`、`DAI`、`ETH`、`BNB`、`POL`、`AVAX`、`TRX`。实际可用组合取决于后台启用的链、币种和链上部署关系。
+`crypto` 使用币种 symbol，例如 `USDT`、`USDC`、`DAI`、`ETH`、`BNB`、`POL`、`TRX`。实际可用组合取决于后台启用的链、币种和链上部署关系。
 
 ## 认证机制
 

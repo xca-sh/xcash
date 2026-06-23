@@ -368,6 +368,8 @@ run_main_manage migration-rehearsal-db migrate --plan 2>&1 \
 # migrate / check 阶段输出长且重要：tee 写 log 文件 + terminal 实时显示。
 run_main_manage migration-rehearsal-db migrate --noinput 2>&1 \
   | tee "${TMP_DIR}/main-rehearsal-migrate.log"
+run_main_manage migration-rehearsal-db ensure_default_reference_data 2>&1 \
+  | tee "${TMP_DIR}/main-rehearsal-reference-data.log"
 run_main_manage migration-rehearsal-db check --deploy 2>&1 \
   | tee "${TMP_DIR}/main-rehearsal-check.log"
 REHEARSAL_IN_PROGRESS=false
@@ -392,6 +394,7 @@ run_main_manage db migrate --noinput 2>&1 \
 PRODUCTION_MIGRATE_COMPLETED=true
 
 log "run production post-migration setup"
+run_main_manage db ensure_default_reference_data
 run_main_manage db ensure_default_superuser
 
 log "start application services"

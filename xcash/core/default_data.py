@@ -46,9 +46,6 @@ PRODUCTION_MAINNET_CHAINS = (
     {"chain": ChainCode.ArbitrumOne, "native_symbol": "ETH"},
     {"chain": ChainCode.Optimism, "native_symbol": "ETH"},
     {"chain": ChainCode.Base, "native_symbol": "ETH"},
-    {"chain": ChainCode.Avalanche, "native_symbol": "AVAX"},
-    {"chain": ChainCode.Linea, "native_symbol": "ETH"},
-    {"chain": ChainCode.Scroll, "native_symbol": "ETH"},
     {"chain": ChainCode.Tron, "native_symbol": "TRX"},
 )
 
@@ -74,15 +71,6 @@ PRODUCTION_MAINNET_TOKEN_MAPPINGS = (
     # ── Base ──
     {"chain_name": ChainCode.Base, "crypto_symbol": "USDC", "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "decimals": 6},
     {"chain_name": ChainCode.Base, "crypto_symbol": "USDT", "address": "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2", "decimals": 6},
-    # ── Avalanche C-Chain ──
-    {"chain_name": ChainCode.Avalanche, "crypto_symbol": "USDC", "address": "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", "decimals": 6},
-    {"chain_name": ChainCode.Avalanche, "crypto_symbol": "USDT", "address": "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7", "decimals": 6},
-    # ── Linea ──
-    {"chain_name": ChainCode.Linea, "crypto_symbol": "USDC", "address": "0x176211869cA2b568f2A7D4EE941E073a821EE1ff", "decimals": 6},
-    {"chain_name": ChainCode.Linea, "crypto_symbol": "USDT", "address": "0xA219439258ca9da29E9Cc4cE5596924745e12B93", "decimals": 6},
-    # ── Scroll ──
-    {"chain_name": ChainCode.Scroll, "crypto_symbol": "USDC", "address": "0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4", "decimals": 6},
-    {"chain_name": ChainCode.Scroll, "crypto_symbol": "USDT", "address": "0xf55BEC9cafDbE8730f096Aa55dad6D22d44099Df", "decimals": 6},
     # ── Tron ──
     {"chain_name": ChainCode.Tron, "crypto_symbol": "USDT", "address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "decimals": 6},
 )
@@ -152,11 +140,6 @@ def ensure_production_currencies(*, using: str = "default", stdout=None) -> None
         name="Polygon Ecosystem Token",
         symbol="POL",
         defaults={"coingecko_id": "polygon", "is_native": True},
-    )
-    crypto_manager.get_or_create(
-        name="Avalanche",
-        symbol="AVAX",
-        defaults={"coingecko_id": "avalanche-2", "is_native": True},
     )
     if stdout is not None:
         stdout.write("✅ 生产主网原生币初始化完成")
@@ -331,7 +314,7 @@ def ensure_public_chains(*, using: str = "default", stdout=None) -> None:
     """初始化生产环境默认主网配置。
 
     用 get_or_create：链不存在时才建骨架；已存在则原样保留。
-    避免每次部署 migrate 触发 post_migrate 时把管理员配置的 rpc / active 覆盖掉。
+    避免每次启动 bootstrap 时把管理员配置的 rpc / active 覆盖掉。
     """
     chain_manager = Chain.objects.using(using)
 

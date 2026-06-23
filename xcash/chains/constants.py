@@ -29,6 +29,15 @@ class ChainType(models.TextChoices):
 EVM_UNKNOWN_SOURCE_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
+TEMPORARILY_DISABLED_CHAIN_CODES: frozenset[str] = frozenset(
+    {
+        ChainCode.Avalanche,
+        ChainCode.Linea,
+        ChainCode.Scroll,
+    }
+)
+
+
 @dataclass(frozen=True)
 class ChainSpec:
     type: str
@@ -81,15 +90,6 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
     ),
     ChainCode.Base: ChainSpec(
         ChainType.EVM, 8453, False, 20, "ETH", 18, 4, icon=_icon("base")
-    ),
-    ChainCode.Avalanche: ChainSpec(
-        ChainType.EVM, 43114, False, 8, "AVAX", 18, 6, icon=_icon("avalanche")
-    ),
-    ChainCode.Linea: ChainSpec(
-        ChainType.EVM, 59144, False, 20, "ETH", 18, 6, icon=_icon("linea")
-    ),
-    ChainCode.Scroll: ChainSpec(
-        ChainType.EVM, 534352, False, 20, "ETH", 18, 6, icon=_icon("scroll")
     ),
     # Anvil 是本地联调链，资产没有生产价值，必须归入测试资产域。
     ChainCode.Anvil: ChainSpec(

@@ -129,9 +129,6 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/dev/ref/settings/#locale-paths
 LOCALE_PATHS = [str(BASE_DIR / "locale")]
 
-# 系统启动后是否自动补齐基础主数据（法币/加密货币/默认链/默认映射）。
-AUTO_BOOTSTRAP_REFERENCE_DATA = True
-
 # DATABASES
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#databases

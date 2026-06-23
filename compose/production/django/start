@@ -8,6 +8,7 @@ eval "$(python /app/config/performance.py shell-env web)"
 
 # 启动前补齐运行所需的基础状态，保证全新实例 docker compose up -d 即可初始化。
 python manage.py migrate --noinput
+python manage.py ensure_default_reference_data
 python manage.py ensure_default_superuser
 
 # --max-requests + jitter：worker 处理满额请求后优雅重启，周期性回收常驻内存

@@ -91,10 +91,10 @@ Xcash provides two ways to receive funds. Distinguish them before integration:
 
 ## Chain Support
 
-| Feature | ETH | BNB Chain | Arbitrum | Base | Tron | Polygon | Avalanche | Optimism | Other EVM |
-|:--:|:---:|:---------:|:--------:|:----:|:----:|:-------:|:---------:|:--------:|:------:|
-| Payment | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes | Almost all |
-| Deposit | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes | Almost all |
+| Feature | ETH | BNB Chain | Arbitrum | Base | Tron | Polygon | Optimism |
+|:--:|:---:|:---------:|:--------:|:----:|:----:|:-------:|:--------:|
+| Payment | Yes | Yes | Yes | Yes | No | Yes | Yes |
+| Deposit | Yes | Yes | Yes | Yes | No | Yes | Yes |
 
 ## Token Support
 
@@ -207,6 +207,7 @@ If unset, the admin remains mounted at the site root and shows a security remind
 docker compose up -d
 ```
 
+The startup script first applies database migrations and fills default reference data such as chains and currencies.
 On first startup, if the database has no admin account, the system automatically creates the default admin account:
 
 ```text
@@ -224,7 +225,7 @@ Log in to the admin panel, go to **Blockchain** **Public chains**, and fill in R
 
 ### 6. Fund the system wallet with Gas
 
-Log in to the admin panel, go to **System** **System wallets**, copy the system wallet address, and send a small amount of gas token to that address on each enabled EVM chain, such as ETH, BNB, or MATIC.
+Log in to the admin panel, go to **System** **System wallets**, copy the system wallet address, and send a small amount of gas token to that address on each enabled EVM chain, such as ETH, BNB, or POL.
 
 The system wallet is only used for platform infrastructure transactions, such as VaultSlot contract deployment and VaultSlot collection tasks that must be actively initiated by the system. Business collection funds still flow to your collection address according to contract rules. Do not deposit business funds here; keep only a small gas balance that covers recent operations, so contract deployments or collection tasks are not blocked by insufficient gas.
 

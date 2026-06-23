@@ -1,13 +1,17 @@
 import pytest
 
 from chains.constants import CHAIN_SPECS
+from chains.constants import TEMPORARILY_DISABLED_CHAIN_CODES
 from chains.constants import ChainCode
 from chains.constants import ChainType
 
 
-def test_every_chain_code_has_spec():
+def test_every_enabled_chain_code_has_spec():
     for code in ChainCode:
-        assert code.value in CHAIN_SPECS, f"{code} 缺少 ChainSpec"
+        if code.value in TEMPORARILY_DISABLED_CHAIN_CODES:
+            assert code.value not in CHAIN_SPECS, f"{code} 已临时禁用，不应注册 ChainSpec"
+        else:
+            assert code.value in CHAIN_SPECS, f"{code} 缺少 ChainSpec"
 
 
 def test_evm_specs_have_chain_id_and_is_poa():
@@ -33,9 +37,6 @@ def test_tron_spec_has_no_evm_fields():
         (ChainCode.ArbitrumOne, 42161),
         (ChainCode.Optimism, 10),
         (ChainCode.Base, 8453),
-        (ChainCode.Avalanche, 43114),
-        (ChainCode.Linea, 59144),
-        (ChainCode.Scroll, 534352),
     ],
 )
 def test_evm_chain_ids(code, expected_chain_id):
@@ -51,7 +52,6 @@ def test_native_coin_symbols():
     assert CHAIN_SPECS[ChainCode.Ethereum].native_coin_symbol == "ETH"
     assert CHAIN_SPECS[ChainCode.BSC].native_coin_symbol == "BNB"
     assert CHAIN_SPECS[ChainCode.Polygon].native_coin_symbol == "POL"
-    assert CHAIN_SPECS[ChainCode.Avalanche].native_coin_symbol == "AVAX"
     assert CHAIN_SPECS[ChainCode.Tron].native_coin_symbol == "TRX"
     assert CHAIN_SPECS[ChainCode.Tron].native_coin_decimals == 6
 

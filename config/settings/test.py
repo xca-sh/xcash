@@ -77,9 +77,6 @@ TEMPLATES[0]["OPTIONS"]["debug"] = True  # type: ignore[index]
 # 邮件仍走内存后端，避免测试期间依赖外部 SMTP。
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 
-# 测试默认关闭启动自动注数，避免污染依赖空库假设的单测。
-AUTO_BOOTSTRAP_REFERENCE_DATA = False
-
 # CELERY
 # ------------------------------------------------------------------------------
 # 测试保持真实的 Redis broker；未启动 worker 时任务只会入队，不会被立即执行。

@@ -632,7 +632,7 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         self.system_settings.misttrack_openapi_api_key = "openapi-secret"
         self.system_settings.save(update_fields=["misttrack_openapi_api_key"])
         # 占位 rpc 的 active 链不能走 save()（会触发 clean 的远端校验），用 update 直接改 code。
-        Chain.objects.filter(pk=self.chain.pk).update(code=ChainCode.Scroll)
+        Chain.objects.filter(pk=self.chain.pk).update(code=ChainCode.Sepolia)
         self.chain.refresh_from_db()
 
         AmlScreeningService.screen_invoice(invoice.pk)
