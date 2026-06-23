@@ -40,6 +40,7 @@ class ChainAdmin(ModelAdmin):
         "code_display",
         "type",
         "environment_display",
+        "rpc_domain_display",
         "native_coin_display",
         "sort_order",
         "active",
@@ -78,6 +79,10 @@ class ChainAdmin(ModelAdmin):
         if obj.code == ChainCode.Anvil:
             return "本地"
         return "测试网" if obj.is_testnet else "主网"
+
+    @display(description=_("RPC 域名"))
+    def rpc_domain_display(self, obj: Chain) -> str:
+        return obj.rpc_domain_name
 
     @display(description=_("区块确认数"))
     def confirm_block_count_display(self, obj: Chain) -> int:

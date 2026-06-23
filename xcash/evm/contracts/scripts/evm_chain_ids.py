@@ -9,12 +9,21 @@ from pathlib import Path
 CONSTANTS_PATH = Path(__file__).resolve().parents[3] / "chains" / "constants.py"
 
 
+def chain_spec_value(call: ast.Call, field_name: str, position: int) -> ast.AST | None:
+    for keyword in call.keywords:
+        if keyword.arg == field_name:
+            return keyword.value
+    if len(call.args) > position:
+        return call.args[position]
+    return None
+
+
 def is_evm_chain_spec(call: ast.Call) -> bool:
     if not isinstance(call.func, ast.Name) or call.func.id != "ChainSpec":
         return False
-    if len(call.args) < 2:
+    chain_type = chain_spec_value(call, "type", 0)
+    if chain_type is None:
         return False
-    chain_type = call.args[0]
     return (
         isinstance(chain_type, ast.Attribute)
         and isinstance(chain_type.value, ast.Name)
@@ -24,7 +33,7 @@ def is_evm_chain_spec(call: ast.Call) -> bool:
 
 
 def chain_id_from_spec(call: ast.Call) -> int:
-    chain_id = call.args[1]
+    chain_id = chain_spec_value(call, "chain_id", 1)
     if not isinstance(chain_id, ast.Constant) or not isinstance(chain_id.value, int):
         raise TypeError("EVM ChainSpec 的 chain_id 必须是整数常量")
     return chain_id.value

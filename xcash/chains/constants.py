@@ -65,44 +65,135 @@ def _icon(slug: str) -> str:
 
 CHAIN_SPECS: dict[str, ChainSpec] = {
     ChainCode.Ethereum: ChainSpec(
-        ChainType.EVM, 1, False, 8, "ETH", 18, 6, icon=_icon("ethereum")
+        type=ChainType.EVM,
+        chain_id=1,
+        is_poa=False,
+        confirm_block_count=8,
+        native_coin_symbol="ETH",
+        native_coin_decimals=18,
+        scan_interval_seconds=6,
+        icon=_icon("ethereum"),
     ),
     ChainCode.BSC: ChainSpec(
-        ChainType.EVM, 56, True, 6, "BNB", 18, 6, icon=_icon("binance")
+        type=ChainType.EVM,
+        chain_id=56,
+        is_poa=True,
+        confirm_block_count=6,
+        native_coin_symbol="BNB",
+        native_coin_decimals=18,
+        scan_interval_seconds=6,
+        icon=_icon("binance"),
     ),
     ChainCode.Polygon: ChainSpec(
-        ChainType.EVM, 137, True, 128, "POL", 18, 6, icon=_icon("polygon")
+        type=ChainType.EVM,
+        chain_id=137,
+        is_poa=True,
+        confirm_block_count=128,
+        native_coin_symbol="POL",
+        native_coin_decimals=18,
+        scan_interval_seconds=6,
+        icon=_icon("polygon"),
     ),
     ChainCode.ArbitrumOne: ChainSpec(
-        ChainType.EVM, 42161, False, 20, "ETH", 18, 4, icon=_icon("arbitrum")
+        type=ChainType.EVM,
+        chain_id=42161,
+        is_poa=False,
+        confirm_block_count=20,
+        native_coin_symbol="ETH",
+        native_coin_decimals=18,
+        scan_interval_seconds=4,
+        icon=_icon("arbitrum"),
     ),
     ChainCode.Optimism: ChainSpec(
-        ChainType.EVM, 10, False, 20, "ETH", 18, 4, icon=_icon("optimism")
+        type=ChainType.EVM,
+        chain_id=10,
+        is_poa=False,
+        confirm_block_count=20,
+        native_coin_symbol="ETH",
+        native_coin_decimals=18,
+        scan_interval_seconds=4,
+        icon=_icon("optimism"),
     ),
     ChainCode.Base: ChainSpec(
-        ChainType.EVM, 8453, False, 20, "ETH", 18, 4, icon=_icon("base")
+        type=ChainType.EVM,
+        chain_id=8453,
+        is_poa=False,
+        confirm_block_count=20,
+        native_coin_symbol="ETH",
+        native_coin_decimals=18,
+        scan_interval_seconds=4,
+        icon=_icon("base"),
     ),
     ChainCode.Avalanche: ChainSpec(
-        ChainType.EVM, 43114, False, 8, "AVAX", 18, 6, icon=_icon("avalanche")
+        type=ChainType.EVM,
+        chain_id=43114,
+        is_poa=False,
+        confirm_block_count=8,
+        native_coin_symbol="AVAX",
+        native_coin_decimals=18,
+        scan_interval_seconds=6,
+        icon=_icon("avalanche"),
     ),
     ChainCode.Linea: ChainSpec(
-        ChainType.EVM, 59144, False, 20, "ETH", 18, 6, icon=_icon("linea")
+        type=ChainType.EVM,
+        chain_id=59144,
+        is_poa=False,
+        confirm_block_count=20,
+        native_coin_symbol="ETH",
+        native_coin_decimals=18,
+        scan_interval_seconds=6,
+        icon=_icon("linea"),
     ),
     ChainCode.Scroll: ChainSpec(
-        ChainType.EVM, 534352, False, 20, "ETH", 18, 6, icon=_icon("scroll")
+        type=ChainType.EVM,
+        chain_id=534352,
+        is_poa=False,
+        confirm_block_count=20,
+        native_coin_symbol="ETH",
+        native_coin_decimals=18,
+        scan_interval_seconds=6,
+        icon=_icon("scroll"),
     ),
     # Anvil 是本地联调链，资产没有生产价值，必须归入测试资产域。
     ChainCode.Anvil: ChainSpec(
-        ChainType.EVM, 31337, False, 8, "ETH", 18, 4, is_testnet=True
+        type=ChainType.EVM,
+        chain_id=31337,
+        is_poa=False,
+        confirm_block_count=8,
+        native_coin_symbol="ETH",
+        native_coin_decimals=18,
+        scan_interval_seconds=4,
+        is_testnet=True,
     ),
     ChainCode.Sepolia: ChainSpec(
-        ChainType.EVM, 11155111, False, 6, "ETH", 18, 6, is_testnet=True
+        type=ChainType.EVM,
+        chain_id=11155111,
+        is_poa=False,
+        confirm_block_count=6,
+        native_coin_symbol="ETH",
+        native_coin_decimals=18,
+        scan_interval_seconds=6,
+        is_testnet=True,
     ),
     ChainCode.Tron: ChainSpec(
-        ChainType.TRON, None, None, 0, "TRX", 6, 6, icon=_icon("tron")
+        type=ChainType.TRON,
+        chain_id=None,
+        is_poa=None,
+        confirm_block_count=0,
+        native_coin_symbol="TRX",
+        native_coin_decimals=6,
+        scan_interval_seconds=6,
+        icon=_icon("tron"),
     ),
     ChainCode.Nile: ChainSpec(
-        ChainType.TRON, None, None, 0, "TRX", 6, 6, is_testnet=True
+        type=ChainType.TRON,
+        chain_id=None,
+        is_poa=None,
+        confirm_block_count=0,
+        native_coin_symbol="TRX",
+        native_coin_decimals=6,
+        scan_interval_seconds=6,
+        is_testnet=True,
     ),
 }
 
