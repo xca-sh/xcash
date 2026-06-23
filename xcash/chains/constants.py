@@ -71,7 +71,7 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
         confirm_block_count=8,
         native_coin_symbol="ETH",
         native_coin_decimals=18,
-        scan_interval_seconds=6,
+        scan_interval_seconds=10,
         icon=_icon("ethereum"),
     ),
     ChainCode.BSC: ChainSpec(
@@ -81,7 +81,7 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
         confirm_block_count=6,
         native_coin_symbol="BNB",
         native_coin_decimals=18,
-        scan_interval_seconds=6,
+        scan_interval_seconds=8,
         icon=_icon("binance"),
     ),
     ChainCode.Polygon: ChainSpec(
@@ -91,7 +91,7 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
         confirm_block_count=128,
         native_coin_symbol="POL",
         native_coin_decimals=18,
-        scan_interval_seconds=6,
+        scan_interval_seconds=8,
         icon=_icon("polygon"),
     ),
     ChainCode.ArbitrumOne: ChainSpec(
@@ -101,7 +101,7 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
         confirm_block_count=20,
         native_coin_symbol="ETH",
         native_coin_decimals=18,
-        scan_interval_seconds=4,
+        scan_interval_seconds=8,
         icon=_icon("arbitrum"),
     ),
     ChainCode.Optimism: ChainSpec(
@@ -111,7 +111,7 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
         confirm_block_count=20,
         native_coin_symbol="ETH",
         native_coin_decimals=18,
-        scan_interval_seconds=4,
+        scan_interval_seconds=8,
         icon=_icon("optimism"),
     ),
     ChainCode.Base: ChainSpec(
@@ -121,7 +121,7 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
         confirm_block_count=20,
         native_coin_symbol="ETH",
         native_coin_decimals=18,
-        scan_interval_seconds=4,
+        scan_interval_seconds=8,
         icon=_icon("base"),
     ),
     ChainCode.Avalanche: ChainSpec(
@@ -131,7 +131,7 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
         confirm_block_count=8,
         native_coin_symbol="AVAX",
         native_coin_decimals=18,
-        scan_interval_seconds=6,
+        scan_interval_seconds=8,
         icon=_icon("avalanche"),
     ),
     ChainCode.Linea: ChainSpec(
@@ -141,7 +141,7 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
         confirm_block_count=20,
         native_coin_symbol="ETH",
         native_coin_decimals=18,
-        scan_interval_seconds=6,
+        scan_interval_seconds=8,
         icon=_icon("linea"),
     ),
     ChainCode.Scroll: ChainSpec(
@@ -151,7 +151,7 @@ CHAIN_SPECS: dict[str, ChainSpec] = {
         confirm_block_count=20,
         native_coin_symbol="ETH",
         native_coin_decimals=18,
-        scan_interval_seconds=6,
+        scan_interval_seconds=8,
         icon=_icon("scroll"),
     ),
     # Anvil 是本地联调链，资产没有生产价值，必须归入测试资产域。
