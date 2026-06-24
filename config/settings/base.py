@@ -450,7 +450,7 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_THROTTLE_RATES": {
         "anon": "256/minute",
-        "invoice_retrieve": "60/minute",
+        "invoice_retrieve": "120/minute",
         "invoice_select_method": "10/minute",
         "vault_slot": "60/minute",
     },
