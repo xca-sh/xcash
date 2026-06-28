@@ -57,6 +57,7 @@
   },
   "wallet": {
     "payWithWallet": "使用钱包支付",
+    "switchAccount": "切换账户",
     "connecting": "正在连接钱包...",
     "switching": "正在切换网络...",
     "sending": "请在钱包中确认交易...",

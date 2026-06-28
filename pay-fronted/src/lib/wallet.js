@@ -67,11 +67,41 @@ export function subscribeProviders(cb) {
 }
 
 /**
- * 连接钱包，返回第一个账户地址。
+ * 连接钱包，返回当前选中账户地址。
+ * eth_requestAccounts 返回本站已授权账户，accounts[0] 即钱包当前选中的那个。
  */
 export async function connect(provider) {
   const accounts = await provider.request({ method: "eth_requestAccounts" })
   return accounts?.[0]
+}
+
+/**
+ * 静默读取当前已连接账户（不弹窗）。未连接或读取失败时返回 null。
+ * 用于在支付前展示「将用哪个账户付款」，以及跟随钱包内账户切换。
+ */
+export async function getCurrentAccount(provider) {
+  try {
+    const accounts = await provider.request({ method: "eth_accounts" })
+    return accounts?.[0] ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 切换付款账户：重新请求账户授权，弹出钱包账户选择器。
+ *
+ * MetaMask 等按站点授权账户：已连接后 eth_requestAccounts 不会再弹选择，
+ * 故切到「未连接到本站的账户」必须经此显式 wallet_requestPermissions 重新授权。
+ * 返回用户选定后的当前账户；用户在选择器中取消时由 provider 抛错，交上层忽略。
+ */
+export async function switchAccount(provider) {
+  await provider.request({
+    method: "wallet_requestPermissions",
+    params: [{ eth_accounts: {} }],
+  })
+  const accounts = await provider.request({ method: "eth_accounts" })
+  return accounts?.[0] ?? null
 }
 
 /**

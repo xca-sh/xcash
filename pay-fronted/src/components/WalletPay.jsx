@@ -14,6 +14,11 @@ function errorTextKey(error) {
   return "wallet.failed"
 }
 
+// 地址缩略展示：0x1234...abcd。
+function shortAddress(addr) {
+  return addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : ""
+}
+
 /**
  * 注入式 EVM 钱包一键支付入口。
  *
@@ -23,7 +28,8 @@ function errorTextKey(error) {
  */
 function WalletPay({ invoice, onBroadcast }) {
   const { t } = useI18n()
-  const { wallets, status, error, pay } = useWalletPayment(invoice)
+  const { wallets, status, error, account, pay, switchAccount } =
+    useWalletPayment(invoice)
   // 多钱包时点击主按钮先展开选择列表，再对选中的 provider 发起支付。
   const [choosing, setChoosing] = useState(false)
 
@@ -111,10 +117,26 @@ function WalletPay({ invoice, onBroadcast }) {
           ))}
         </div>
       ) : (
-        <Button className="w-full" onClick={handlePrimary}>
-          <Wallet className="size-4" />
-          {t("wallet.payWithWallet")}
-        </Button>
+        <div className="flex flex-col gap-2">
+          <Button className="w-full" onClick={handlePrimary}>
+            <Wallet className="size-4" />
+            {t("wallet.payWithWallet")}
+          </Button>
+          {/* 单钱包时展示「将用哪个账户付款」并提供切换入口；默认跟随钱包当前账户，
+              切换账户经 wallet_requestPermissions 弹出钱包账户选择器。 */}
+          {wallets.length === 1 && (
+            <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+              {account && <span className="font-mono">{shortAddress(account)}</span>}
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => switchAccount(wallets[0].provider)}
+              >
+                {t("wallet.switchAccount")}
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {/* 错误提示：用户取消/切链失败/通用失败，文案随 kind 切换，按钮本身即可重试。 */}

@@ -57,6 +57,7 @@
   },
   "wallet": {
     "payWithWallet": "Pay with Wallet",
+    "switchAccount": "Switch account",
     "connecting": "Connecting wallet...",
     "switching": "Switching network...",
     "sending": "Please confirm the transaction in your wallet...",
