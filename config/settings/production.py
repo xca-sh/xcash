@@ -8,17 +8,29 @@ from .base import shared_processors
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#secret-key
 SECRET_KEY = env("DJANGO_SECRET_KEY")
-DOMAIN = env("SITE_DOMAIN", default="localhost").strip().lower()
+SITE_DOMAINS = list(
+    dict.fromkeys(
+        domain
+        for domain in (
+            item.strip().lower()
+            for item in env("SITE_DOMAIN", default="localhost").split(",")
+        )
+        if domain
+    )
+)
+DOMAIN = SITE_DOMAINS[0] if SITE_DOMAINS else "localhost"
 SCHEME = "https"
 # xcash-caddy：同机内部服务（如 saas）通过 Docker 共享网络访问时的 Host 头。
-ALLOWED_HOSTS = [
-    "127.0.0.1",
-    "localhost",
-    DOMAIN,
-    "xcash-caddy",
-    "app.xca.sh",
-    "pay.xca.sh",
-]
+ALLOWED_HOSTS = list(
+    dict.fromkeys(
+        [
+            "127.0.0.1",
+            "localhost",
+            *SITE_DOMAINS,
+            "xcash-caddy",
+        ]
+    )
+)
 
 # STATIC & MEDIA
 # ------------------------
@@ -46,12 +58,17 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 
 # Django 要求 CSRF_TRUSTED_ORIGINS 带 scheme。
-CSRF_TRUSTED_ORIGINS = [f"{SCHEME}://{DOMAIN}"]
+CSRF_TRUSTED_ORIGINS = [f"{SCHEME}://{domain}" for domain in SITE_DOMAINS]
 
 # 生产环境严格限制跨域来源，仅允许基础白名单与自身域名。
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = list(
-    dict.fromkeys([*CORS_ALLOWED_ORIGINS, f"{SCHEME}://{DOMAIN}"])
+    dict.fromkeys(
+        [
+            *CORS_ALLOWED_ORIGINS,
+            *(f"{SCHEME}://{domain}" for domain in SITE_DOMAINS),
+        ]
+    )
 )
 
 # Celery

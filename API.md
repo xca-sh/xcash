@@ -19,8 +19,8 @@
 
 | 用途 | URL | 说明 |
 |------|-----|------|
-| API 网关 | `https://pay.xca.sh` | 例如 `https://pay.xca.sh/v1/invoice` |
-| EPay 网关 | `https://pay.xca.sh/epay/submit.php` | 易支付 V1 兼容入口 |
+| API 网关 | `https://app.xca.sh` | 例如 `https://app.xca.sh/v1/invoice` |
+| EPay 网关 | `https://app.xca.sh/epay/submit.php` | 易支付 V1 兼容入口 |
 | SaaS 控制台 | `https://dash.xca.sh` | 获取 AppID / HMAC Key、配置项目 |
 
 ## 链与币种代码
@@ -268,7 +268,7 @@ const signature = crypto
   "crypto_address": null,
   "pay_address": null,
   "pay_amount": null,
-  "pay_url": "https://pay.xca.sh/pay/INV2606028X7K2P9Q",
+  "pay_url": "https://app.xca.sh/pay/INV2606028X7K2P9Q",
   "started_at": "2026-06-02T12:00:00Z",
   "created_at": "2026-06-02T12:00:00Z",
   "expires_at": "2026-06-02T12:15:00Z",
