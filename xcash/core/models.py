@@ -49,16 +49,16 @@ class SystemSettings(models.Model):
         validators=[MinValueValidator(1)],
         help_text=_("待投递 Webhook 事件超过该时间仍未送达时，进入异常巡检。"),
     )
-    # 归集延迟按链类型分开：EVM gas 便宜（连以太坊转 USDT 都廉价），短延迟优先让资金快速
-    # 到账归集地址、改善商户现金流；Tron 归集一次能量/带宽成本高，长延迟把同槽位多笔到账批量
-    # 摊薄成本。两者都只影响「确认后等多久再聚合归集」，不影响是否归集。
+    # 归集延迟按链类型分开：EVM 默认 60 分钟，在到账时效和批量归集之间折中；
+    # Tron 归集一次能量/带宽成本高，长延迟把同槽位多笔到账批量摊薄成本。
+    # 两者都只影响「确认后等多久再聚合归集」，不影响是否归集。
     evm_vault_slot_collect_delay_minutes = models.PositiveIntegerField(
         _("EVM VaultSlot 归集延迟(分钟)"),
-        default=2,
+        default=60,
         validators=[MinValueValidator(0)],
         help_text=_(
             "EVM 到账确认后等待该时间再聚合归集，期间同槽位同币种不重复创建归集计划。"
-            "EVM gas 便宜，默认短延迟优先快速到账。"
+            "EVM 默认 60 分钟，兼顾到账归集时效和同槽位批量归集。"
         ),
     )
     tron_vault_slot_collect_delay_minutes = models.PositiveIntegerField(
