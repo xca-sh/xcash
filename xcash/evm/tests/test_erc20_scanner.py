@@ -9,6 +9,7 @@ from django.test import TestCase
 from django.test import override_settings
 from django.utils import timezone
 from web3 import Web3
+from web3.exceptions import TransactionNotFound
 
 from chains.constants import ChainCode
 from chains.models import Address
@@ -425,19 +426,28 @@ class EvmErc20ScannerTests(TestCase):
         self.assertEqual({transfer.hash for transfer in transfers}, {"0x" + "ab" * 32})
         rpc_client.get_block_timestamp.assert_called_once_with(block_number=100)
 
-    def test_erc20_scanner_event_index_is_intra_tx_rank_not_block_log_index(self):
-        # event_index 必须是"同一交易内的相对序号"（reorg 不变），而不是区块级 logIndex：
-        # 单条入账在区块内 logIndex=7，落库 event_index 应为 0。若误用区块级 logIndex，
-        # reorg 重排会改变它、绕过 (chain,hash,event_index) 去重导致重复入账。
+    def test_erc20_scanner_event_index_is_receipt_local_not_filtered_rank(self):
+        # event_index 必须是 receipt.logs 内的序号，而不是本轮过滤后入账日志的排名：
+        # 过滤集会随地址注册、token 配置变化漂移，不能作为持久幂等身份。
         sender = Web3.to_checksum_address("0x" + "cc" * 20)
-        logs = [
-            self._build_transfer_log(
-                from_address=sender,
-                to_address=self.vault_slot.address,
-                log_index=7,
-            ),
-        ]
+        transfer_log = self._build_transfer_log(
+            from_address=sender,
+            to_address=self.vault_slot.address,
+            log_index=7,
+        )
+        prior_receipt_log = {
+            **transfer_log,
+            "topics": [Web3.keccak(text="Approval(address,address,uint256)")],
+            "data": "0x0",
+            "logIndex": 6,
+        }
+        logs = [transfer_log]
+        receipt = self._build_receipt(
+            prior_receipt_log,
+            transfer_log,
+        )
         rpc_client = Mock()
+        rpc_client.get_transaction_receipt.return_value = receipt
         rpc_client.get_block_timestamp.return_value = 1_700_000_000
 
         EvmLogScanner._process_logs(
@@ -448,9 +458,122 @@ class EvmErc20ScannerTests(TestCase):
         )
 
         transfer = Transfer.objects.get()
+        self.assertEqual(transfer.event_index, 1)
+        rpc_client.get_transaction_receipt.assert_called_once_with(
+            tx_hash="0x" + "ab" * 32
+        )
+
+    def test_erc20_scanner_replay_keeps_existing_transfer_when_owned_set_expands(self):
+        sender = Web3.to_checksum_address("0x" + "cc" * 20)
+        future_slot_address = Web3.to_checksum_address(
+            "0x00000000000000000000000000000000000000c1"
+        )
+        future_log = self._build_transfer_log(
+            from_address=sender,
+            to_address=future_slot_address,
+            log_index=5,
+        )
+        existing_log = self._build_transfer_log(
+            from_address=sender,
+            to_address=self.vault_slot.address,
+            log_index=6,
+        )
+        logs = [
+            future_log,
+            existing_log,
+        ]
+        rpc_client = Mock()
+        rpc_client.get_transaction_receipt.return_value = self._build_receipt(*logs)
+        rpc_client.get_block_timestamp.return_value = 1_700_000_000
+
+        EvmLogScanner._process_logs(
+            chain=self.chain,
+            logs=logs,
+            rpc_client=rpc_client,
+            token_registry={self.token_on_chain.address: self.token_on_chain},
+        )
+
+        self.assertEqual(Transfer.objects.count(), 1)
+        existing_transfer = Transfer.objects.get()
+        self.assertEqual(existing_transfer.to_address, self.vault_slot.address)
+        self.assertEqual(existing_transfer.event_index, 1)
+
+        future_customer = Customer.objects.create(
+            project=self.project,
+            uid="scanner-future-customer",
+        )
+        VaultSlot.objects.create(
+            customer=future_customer,
+            usage=VaultSlotUsage.DEPOSIT,
+            chain=self.chain,
+            address=future_slot_address,
+            salt=b"\x05" * 32,
+        )
+
+        EvmLogScanner._process_logs(
+            chain=self.chain,
+            logs=logs,
+            rpc_client=rpc_client,
+            token_registry={self.token_on_chain.address: self.token_on_chain},
+        )
+
+        transfers = list(Transfer.objects.order_by("event_index"))
+        self.assertEqual(len(transfers), 2)
+        self.assertEqual([transfer.event_index for transfer in transfers], [0, 1])
+        self.assertEqual(
+            [transfer.to_address for transfer in transfers],
+            [future_slot_address, self.vault_slot.address],
+        )
+        self.assertEqual(
+            Transfer.objects.filter(to_address=self.vault_slot.address).count(),
+            1,
+        )
+
+    def test_erc20_scanner_skips_unlocatable_receipt_log_without_blocking_batch(self):
+        sender = Web3.to_checksum_address("0x" + "cc" * 20)
+        missing_receipt_log = self._build_transfer_log(
+            from_address=sender,
+            to_address=self.vault_slot.address,
+            log_index=5,
+        )
+        mismatch_log = self._build_transfer_log(
+            from_address=sender,
+            to_address=self.vault_slot.address,
+            log_index=6,
+        )
+        mismatch_log["transactionHash"] = bytes.fromhex("ac" * 32)
+        valid_log = self._build_transfer_log(
+            from_address=sender,
+            to_address=self.vault_slot.address,
+            log_index=7,
+        )
+        valid_log["transactionHash"] = bytes.fromhex("ad" * 32)
+        rpc_client = Mock()
+
+        def get_receipt(*, tx_hash):
+            if tx_hash == "0x" + "ab" * 32:
+                error = EvmScannerRpcError("wrapped missing receipt")
+                error.__cause__ = TransactionNotFound("receipt missing")
+                raise error
+            if tx_hash == "0x" + "ac" * 32:
+                return self._build_receipt({**mismatch_log, "logIndex": 99})
+            if tx_hash == "0x" + "ad" * 32:
+                return self._build_receipt(valid_log)
+            raise AssertionError(f"unexpected tx_hash={tx_hash}")
+
+        rpc_client.get_transaction_receipt.side_effect = get_receipt
+        rpc_client.get_block_timestamp.return_value = 1_700_000_000
+
+        EvmLogScanner._process_logs(
+            chain=self.chain,
+            logs=[missing_receipt_log, mismatch_log, valid_log],
+            rpc_client=rpc_client,
+            token_registry={self.token_on_chain.address: self.token_on_chain},
+        )
+
+        transfer = Transfer.objects.get()
+        self.assertEqual(transfer.hash, "0x" + "ad" * 32)
         self.assertEqual(transfer.event_index, 0)
-        # 落库不再依赖每条日志回查 receipt。
-        rpc_client.get_transaction_receipt.assert_not_called()
 
     @patch("evm.scanner.observed_transfers.TransferService.create_observed_transfer")
     def test_erc20_scanner_skips_oversized_value_without_blocking_valid_event(
@@ -499,9 +622,8 @@ class EvmErc20ScannerTests(TestCase):
         self.assertIsNone(created)
         create_observed_transfer_mock.assert_called_once()
         observed = create_observed_transfer_mock.call_args.kwargs["observed"]
-        # event_index 是"同一交易内落库日志按 logIndex 升序的相对序号"：超大值日志
-        # 在解析阶段已被过滤、不进入排名，剩下的这条有效入账即为该交易内第 0 条。
-        self.assertEqual(observed.event_index, 0)
+        # 超大值日志被过滤掉也不能改变后续日志的持久身份；仍取 receipt 内下标。
+        self.assertEqual(observed.event_index, 1)
         self.assertEqual(observed.to_address, second_slot.address)
 
     @patch("evm.scanner.observed_transfers.TransferService.create_observed_transfer")
