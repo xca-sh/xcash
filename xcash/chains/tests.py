@@ -1089,9 +1089,13 @@ class VaultSlotReceivedFlagTests(TestCase):
         )
         adapter = type("Adapter", (), {"get_balance": lambda *_args: 1_234_567})()
 
-        with patch(
-            "chains.vault_slot_balances.AdapterFactory.get_adapter",
-            return_value=adapter,
+        # 余额刷新已挪到确认事务提交后（on_commit）执行，测试内需显式触发回调。
+        with (
+            patch(
+                "chains.vault_slot_balances.AdapterFactory.get_adapter",
+                return_value=adapter,
+            ),
+            self.captureOnCommitCallbacks(execute=True),
         ):
             transfer.confirm()
 
@@ -1123,9 +1127,13 @@ class VaultSlotReceivedFlagTests(TestCase):
         )
         adapter = type("Adapter", (), {"get_balance": lambda *_args: 1_234_567})()
 
-        with patch(
-            "chains.vault_slot_balances.AdapterFactory.get_adapter",
-            return_value=adapter,
+        # 余额刷新已挪到确认事务提交后（on_commit）执行，测试内需显式触发回调。
+        with (
+            patch(
+                "chains.vault_slot_balances.AdapterFactory.get_adapter",
+                return_value=adapter,
+            ),
+            self.captureOnCommitCallbacks(execute=True),
         ):
             transfer.confirm()
 
@@ -1222,6 +1230,68 @@ class VaultSlotReceivedFlagTests(TestCase):
             tx_task__isnull=True,
         )
         self.assertLessEqual(schedule.due_at, timezone.now())
+
+    def test_reconcile_skips_sub_threshold_dust_balance_gap(self):
+        # 粉尘余额（实时价 < 最小归集阈值）不应被安全网补建计划，否则会与
+        # execute_one_due 的粉尘删除逻辑反复拉锯（建→删）永不收敛。worth 快照留 0
+        # （模拟缺价降级或首次未估值），走 reconcile 的实时价复核路径。
+        from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
+
+        self.crypto.prices = {"USD": "2"}
+        self.crypto.save(update_fields=["prices"])
+        # amount=0.1 × 2 USD = 0.2 < 阈值 1 USD，判定为粉尘。
+        VaultSlotBalance.objects.create(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+            value=Decimal("100000"),
+            amount=Decimal("0.1"),
+            worth=Decimal("0"),
+            synced_at=timezone.now(),
+        )
+
+        with patch(
+            "core.runtime_settings.get_vault_slot_collect_min_worth_usd",
+            return_value=Decimal("1"),
+        ):
+            summary = reconcile_vault_slot_collect_balance_gaps()
+
+        self.assertEqual(summary["created_count"], 0)
+        self.assertEqual(summary["dust_skipped_count"], 1)
+        self.assertFalse(
+            VaultSlotCollectSchedule.objects.filter(
+                chain=self.chain,
+                vault_slot=self.slot,
+                crypto=self.crypto,
+            ).exists()
+        )
+
+    def test_gaps_query_excludes_confirmed_dust_worth_snapshot(self):
+        # worth 快照已确证为粉尘（0 < worth < 阈值）时，SQL 层直接排除，
+        # 连迭代都不进入，从源头避免与 execute_one_due 拉锯及挤占 limit 批次。
+        from chains.vault_slot_balances import vault_slot_collect_balance_gaps
+
+        VaultSlotBalance.objects.create(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+            value=Decimal("100000"),
+            amount=Decimal("0.1"),
+            worth=Decimal("0.2"),
+            synced_at=timezone.now(),
+        )
+
+        with patch(
+            "core.runtime_settings.get_vault_slot_collect_min_worth_usd",
+            return_value=Decimal("1"),
+        ):
+            in_gaps = (
+                vault_slot_collect_balance_gaps()
+                .filter(vault_slot=self.slot, crypto=self.crypto)
+                .exists()
+            )
+
+        self.assertFalse(in_gaps)
 
     def test_reconcile_isolates_single_balance_schedule_errors(self):
         from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps

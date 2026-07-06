@@ -213,7 +213,10 @@ NATIVE_COIN_SYMBOLS: frozenset[str] = frozenset(
 NATIVE_COIN_COINGECKO_IDS: dict[str, str] = {
     "ETH": "ethereum",
     "BNB": "binancecoin",
-    "POL": "polygon",
+    # Polygon 原生币的 CoinGecko slug 是 polygon-ecosystem-token（POL 的官方行情源）。
+    # 裸 "polygon" 不是合法 id、"matic-network" 已随 MATIC→POL 迁移停更返空报价，
+    # 二者都会让 POL 建成 active 却永远拉不到价，卡死计价与归集。
+    "POL": "polygon-ecosystem-token",
     "AVAX": "avalanche-2",
     "TRX": "tron",
 }

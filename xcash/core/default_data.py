@@ -136,10 +136,12 @@ def ensure_production_currencies(*, using: str = "default", stdout=None) -> None
         defaults={"coingecko_id": "binancecoin", "is_native": True},
     )
     # Polygon PoS 主网当前 gas token 为 POL；这里显式建模，避免把 Polygon 误绑到 ETH/BNB。
+    # slug 用 polygon-ecosystem-token（POL 官方行情源）；裸 "polygon" 非法、"matic-network"
+    # 已停更，二者都会让 POL 拉不到价（见 chains.constants.NATIVE_COIN_COINGECKO_IDS）。
     crypto_manager.get_or_create(
         name="Polygon Ecosystem Token",
         symbol="POL",
-        defaults={"coingecko_id": "polygon", "is_native": True},
+        defaults={"coingecko_id": "polygon-ecosystem-token", "is_native": True},
     )
     if stdout is not None:
         stdout.write("✅ 生产主网原生币初始化完成")

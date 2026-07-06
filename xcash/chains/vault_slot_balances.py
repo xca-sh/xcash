@@ -167,8 +167,47 @@ def refresh_vault_slot_balance_for_collect_task(tx_task: TxTask) -> VaultSlotBal
     )
 
 
+def balance_reaches_collect_threshold(balance: VaultSlotBalance) -> bool:
+    """余额价值是否达到最小归集阈值（实时价现算）。
+
+    与 execute_one_due 的 balance_worth_reaches_collect_threshold 判据同源，供安全网
+    补建计划前复核，避免与 execute_one_due 就同一笔粉尘反复拉锯（建→删）：
+    - 阈值为 0 视为不限制，直接放行。
+    - 用实时价现算，不用 balance.worth 快照：快照在缺价时降级为 0，会把正常金额
+      误判成粉尘。
+    - 缺价（PriceUnavailableError）无法判定粉尘，按“达到阈值”处理，让安全网照常补建，
+      由 execute_due 后续用实时价再决定归集或退避，不在这里丢弃余额。
+    """
+    from core.runtime_settings import get_vault_slot_collect_min_worth_usd
+    from currencies.models import PriceUnavailableError
+
+    threshold = get_vault_slot_collect_min_worth_usd()
+    if threshold <= 0:
+        return True
+    try:
+        worth = balance.amount * balance.crypto.price("USD")
+    except PriceUnavailableError:
+        return True
+    return worth >= threshold
+
+
 def vault_slot_collect_balance_gaps():
-    """返回仍有余额但没有 pending / 在途归集计划的快照。"""
+    """返回仍有余额、无 pending / 在途归集计划、且未被确证为粉尘的快照。
+
+    价值门槛必须与 execute_one_due 对齐：低于最小归集价值的余额会被 execute_one_due
+    删除计划（粉尘归集必亏 gas）。安全网若只看 value>0 就把刚删的计划立刻补建，两个
+    任务会就同一笔粉尘反复拉锯（建→删）永不收敛，还持续烧链上 RPC 并挤占 limit 批次。
+
+    这里在 SQL 层排除“已确证粉尘”（0 < worth < 阈值）：
+    - execute_one_due 只在实时价现算出 worth<阈值时才删除粉尘计划，删除前的余额刷新
+      已把同一 worth 写入快照，故快照落在 (0, 阈值) 与删除判据一致，粉尘被稳定排除、
+      不再进入迭代，从源头消除拉锯与批次挤占。
+    - worth==0 可能是“真零”或“缺价降级为 0”，SQL 无法区分，保留交由 reconcile 用
+      实时价（balance_reaches_collect_threshold）复核，避免误伤缺价余额。
+    - 阈值为 0（不限制）时不加价值过滤。
+    """
+    from core.runtime_settings import get_vault_slot_collect_min_worth_usd
+
     matching_schedules = VaultSlotCollectSchedule.objects.filter(
         chain_id=OuterRef("chain_id"),
         vault_slot_id=OuterRef("vault_slot_id"),
@@ -178,15 +217,18 @@ def vault_slot_collect_balance_gaps():
         Q(tx_task__isnull=True) | Q(tx_task__status__in=ACTIVE_COLLECT_TASK_STATUSES)
     )
     failed_schedules = matching_schedules.filter(tx_task__status=TxTaskStatus.FAILED)
-    return (
+    queryset = (
         VaultSlotBalance.objects.select_related("chain", "crypto", "vault_slot")
         .annotate(
             has_active_collect_schedule=Exists(active_schedules),
             has_failed_collect_schedule=Exists(failed_schedules),
         )
         .filter(value__gt=0, has_active_collect_schedule=False)
-        .order_by("updated_at", "pk")
     )
+    threshold = get_vault_slot_collect_min_worth_usd()
+    if threshold > 0:
+        queryset = queryset.exclude(worth__gt=0, worth__lt=threshold)
+    return queryset.order_by("updated_at", "pk")
 
 
 def reconcile_vault_slot_collect_balance_gaps(*, limit: int = 32) -> dict:
@@ -196,6 +238,7 @@ def reconcile_vault_slot_collect_balance_gaps(*, limit: int = 32) -> dict:
     反复烧 gas；这类余额只输出告警，由后台 action 人工确认后重新排队。
     """
     created_count = 0
+    dust_skipped = 0
     failed_blocked = []
     errors = []
     for balance in vault_slot_collect_balance_gaps()[:limit]:
@@ -209,6 +252,13 @@ def reconcile_vault_slot_collect_balance_gaps(*, limit: int = 32) -> dict:
                     crypto=getattr(balance.crypto, "symbol", None),
                     balance_value=str(balance.value),
                 )
+                continue
+
+            # 实时价复核：SQL 层只挡住 worth 快照已确证的粉尘，worth==0 的余额（真零
+            # 或缺价降级）仍会进来。低于阈值的粉尘在此跳过、不补建，打断与
+            # execute_one_due 的建删拉锯；缺价按“达到阈值”放行，交由 execute_due 复核。
+            if not balance_reaches_collect_threshold(balance):
+                dust_skipped += 1
                 continue
 
             schedule = VaultSlotCollectSchedule.ensure_pending_due_now(
@@ -248,6 +298,7 @@ def reconcile_vault_slot_collect_balance_gaps(*, limit: int = 32) -> dict:
 
     return {
         "created_count": created_count,
+        "dust_skipped_count": dust_skipped,
         "failed_blocked_count": len(failed_blocked),
         "recent_failed_blocked": failed_blocked,
         "error_count": len(errors),

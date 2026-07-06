@@ -130,6 +130,7 @@ def reconcile_vault_slot_collect_balance_gaps_task() -> None:
         logger.info(
             "VaultSlot 余额对账已补建遗漏归集计划",
             created_count=summary["created_count"],
+            dust_skipped_count=summary["dust_skipped_count"],
         )
     if summary["failed_blocked_count"]:
         logger.warning(

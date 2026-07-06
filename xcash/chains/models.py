@@ -1602,9 +1602,15 @@ class Transfer(models.Model):
         # Transfer 状态推进不依赖 post_save 更新逻辑，直接 update 可减少并发覆盖面。
         Transfer.objects.filter(pk=self.pk).update(status=TransferStatus.CONFIRMED)
         self._mark_vault_slot_received()
-        self._refresh_vault_slot_balances()
 
         self._dispatch_business_confirm()
+
+        # 余额刷新要读链上真值（RPC，EVM 超时 8s），绝不能放在持有 Transfer 行锁的
+        # 事务内：RPC 慢/故障会让行锁与 DB 连接被整段占用，拖垮确认吞吐与业务入账。
+        # 挪到事务提交后执行——此时行锁已释放，刷新自身在 refresh_vault_slot_balance
+        # 内另开短事务对 VaultSlot 行加锁，语义不受影响；归集调度不消费此快照，
+        # execute_one_due 归集前会再次按链上真值刷新余额。
+        db_transaction.on_commit(self._refresh_vault_slot_balances)
 
     @db_transaction.atomic
     def drop(self):
