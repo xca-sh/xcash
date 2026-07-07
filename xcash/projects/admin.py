@@ -321,7 +321,7 @@ class ProjectAdmin(ModelAdmin):
         },
     )
     def display_ready_status(self, instance: Project):
-        ready, _ = instance.is_ready
+        ready = instance.is_ready[0]
         return ("ready", _("已就绪")) if ready else ("not_ready", _("未就绪"))
 
     @display(
