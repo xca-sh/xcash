@@ -105,8 +105,8 @@ class WebhookEventAdmin(ReadOnlyModelAdmin):
     @display(
         description=_("巡检"),
         label={
-            "正常": "success",
-            "超时": "danger",
+            "normal": "success",
+            "stalled": "danger",
         },
     )
     def display_attention(self, instance: WebhookEvent):
@@ -115,8 +115,8 @@ class WebhookEventAdmin(ReadOnlyModelAdmin):
             and instance.created_at
             <= timezone.now() - OperationalRiskService.webhook_event_timeout()
         ):
-            return "超时"
-        return "正常"
+            return ("stalled", _("超时"))
+        return ("normal", _("正常"))
 
     @admin.action(description=_("重新投递"))
     def mark_as_pending(self, request, queryset):

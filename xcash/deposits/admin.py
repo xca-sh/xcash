@@ -46,24 +46,30 @@ class DepositAdmin(ReadOnlyModelAdmin):
         "updated_at",
     )
 
-    @display(description="状态", label={"确认中": "info", "已确认": "success"})
+    @display(
+        description=_("状态"),
+        label={
+            "confirming": "info",
+            "confirmed": "success",
+        },
+    )
     def display_status(self, instance: Deposit):
         # 充值状态与 Transfer 同步，直接展示链上转账状态。
-        return instance.transfer.get_status_display()
+        return (instance.transfer.status, instance.transfer.get_status_display())
 
-    @display(description="项目")
+    @display(description=_("项目"))
     def display_project(self, instance: Deposit):
         return instance.customer.project
 
-    @display(description="链")
+    @display(description=_("链"))
     def display_chain(self, instance: Deposit):
         return instance.transfer.chain.code
 
-    @display(description="币种")
+    @display(description=_("币种"))
     def display_crypto(self, instance: Deposit):
         return instance.transfer.crypto.symbol
 
-    @display(description="数量")
+    @display(description=_("数量"))
     def display_amount(self, instance: Deposit):
         return instance.transfer.amount
 

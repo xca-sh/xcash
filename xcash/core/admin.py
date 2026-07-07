@@ -28,11 +28,11 @@ class TaskResultAdmin(ModelAdmin):
 class SystemSettingsAdmin(ModelAdmin):
     fieldsets = (
         (
-            "后台安全",
+            _("后台安全"),
             {"fields": ("admin_session_timeout_minutes",)},
         ),
         (
-            "Webhook 投递",
+            _("Webhook 投递"),
             {
                 "fields": (
                     "webhook_delivery_max_retries",
@@ -41,7 +41,7 @@ class SystemSettingsAdmin(ModelAdmin):
             },
         ),
         (
-            "异常巡检",
+            _("异常巡检"),
             {"fields": ("webhook_event_timeout_minutes",)},
         ),
         (
@@ -56,7 +56,7 @@ class SystemSettingsAdmin(ModelAdmin):
             },
         ),
         (
-            "AML 筛查",
+            _("AML 筛查"),
             {
                 "fields": (
                     "aml_screening_enabled",
@@ -69,7 +69,7 @@ class SystemSettingsAdmin(ModelAdmin):
             },
         ),
         (
-            "审计",
+            _("审计"),
             {
                 "fields": (
                     "created_by",

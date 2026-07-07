@@ -545,8 +545,8 @@ class Address(UndeletableModel):
 class TxTaskType(models.TextChoices):
     """TxTask.tx_type 的枚举：仅描述系统内部主动发起的链上交易。"""
 
-    VaultSlotDeploy = "vault_slot_deploy", "🏦 VaultSlot 部署"
-    VaultSlotCollect = "vault_slot_collect", "💰 VaultSlot 归集"
+    VaultSlotDeploy = "vault_slot_deploy", _("🏦 VaultSlot 部署")
+    VaultSlotCollect = "vault_slot_collect", _("💰 VaultSlot 归集")
 
 
 class TransferType(models.TextChoices):

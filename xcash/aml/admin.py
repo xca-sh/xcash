@@ -1,5 +1,6 @@
 from aml.models import RiskAssessment
 from django.contrib import admin
+from django.utils.translation import gettext_lazy as _
 
 from common.admin import ReadOnlyModelAdmin
 
@@ -43,7 +44,7 @@ class RiskAssessmentAdmin(ReadOnlyModelAdmin):
     )
     fieldsets = (
         (
-            "目标",
+            _("目标"),
             {
                 "fields": (
                     "target_type",
@@ -55,7 +56,7 @@ class RiskAssessmentAdmin(ReadOnlyModelAdmin):
             },
         ),
         (
-            "风险结果",
+            _("风险结果"),
             {
                 "fields": (
                     "source",
@@ -67,5 +68,5 @@ class RiskAssessmentAdmin(ReadOnlyModelAdmin):
                 )
             },
         ),
-        ("时间", {"fields": ("checked_at", "created_at", "updated_at")}),
+        (_("时间"), {"fields": ("checked_at", "created_at", "updated_at")}),
     )

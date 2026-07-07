@@ -40,16 +40,16 @@ class CryptoAdmin(ModelAdmin):
     readonly_fields = ("is_native",)
 
     @display(
-        description="类型",
+        description=_("类型"),
         label={
-            "原生币": "warning",
-            "代币": "info",
+            "native": "warning",
+            "token": "info",
         },
     )
     def display_type(self, instance: Crypto):
         if instance.is_native:
-            return "原生币"
-        return "代币"
+            return ("native", _("原生币"))
+        return ("token", _("代币"))
 
 
 @admin.register(Fiat)

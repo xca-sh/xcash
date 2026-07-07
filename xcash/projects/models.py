@@ -273,7 +273,7 @@ class Customer(models.Model):
         verbose_name=_("客户UID"),
     )
 
-    created_at = models.DateTimeField(auto_now_add=True, verbose_name="加入时间")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name=_("加入时间"))
 
     class Meta:
         # 统一采用具名 UniqueConstraint，便于数据库约束报错定位和后续约束扩展。

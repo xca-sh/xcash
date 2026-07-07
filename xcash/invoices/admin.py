@@ -14,6 +14,7 @@ from .models import DifferRecipientAddress
 from .models import EpayOrder
 from .models import Invoice
 from .models import InvoiceProtocol
+from .models import InvoiceStatus
 
 
 class EpayOrderInline(StackedInline):
@@ -171,18 +172,13 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
     @display(
         description=_("状态"),  # noqa
         label={  # noqa
-            "待支付": "warning",
-            "确认中": "info",
-            "已完成": "success",
-            "已超时": "",
-            "Pending payment": "warning",
-            "Confirming": "info",
-            "Completed": "success",
-            "Timed out": "",
+            InvoiceStatus.WAITING: "warning",
+            InvoiceStatus.COMPLETED: "success",
+            InvoiceStatus.EXPIRED: "",
         },
     )
     def display_status(self, instance: Invoice):
-        return instance.get_status_display()
+        return (instance.status, instance.get_status_display())
 
     @display(
         description=_("风险"),  # noqa
@@ -199,13 +195,12 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
     @display(
         description=_("协议"),  # noqa
         label={  # noqa
-            "Xcash 原生": "info",
-            "EPay V1": "primary",
-            "Xcash native": "info",
+            InvoiceProtocol.NATIVE: "info",
+            InvoiceProtocol.EPAY_V1: "primary",
         },
     )
     def display_protocol(self, instance: Invoice):
-        return instance.get_protocol_display()
+        return (instance.protocol, instance.get_protocol_display())
 
     @display(
         description=_("金额"),  # noqa

@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.utils.translation import gettext_lazy as _
 from unfold.forms import AdminPasswordChangeForm
 
 from common.admin import ModelAdmin
@@ -27,7 +28,7 @@ class UserAdmin(BaseUserAdmin, ModelAdmin):
             },
         ),
         (
-            "权限",
+            _("权限"),
             {
                 "fields": (
                     "is_active",
@@ -36,7 +37,7 @@ class UserAdmin(BaseUserAdmin, ModelAdmin):
                 ),
             },
         ),
-        ("重要日期", {"fields": ("last_login", "date_joined")}),
+        (_("重要日期"), {"fields": ("last_login", "date_joined")}),
     )
     add_fieldsets = (
         (
@@ -58,7 +59,7 @@ class UserAdmin(BaseUserAdmin, ModelAdmin):
 
 
 class ProjectListFilter(admin.SimpleListFilter):
-    title = "项目"
+    title = _("项目")
     parameter_name = "project"
 
     def lookups(self, request, model_admin):

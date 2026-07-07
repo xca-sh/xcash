@@ -258,7 +258,7 @@ class ProjectAdmin(ModelAdmin):
                 ),
             },
         ),
-        ("安全", {"fields": ("ip_white_list",)}),
+        (_("安全"), {"fields": ("ip_white_list",)}),
     )
     edit_fieldsets = (
         (
@@ -316,24 +316,24 @@ class ProjectAdmin(ModelAdmin):
     @display(
         description=_("就绪"),
         label={
-            "已就绪": "success",
-            "未就绪": "danger",
+            "ready": "success",
+            "not_ready": "danger",
         },
     )
     def display_ready_status(self, instance: Project):
         ready, _ = instance.is_ready
-        return "已就绪" if ready else "未就绪"
+        return ("ready", _("已就绪")) if ready else ("not_ready", _("未就绪"))
 
     @display(
         description=_("环境"),
         ordering="is_test",
         label={
-            "生产": "success",
-            "测试": "warning",
+            "production": "success",
+            "test": "warning",
         },
     )
     def display_environment(self, instance: Project):
-        return "测试" if instance.is_test else "生产"
+        return ("test", _("测试")) if instance.is_test else ("production", _("生产"))
 
     @display(description=_("项目状态"))
     def display_ready_detail(self, instance: Project):

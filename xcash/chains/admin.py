@@ -12,6 +12,7 @@ from chains.models import DepositVaultSlot
 from chains.models import InvoiceVaultSlot
 from chains.models import Transfer
 from chains.models import TxTask
+from chains.models import TxTaskStatus
 from chains.models import VaultSlotBalance
 from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
@@ -70,15 +71,15 @@ class ChainAdmin(ModelAdmin):
         ordering="is_testnet",
         description=_("环境"),
         label={
-            "主网": "success",
-            "测试网": "warning",
-            "本地": "info",
+            "mainnet": "success",
+            "testnet": "warning",
+            "local": "info",
         },
     )
     def environment_display(self, obj: Chain) -> str:
         if obj.code == ChainCode.Anvil:
-            return "本地"
-        return "测试网" if obj.is_testnet else "主网"
+            return ("local", _("本地"))
+        return ("testnet", _("测试网")) if obj.is_testnet else ("mainnet", _("主网"))
 
     @display(description=_("RPC 域名"))
     def rpc_domain_display(self, obj: Chain) -> str:
@@ -192,15 +193,15 @@ class TransferAdmin(ReadOnlyModelAdmin):
         return obj.chain.name
 
     @display(
-        description="状态",
+        description=_("状态"),
         label={
-            "确认中": "info",
-            "已确认": "success",
-            "已失效": "",
+            "confirming": "info",
+            "confirmed": "success",
+            "dropped": "",
         },
     )
     def display_status(self, instance: Transfer):
-        return instance.get_status_display()
+        return (instance.status, instance.get_status_display())
 
 
 @admin.register(TxTask)
@@ -238,16 +239,16 @@ class TxTaskAdmin(ReadOnlyModelAdmin):
     @display(
         description=_("状态"),
         label={
-            "待提交": "warning",
-            "已提交": "warning",
-            "成功": "success",
-            "失败": "danger",
+            TxTaskStatus.QUEUED: "warning",
+            TxTaskStatus.SUBMITTED: "warning",
+            TxTaskStatus.SUCCEEDED: "success",
+            TxTaskStatus.FAILED: "danger",
         },
     )
     def display_status(self, instance: TxTask):
         # TxTask.display_status 直接取单枚举 status 的展示文案，
         # 这里沿用同一来源避免后台与业务代码的展示口径漂移。
-        return instance.display_status
+        return (instance.status, instance.display_status)
 
 
 class VaultSlotCollectScheduleInline(TabularInline):
@@ -369,7 +370,7 @@ class VaultSlotCollectScheduleAdmin(ReadOnlyModelAdmin):
         # 超管，与 SystemSettings / SystemWallet 等系统级治理入口口径一致。
         return bool(request.user.is_active and request.user.is_superuser)
 
-    @admin.action(description="重新排队失败的归集计划", permissions=["requeue"])
+    @admin.action(description=_("重新排队失败的归集计划"), permissions=["requeue"])
     def requeue_failed_collect_schedules(self, request, queryset):
         requeued_count = 0
         skipped_count = 0

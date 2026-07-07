@@ -1,12 +1,16 @@
 from django.contrib import admin
 from django.db.models import F
 from django.db.models.functions import Greatest
+from django.utils import timezone
+from django.utils.formats import date_format
+from django.utils.translation import gettext_lazy as _
 from tron.client import TronHttpClient
 from tron.models import TronTxTask
 from tron.models import TronWatchCursor
 from unfold.decorators import display
 
 from chains.models import Chain
+from chains.models import TxTaskStatus
 from common.admin import ReadOnlyModelAdmin
 from common.admin_scan_cursor import SyncScanCursorToLatestActionMixin
 
@@ -50,46 +54,46 @@ class TronTxTaskAdmin(ReadOnlyModelAdmin):
     list_select_related = ("base_task", "sender", "chain")
     search_fields = ("base_task__tx_hash", "tx_id", "sender__address", "to")
 
-    @admin.display(description="执行时间", ordering="last_attempt_at")
+    @admin.display(description=_("执行时间"), ordering="last_attempt_at")
     def formatted_last_attempt_at(self, obj: TronTxTask):
         if obj.last_attempt_at:
-            return obj.last_attempt_at.strftime("%-m月%-d日 %H:%M:%S")
+            return date_format(timezone.localtime(obj.last_attempt_at), "DATETIME_FORMAT")
         return None
 
     @display(
-        description="状态",
+        description=_("状态"),
         label={
-            "待提交": "warning",
-            "已提交": "warning",
-            "成功": "success",
-            "失败": "danger",
+            TxTaskStatus.QUEUED: "warning",
+            TxTaskStatus.SUBMITTED: "warning",
+            TxTaskStatus.SUCCEEDED: "success",
+            TxTaskStatus.FAILED: "danger",
         },
     )
     def display_status(self, obj: TronTxTask):
-        return obj.status
+        return (obj.base_task.status, obj.status)
 
     @display(
-        description="过期",
+        description=_("过期"),
         label={
-            "未签名": "secondary",
-            "否": "success",
-            "是": "warning",
+            "unsigned": "secondary",
+            "valid": "success",
+            "expired": "warning",
         },
     )
     def display_expiration_state(self, obj: TronTxTask) -> str:
         if obj.expiration is None:
-            return "未签名"
-        return "是" if obj.is_expired() else "否"
+            return ("unsigned", _("未签名"))
+        return ("expired", _("是")) if obj.is_expired() else ("valid", _("否"))
 
-    @admin.display(description="类型", ordering="base_task__tx_type")
+    @admin.display(description=_("类型"), ordering="base_task__tx_type")
     def tx_type(self, obj: TronTxTask):  # pragma: no cover
         return obj.base_task.get_tx_type_display() if obj.base_task_id else "—"
 
-    @admin.display(ordering="sender__address", description="发送地址")
+    @admin.display(ordering="sender__address", description=_("发送地址"))
     def display_sender(self, obj: TronTxTask):  # pragma: no cover
         return obj.sender
 
-    @admin.display(ordering="chain__code", description="网络")
+    @admin.display(ordering="chain__code", description=_("网络"))
     def display_chain(self, obj: TronTxTask):  # pragma: no cover
         return obj.chain
 
@@ -139,55 +143,55 @@ class TronWatchCursorAdmin(SyncScanCursorToLatestActionMixin, ReadOnlyModelAdmin
         chain.refresh_from_db(fields=["latest_block_number"])
         return chain.latest_block_number
 
-    @admin.display(ordering="chain__code", description="网络")
+    @admin.display(ordering="chain__code", description=_("网络"))
     def display_chain(self, obj: TronWatchCursor):  # pragma: no cover
         return obj.chain
 
     @display(
-        description="启用",
+        description=_("启用"),
         label={
-            "是": "success",
-            "否": "danger",
+            "yes": "success",
+            "no": "danger",
         },
     )
     def display_enabled(self, obj: TronWatchCursor) -> str:
-        return "是" if obj.enabled else "否"
+        return ("yes", _("是")) if obj.enabled else ("no", _("否"))
 
-    @admin.display(description="链上最新块")
+    @admin.display(description=_("链上最新块"))
     def display_chain_latest_block(self, obj: TronWatchCursor) -> int:  # pragma: no cover
         return obj.chain.latest_block_number
 
-    @admin.display(description="落后区块")
+    @admin.display(description=_("落后区块"))
     def display_scan_gap(self, obj: TronWatchCursor) -> int:
         return max(obj.chain.latest_block_number - obj.last_scanned_block, 0)
 
     @display(
-        description="积压",
+        description=_("积压"),
         label={
-            "正常": "success",
-            "轻微": "warning",
-            "严重": "danger",
+            "normal": "success",
+            "minor": "warning",
+            "severe": "danger",
         },
     )
     def display_lag_state(self, obj: TronWatchCursor) -> str:
         gap = self.display_scan_gap(obj)
         if gap >= 128:
-            return "严重"
+            return ("severe", _("严重"))
         if gap >= 16:
-            return "轻微"
-        return "正常"
+            return ("minor", _("轻微"))
+        return ("normal", _("正常"))
 
     @display(
-        description="扫描状态",
+        description=_("扫描状态"),
         label={
-            "正常": "success",
-            "异常": "danger",
+            "normal": "success",
+            "error": "danger",
         },
     )
     def display_error_state(self, obj: TronWatchCursor) -> str:
-        return "异常" if obj.last_error else "正常"
+        return ("error", _("异常")) if obj.last_error else ("normal", _("正常"))
 
-    @admin.display(description="错误摘要")
+    @admin.display(description=_("错误摘要"))
     def display_error_summary(self, obj: TronWatchCursor) -> str:
         if not obj.last_error:
             return "—"
