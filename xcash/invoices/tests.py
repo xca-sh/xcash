@@ -662,6 +662,27 @@ class InvoiceDuplicateOutNoTests(TestCase):
         self.mock_check_saas = patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_create_rejects_unsupported_pricing_fiat_with_clear_error(self):
+        project = Project.objects.create(name="UnsupportedCurrencyProject")
+        request = APIRequestFactory().post(
+            "/v1/invoice",
+            {
+                "out_no": "bad-currency",
+                "title": "Bad currency",
+                "currency": "JPY",
+                "amount": "1.00",
+            },
+            format="json",
+            HTTP_XC_APPID=project.appid,
+        )
+
+        response = InvoiceViewSet.as_view({"post": "create"})(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], ErrorCode.INVALID_INVOICE_CURRENCY.code)
+        self.assertEqual(response.data["message"], "不支持的计价法币")
+        self.assertEqual(response.data["detail"], "JPY")
+
     def test_viewset_create_translates_unique_conflict_to_api_error(self):
         # 并发重复 out_no 命中数据库唯一约束时，接口必须返回业务错误而不是 500。
         project = Project.objects.create(

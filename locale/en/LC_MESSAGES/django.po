@@ -796,8 +796,8 @@ msgid "充值用户数已达到当前套餐上限"
 msgstr "Deposit customer count has reached the current plan limit"
 
 #: xcash/common/error_codes.py:53
-msgid "账单收款类型错误"
-msgstr "Incorrect invoice type"
+msgid "不支持的计价法币"
+msgstr "Unsupported pricing fiat currency"
 
 #: xcash/common/error_codes.py:54
 msgid "账单收款时间错误"

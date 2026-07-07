@@ -50,7 +50,7 @@ class ErrorCode(Enum):
     )
 
     # Invoice
-    INVALID_INVOICE_CURRENCY = ErrorInfo("5000", _("账单收款类型错误"), 400)
+    INVALID_INVOICE_CURRENCY = ErrorInfo("5000", _("不支持的计价法币"), 400)
     DURATION_ERROR = ErrorInfo("5003", _("账单收款时间错误"), 400)
     INVALID_INVOICE_ID = ErrorInfo("5005", _("无效参数：sys_no"), 400)
     INVALID_INVOICE_STATUS = ErrorInfo("5006", _("账单收款状态错误"), 400)

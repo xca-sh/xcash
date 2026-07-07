@@ -99,7 +99,7 @@ class InvoiceCreateSerializer(Serializer):
     def validate_currency(self, value):  # noqa
         # 计价货币恒为法币：收款加密货币改由 methods 表达，二者职责彻底分离。
         if not FiatService.exists(value):
-            raise APIError(ErrorCode.INVALID_INVOICE_CURRENCY)
+            raise APIError(ErrorCode.INVALID_INVOICE_CURRENCY, detail=value)
         return value
 
     # out_no 的重复判定不在 serializer 做：viewset 层实现条件幂等
