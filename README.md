@@ -1,62 +1,104 @@
+<div align="center">
+
 # Xcash
 
-<p align="center">
-  <strong>开源自托管加密货币收款网关</strong>
-  <br />
-  支持 USDT、ETH 与主流 EVM 及 Tron 链资产收款，零平台手续费，完全自托管。
-</p>
+**Self-hosted, non-custodial crypto payment gateway**
 
-<p align="center">
+Accept USDT, USDC, ETH and any ERC-20 across major EVM chains — plus USDT on Tron.
+Funds move through smart contracts straight into your own wallet:
+**zero platform fees, no KYC, no one standing between you and your money.**
+
+<p>
   <a href="https://xca.sh"><img src="https://img.shields.io/badge/Website-xca.sh-blue" alt="Website"></a>
-  <a href="https://xca.sh/docs/"><img src="https://img.shields.io/badge/Docs-xca.sh/docs-blue" alt="Docs"></a>
+  <a href="https://xca.sh/docs/"><img src="https://img.shields.io/badge/Docs-xca.sh%2Fdocs-blue" alt="Docs"></a>
   <a href="https://github.com/xca-sh/xcash/stargazers"><img src="https://img.shields.io/github/stars/xca-sh/xcash" alt="GitHub Stars"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/python-3.13-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/django-5.2-green.svg" alt="Django">
 </p>
 
-<p align="center">
-  <a href="README.en.md">English</a> | 简体中文
+<p>
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="https://xca.sh/docs/">Documentation</a> ·
+  <a href="API.md">API Reference</a> ·
+  <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-## Xcash 是什么？
+</div>
 
-**Xcash** 是最先进的开源、自托管**加密货币收款网关**，面向商家、SaaS 产品、交易所和钱包平台，提供账单收款、USDT 收款和充值收款能力。
+![Xcash admin dashboard](xcash/static/xcash-dashboard-en.png)
 
-完整部署、配置和 API 对接说明请查看 [Xcash 官方文档](https://xca.sh/docs/)。
+## Why Xcash?
 
-不同于 CoinGate、OpenNode 这类托管式收款处理商，Xcash 强调**完全自托管**：收款经智能合约直达你的归集地址，Xcash 全程不过手资金，也不抽取平台手续费。它适合需要多链资产收款、充值收款和 Webhook 通知能力的业务系统。
+Hosted crypto payment processors stand between you and your money: they take custody of funds until payout, charge a percentage of every transaction, require KYC, and can freeze your account — or shut down entirely. Xcash takes the opposite approach: the gateway runs on your server, and the money never stops being yours.
 
-**适用场景：** 电商加密货币账单收款、USDT 充值收款系统、跨境稳定币结算、SaaS 加密货币订阅计费、链上收款基础设施，以及企业内部数字资产入账管理。
+- **Non-custodial by design** — collections flow through minimal smart contracts whose destination is hard-coded to your own collection address. Xcash handles invoice matching, confirmations and notifications; it is never in the fund path.
+- **Zero platform fees** — no percentage cut when you self-host. You only pay on-chain gas, and batched sweeping keeps the cost of a sweep close to a plain token transfer.
+- **Stablecoin-first, multi-chain** — any ERC-20 on Ethereum, BNB Chain, Arbitrum, Base, Polygon, Optimism and other EVM chains; USDT and native TRX on Tron.
+- **Two collection modes in one system** — invoice payments for checkout and subscriptions, plus exchange-style dedicated deposit addresses for platforms that maintain user balances.
+- **Production-ready out of the box** — multi-merchant / multi-project isolation, MistTrack risk scoring, reliable webhooks, EasyPay V1 compatibility, one-command Docker deployment.
 
-## Xcash 有多安全？
+### How it compares
 
-打个比方，如果你用 Xcash 作为项目的加密货币收款网关，即使部署 Xcash 的服务器被攻破、数据库被拖库、密钥泄露，只要保证您的归集地址不被篡改，您的资产都不会有任何安全风险，而且恢复服务后用户完成账单收款或充值收款的款项，仍然会流入您的归集地址，黑客无能为力。
+|  | **Xcash** (self-hosted) | Hosted processors¹ | BTCPay Server |
+|---|:---:|:---:|:---:|
+| Custody of funds | Non-custodial — straight to your wallet | Processor holds funds until payout | Non-custodial |
+| Platform fee | **0** | typically 0.4%–1% per transaction | 0 |
+| KYC / account approval | None | usually required | None |
+| Stablecoins on EVM + Tron | Any ERC-20, plus Tron USDT | varies by provider | Bitcoin-first; altcoins via plugins |
+| Exchange-style deposit addresses | Built-in | rare | — |
+| EasyPay (易支付) V1 protocol | Compatible | — | — |
 
-## Xcash 为什么这么安全？
+¹ e.g. CoinPayments, NOWPayments, CoinGate.
 
-安全是 Xcash 与生俱来的特性，是我们秉承的核心原则。
+## Quick Start
 
-- Xcash 永不过手您的收款。
-- 一切收款走智能合约，智能合约写死资金流向为您的归集地址。
-- 收款合约极简，攻击面为 0。
+Get a production gateway running in minutes. You need a Linux server with Docker and a domain pointed at it:
+
+```bash
+git clone https://github.com/xca-sh/xcash.git
+cd xcash
+./scripts/init_env.sh    # generates .env with random secrets
+# edit .env and set SITE_DOMAIN=pay.example.com
+docker compose up -d
+```
+
+The bundled Caddy listens on `127.0.0.1:6688`; point your reverse proxy (Nginx, Caddy, …) at it for TLS. First startup creates a default admin account — `admin` / `Admin@123456` — **change the password immediately**. Then, in the admin panel:
+
+1. Fill in RPC endpoints for the chains you want to enable (QuickNode / Alchemy / Infura; TronGrid API key for Tron).
+2. Fund the system wallet with a small amount of gas on each enabled chain.
+3. Create a project, set its collection address, and integrate through the [REST API](API.md).
+
+The [deployment guide](#deployment-guide) below covers every step in detail; full docs live at [xca.sh/docs](https://xca.sh/docs/).
+
+> Don't want to run servers? **[xca.sh](https://xca.sh)** is the official hosted cloud — the first $500 of monthly volume is fee-free.
+
+## Security: why a compromised server can't steal your funds
+
+Suppose the server running Xcash is fully compromised — database dumped, secrets leaked. As long as your collection address is intact, your assets are not at risk: payments made before, during and after the incident still land in your wallet, because there is nothing on the server that could redirect them.
+
+Security is a structural property of Xcash, not a feature bolted on:
+
+- **Xcash never takes custody of your collections.** Funds do not pass through any account the system controls on your behalf.
+- **Contract collections hard-code the destination.** The collection smart contracts can only ever forward funds to your collection address — the attacker cannot rewrite that.
+- **The collection contract is intentionally minimal.** One job, near-zero attack surface.
 
 ```mermaid
 flowchart LR
-    Buyer(["买家"])
-    Contract["收款智能合约<br/>资金流向写死"]
-    Wallet["你的归集地址<br/>私钥只在你手中"]
+    Buyer(["Buyer"])
+    Contract["Collection smart contract<br/>destination hard-coded"]
+    Wallet["Your collection address<br/>private keys stay with you"]
 
-    Buyer -->|付款| Contract -->|只能流向| Wallet
+    Buyer -->|Pays| Contract -->|Can only flow to| Wallet
 
-    subgraph XcashBox["Xcash 系统 · 控制面"]
-        Core["API / Worker / 数据库"]
+    subgraph XcashBox["Xcash system · control plane"]
+        Core["API / Worker / Database"]
     end
-    Core -.->|匹配账单 · 状态 · 通知<br/>全程不经手资金| Contract
+    Core -.->|Invoice matching · Status · Notifications<br/>never in the fund path| Contract
 
-    Attacker["攻击者<br/>攻破服务器 / 拖库 / 密钥泄露"]
-    Attacker -->|最多控制| XcashBox
-    Attacker -- 改不动资金流向 --x Wallet
+    Attacker["Attacker<br/>server compromise / database dump / key leak"]
+    Attacker -->|Controls at most| XcashBox
+    Attacker -- cannot rewrite fund destination --x Wallet
 
     classDef money fill:#e6f4ea,stroke:#34a853,color:#000;
     classDef danger fill:#fce8e6,stroke:#ea4335,color:#000;
@@ -64,258 +106,248 @@ flowchart LR
     class Attacker danger;
 ```
 
-资金路径（绿色）由智能合约写死，只在「买家 → 收款合约 → 你的归集地址」之间流动；Xcash 仅作控制面，负责账单匹配、状态流转与通知，**不在资金路径上**。因此攻击者即便完全控制 Xcash 系统，也无法改写合约里写死的资金流向。
+The fund path (green) is fixed by the smart contract and only ever flows *buyer → collection contract → your collection address*. Xcash itself is a control plane — invoice matching, state transitions, notifications — and **is not in the fund path**. Even an attacker with full control of the Xcash system sees invoice data at most; they cannot change where the money goes.
 
-## 特性
+## Two ways to get paid
 
-| 特性 | 说明                              |
-|------|---------------------------------|
-| 账单收款 | 定额、定时的账单式收款，适合电商下单、订阅计费等场景      |
-| 充值收款 | 为每个用户分配专属充值收款地址，随时转入、即时入账，体验同交易所  |
-| 完全自托管 | 收款经智能合约直达你的钱包，Xcash 全程不过手资金     |
-| 零平台手续费 | 不按交易抽成，只承担链上微量 Gas              |
-| 多链多币种 | 覆盖主流 EVM 链，支持任意 ERC-20 代币 |
-| 多商户多项目 | 单实例隔离管理多个商户与项目                  |
-| 智能合约收款 | EVM 链可为每笔账单收款生成独立智能合约收款地址 |
-| 链上风控 | 接入 MistTrack 对账单收款、充值收款的来源地址做风险评分   |
-| Webhook 回调 | 实时推送账单收款、充值收款事件                     |
-| 兼容易支付 | 支持标准易支付 V1 协议，便于平滑迁移            |
-| Docker 部署 | Docker Compose 一键部署生产服务         |
+Xcash provides two collection modes. Decide which one fits your business before integrating:
 
-## 账单收款 vs 充值收款
+- **Invoice payments** — each transaction creates a fixed-amount, time-limited invoice that completes when the buyer pays. Supports both direct-to-wallet collection and smart-contract collection, where every invoice gets an independent contract address — no address collisions, no amount fudging, high concurrency by default. Ideal for e-commerce checkout and subscription billing.
+- **Deposits** — every user gets a dedicated deposit address, shared across chains and monitored in real time. Users transfer in whenever they like and are credited after block confirmation, with no order to create — the same UX as an exchange. Ideal for wallets, trading platforms, and any business that maintains user balances.
 
-Xcash 提供两种入账方式，对接前请先区分：
+## Features
 
-- **账单收款**：账单式收款。每笔交易创建一张定额、限时的账单，买家付款后账单完成，适合电商下单、订阅计费等一次性收款场景。默认使用智能合约收款：系统为账单收款分配独立收款地址，地址互不冲突、天然支持高并发，金额无需浮动。
-- **充值收款**：交易所式充值收款。为每个用户分配专属充值收款地址，且多链共享，实时监控，用户可随时转入、区块确认后入账，无需创建订单，适合需要维护用户余额的钱包、交易类业务。
+| Feature | Detail |
+|---------|--------|
+| Invoice payments | Fixed-amount, time-limited invoices for checkout, subscriptions and one-off charges |
+| Deposits | Dedicated per-user deposit addresses credited on confirmation — exchange-style UX |
+| Non-custodial | Collections flow through smart contracts straight to your wallet; Xcash never holds funds |
+| Zero platform fees | No transaction percentage when self-hosting; only small on-chain gas costs |
+| Multi-chain, multi-asset | Major EVM chains with any ERC-20 token; USDT and TRX on Tron |
+| Multi-merchant, multi-project | Isolated merchants and projects on a single instance, each with its own auth keys and collection address |
+| Contract invoices | Independent contract address per invoice, swept automatically after confirmation |
+| On-chain risk screening | MistTrack risk scores for payer and deposit source addresses, exposed via API and webhooks |
+| Webhook callbacks | Real-time payment and deposit events, automatic retries, nonce-based idempotency |
+| EasyPay compatibility | Standard EasyPay (易支付) V1 protocol for painless migration from legacy systems |
+| Docker deployment | One-command production deployment with Docker Compose |
 
-## Gas 成本与资金归集
+## Chain support
 
-启用智能合约收款后，系统会为每笔账单收款、每个充值收款用户分配**独立的收款地址**。很多人第一反应会担心：地址这么多，是不是每笔收款都要单独付一次 Gas 去归集？
-
-答案是**不需要**。Xcash 内置两道归集闸门，把归集次数和 Gas 开销压到最低：
-
-- **归集延迟（周期性批量归集）**：收款确认后不会立即归集，而是等待一个可配置的延迟窗口再尝试。EVM 链默认 **60 分钟**，Tron 链默认 **6 小时**。同一地址在窗口内的多笔入账会被**合并成一次归集**，而不是每笔各付一次 Gas。
-- **归集金额门槛**：到期尝试归集时，若该地址该币种的余额价值低于门槛（默认 **1 USD**），则**跳过本次并继续累积**，避免为几毛钱的"粉尘"付出更高的 Gas、注定亏本。
-
-**只有「延迟到达」和「金额达标」两个条件同时满足，系统才会自动发起归集交易。** 未达标的地址不会被丢弃，后续入账会重新评估，攒够门槛后再归集。两道闸门的具体数值都可以在管理后台按链灵活调整。
-
-同时，Xcash 的收款合约保持极简：每次归集的核心动作基本等同于对应代币的一次普通转账，所以单次归集的 Gas 消耗也基本接近该代币转账本身，几乎没有额外合约开销。
-
-更巧妙的是，归集本身是一个**无需许可、与安全无关**的操作：
-
-- 归集合约的 `collect()` **没有任何权限校验**，任何账户都能替你发起归集，调用方只是自付 Gas；而资金流向早已被合约写死为你的归集地址，谁来触发都改变不了结果。
-- 所以除了系统按闸门自动归集，你也可以在**任何时间手动触发归集**，不受延迟和门槛限制。
-- 无论自动还是手动、无论谁来调用，归集资金**只会流入你的归集地址**，Xcash 全程不过手（原理见[「Xcash 为什么这么安全？」](#xcash-为什么这么安全)）。
-
-因此你只需为系统钱包保留少量原生资产用于支付归集 Gas（见[部署步骤 6](#6-为系统钱包充值-gas)），无需为每笔支付或充币单独操心 Gas——真正的 Gas 开销，由你设定的归集频率与门槛共同决定。
-
-## 链支持
-
-| 功能 | ETH | BNB Chain | Arbitrum | Base | Tron | Polygon | Optimism |
+| Feature | ETH | BNB Chain | Arbitrum | Base | Tron | Polygon | Optimism |
 |:--:|:---:|:---------:|:--------:|:----:|:----:|:-------:|:--------:|
-| 账单收款 | 是 | 是 | 是 | 是 | 是 | 是 | 是 |
-| 充值收款 | 是 | 是 | 是 | 是 | 是 | 是 | 是 |
+| Payments | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Deposits | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
-## 代币支持
+Additional EVM chains can be enabled by filling in an RPC endpoint in the admin panel.
 
-| 链类型 | 原生资产 | 代币标准 | 当前支持范围 | 启用方式 |
+## Token support
+
+| Chain type | Native assets | Token standard | Current scope | How to enable |
 |:------:|:--------:|:--------:|:------------|:---------|
-| EVM | ETH、BNB、POL 等原生资产（用于支付 Gas） | ERC-20 | 支持任意 ERC-20 代币，适合按业务需要接入 USDT、USDC 或其他链上资产收款 | 在后台添加代币合约地址并启用对应公链 |
-| Tron | TRX | TRC-20 | 当前放行 USDT 与原生 TRX；其他 TRC-20 暂不作为账单收款或充值收款资产 | 配置 Tron 链 RPC / TronGrid，并启用对应资产 |
+| EVM | ETH, BNB, POL, etc. (used for gas) | ERC-20 | Any ERC-20 token — add USDT, USDC, or whatever your business needs | Add the token contract address in the admin panel and enable the chain |
+| Tron | TRX | TRC-20 | USDT and native TRX; other TRC-20 tokens are not yet exposed for payments or deposits | Configure the Tron RPC / TronGrid key and enable the assets |
 
-## 内置风控接入
+## Gas costs and fund sweeping
 
-Xcash 内置的是风控查询、缓存、记录和展示能力；当前风险地址识别依赖外部 MistTrack（慢雾 MistTrack）服务，并非项目内部自行维护黑名单或自研链上风控模型。
+With contract collection enabled, every invoice and every deposit user gets an **independent collection address**. The obvious worry: with that many addresses, do you pay gas to sweep every single payment?
 
-风控系统当前覆盖两类核心资金入口：
+**No.** Xcash gates sweeping behind two thresholds that keep the number of sweeps — and total gas — to a minimum:
 
-- **账单收款**：账单匹配到链上付款后，系统会对付款方地址进行异步风险查询，并将风险等级和风险分数同步到账单收款记录。
-- **充值收款**：充值收款记录创建后，系统会对转入资金的来源地址进行异步风险查询，并将风险等级和风险分数同步到充值收款记录。
+- **Sweep delay (periodic batching)** — confirmed funds are not swept immediately; the system waits for a configurable window (default **60 minutes** on EVM, **6 hours** on Tron). Multiple payments landing on the same address within the window are **merged into a single sweep** instead of paying gas per payment.
+- **Sweep value threshold** — when the delay expires, any address whose balance is worth less than the threshold (default **1 USD**) is **skipped and keeps accumulating**, so you never pay more in gas than the dust is worth.
 
-风险结果会同时写入独立的**风险评估**记录，包含查询状态、目标类型、来源地址、交易哈希、风险等级、风险分数。管理后台可直接查看账单收款、充值收款和风险评估记录中的风险信息，便于运营人员进行人工复核、业务放行或进一步处置。账单收款和充值收款的 API/Webhook 输出也会携带 `risk_level` 与 `risk_score`，方便商户系统同步展示或接入自己的处置流程。
+**A sweep fires only when both conditions — delay reached and value met — are satisfied.** Addresses below the threshold are not abandoned: new incoming funds re-trigger evaluation, and the sweep happens once the balance qualifies. Both knobs are tunable per chain in the admin panel.
 
-Xcash 优先使用 MistTrack OpenAPI V3；未配置 MistTrack OpenAPI API Key 时，自动回退到 QuickNode MistTrack add-on。
-两者都未配置，则不启用风控功能。
+The collection contract stays minimal: a sweep is essentially a plain token transfer, with almost no extra contract overhead.
 
-## 后台截图
+Better still, sweeping is a **permissionless, safety-neutral** operation:
 
-![Xcash 管理后台 Dashboard](xcash/static/xcash-dashboard.jpeg)
+- The collection contract's `collect()` has **no access control** — any account can trigger a sweep and merely pays the gas, because the destination is hard-coded to your collection address; it does not matter who calls it.
+- Besides the automatic gated sweeps, you can **trigger a manual sweep at any time**, bypassing delay and threshold.
+- Automatic or manual, whoever the caller — funds **only ever flow to your collection address**, and Xcash never touches them (see [Security](#security-why-a-compromised-server-cant-steal-your-funds)).
 
-## 架构
+So you only need to keep a small native-asset balance in the system wallet to pay for sweep gas (see [deployment step 6](#6-fund-the-system-wallet-with-gas)); your real gas spend is determined by the sweep frequency and threshold you choose.
+
+## Built-in risk screening
+
+Xcash ships risk query, caching, persistence and display capabilities; the actual risky-address intelligence comes from the external MistTrack (SlowMist) service — it is not an internally maintained blacklist or a home-grown on-chain risk model.
+
+Risk checks cover the two core fund entry points:
+
+- **Invoice payments** — once an invoice is matched to an on-chain payment, the payer address is checked asynchronously and the risk level and score are stored on the invoice record.
+- **Deposits** — once a deposit record is created, the source address is checked asynchronously and the risk level and score are stored on the deposit record.
+
+Results are also written to dedicated **risk assessment** records — query status, target type, source address, transaction hash, risk level, risk score — so operators can review, release or escalate from the admin panel. Invoice and deposit API/webhook payloads carry `risk_level` and `risk_score`, making it easy for merchant systems to display risk or plug in their own handling flow.
+
+Xcash prefers MistTrack OpenAPI V3; if no MistTrack API key is configured, it falls back to the QuickNode MistTrack add-on. If neither is configured, risk screening is disabled.
+
+## Architecture
 
 ```mermaid
 graph LR
-    Buyer["买家<br/>账单收款页"]
-    Merchant["商家系统"]
+    Buyer["Buyer<br/>Payment page"]
+    Merchant["Merchant system"]
 
     subgraph Xcash
         API["Xcash API"]
-        Worker["Xcash Worker<br/>交易监听 · 归集 · 状态流转"]
-        Wallet["Xcash 钱包引擎<br/>助记词托管 · 地址派生 · 交易签名"]
-        Webhook["Xcash Webhook<br/>异步通知"]
+        Worker["Xcash Worker<br/>Tx monitoring · Sweeping · State transitions"]
+        Wallet["Xcash wallet engine<br/>Mnemonic custody · Address derivation · Tx signing"]
+        Webhook["Xcash Webhook<br/>Async notifications"]
     end
 
-    Blockchain["区块链网络<br/>EVM · Tron"]
+    Blockchain["Blockchain networks<br/>EVM · Tron"]
 
-    Buyer -->|发起账单收款| API
-    Merchant <-->|创建账单收款 / 查询| API
+    Buyer -->|Initiates payment| API
+    Merchant <-->|Create invoice / Query| API
     API <--> Worker
     Worker <--> Wallet
-    Worker <-->|监听 · 广播| Blockchain
-    Webhook -->|推送事件| Merchant
+    Worker <-->|Monitor · Broadcast| Blockchain
+    Webhook -->|Push events| Merchant
 ```
 
-## 部署前准备
+## Deployment guide
 
-在开始部署之前，请准备以下条件：
+### Prerequisites
 
-- Linux 服务器，推荐 Ubuntu 22.04+ 或 Debian 12+
-- Docker 和 Docker Compose
-- 已解析到服务器 IP 的域名
-- 需要启用的公链 RPC 节点
-- 如需启用 Tron 账单收款，需要准备 TronGrid API Key
+- Linux server, Ubuntu 22.04+ or Debian 12+ recommended
+- Docker and Docker Compose
+- A domain resolved to the server IP
+- RPC endpoints for the chains you want to enable
+- A TronGrid API key if you need Tron payments
 
-推荐服务器配置：
+Recommended server profiles:
 
-| 性能模式 | 硬件配置 | 可承载链数量 |
+| Performance mode | Hardware | EVM chain capacity |
 |:-------:|:-------:|:-----------:|
-| low | 1 核 / 2 GB | 2 - 3 条 EVM 链 |
-| medium | 4 核 / 8 GB | 8 - 15 条 EVM 链 |
-| high | 8 核 / 16 GB | 15 - 30 条 EVM 链 |
+| low | 1 CPU / 2 GB | 2 – 3 EVM chains |
+| medium | 4 CPU / 8 GB | 8 – 15 EVM chains |
+| high | 8 CPU / 16 GB | 15 – 30 EVM chains |
 
-`PERFORMANCE` 为可设置到 `.env` 中的性能参数，可选值为 `low`、`medium`、`high`。不设置时默认使用 `low`。
+`PERFORMANCE` can be set in `.env` to `low`, `medium` or `high`; it defaults to `low` when unset.
 
-EVM 账单收款与充值收款都通过链上事件扫描感知和确认状态，且二者均默认启用、需要同时监听。实际可承载的链数量取决于 RPC 节点吞吐、区块出块速度和事件量，建议按上表保守配置性能档位。
+EVM payments and deposits are both detected and confirmed through on-chain event scanning, are both enabled by default, and are monitored together. Actual chain capacity depends on RPC throughput, block speed and event volume, so pick a performance profile conservatively.
 
-## 快速开始
-
-### 1. 克隆项目
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/xca-sh/xcash.git
 cd xcash
 ```
 
-### 2. 初始化环境变量
+### 2. Initialize environment variables
 
 ```bash
 ./scripts/init_env.sh
 ```
 
-该命令会生成 `.env`，并自动填充运行所需的随机密钥和数据库口令。
-如果 `.env` 已存在，脚本会拒绝覆盖并退出；如需重新生成，请先手动备份并删除旧文件。
+This generates `.env` and fills in the random secrets and database password required at runtime.
+If `.env` already exists, the script refuses to overwrite it and exits; back up and remove the old file first if you need to regenerate.
 
-### 3. 设置访问域名
+### 3. Configure the access domain
 
-编辑 `.env` 设置 `SITE_DOMAIN`：
+Edit `.env` and set `SITE_DOMAIN`:
 
 ```env
 SITE_DOMAIN=xcash.example.com
 ```
 
-请确保该域名的 DNS 已解析到服务器 IP，并配置 Nginx 或 Caddy 等反向代理，将流量转发至 `http://localhost:6688`。
+Make sure the domain's DNS resolves to the server IP, and configure a reverse proxy such as Nginx or Caddy to forward traffic to `http://localhost:6688`.
 
-可选：设置 `ADMIN_PATH` 将后台入口移动到自定义路径，例如：
+Optional: set `ADMIN_PATH` to move the admin entrance to a custom path, for example:
 
 ```env
 ADMIN_PATH=secure-admin
 ```
 
-未设置时后台仍挂在站点根路径，并会在后台右上角显示安全提醒。
+If unset, the admin panel stays at the site root and shows a security reminder in the top-right corner.
 
-### 4. 启动服务
+### 4. Start the services
 
 ```bash
 docker compose up -d
 ```
 
-启动脚本会先执行数据库迁移并补齐默认链、币种等主数据。首次启动时，如果数据库内还没有任何管理员账号，系统会自动创建默认后台账号：
+The startup script first applies database migrations and seeds default reference data such as chains and currencies. On first startup, if no admin account exists yet, a default one is created:
 
 ```text
 username: admin
 password: Admin@123456
 ```
 
-首次登录后台后请立即修改默认密码。
+Change the default password immediately after your first login.
 
-### 5. 配置链 RPC
+### 5. Configure chain RPC
 
-系统已预置主流链的基础信息，但 **RPC 节点地址需要自行填写**，网关才能与区块链通信。
+Basic information for mainstream chains is preloaded, but **RPC endpoints must be filled in manually** before the gateway can talk to the blockchains.
 
-登录管理后台，进入 **区块链** **公链** 页面，为需要使用的链填写 RPC 地址。推荐使用 [QuickNode](https://www.quicknode.com/)、[Alchemy](https://www.alchemy.com/) 或 [Infura](https://www.infura.io/) 等节点服务商。Tron 账单收款需要在 [TronGrid](https://www.trongrid.io/) 注册并获取 API Key。
+Log in to the admin panel, go to **Blockchain → Public chains**, and fill in RPC endpoints for the chains you want to use. Recommended providers include [QuickNode](https://www.quicknode.com/), [Alchemy](https://www.alchemy.com/) and [Infura](https://www.infura.io/). Tron payments require a [TronGrid](https://www.trongrid.io/) API key.
 
-### 6. 为系统钱包充值 Gas
+### 6. Fund the system wallet with gas
 
-登录管理后台，进入 **系统** **系统钱包** 页面，复制系统钱包地址，并在每条启用的 EVM 链上向该地址充值少量原生资产用于支付 Gas，例如 ETH、BNB、POL 等。
+Log in to the admin panel, go to **System → System wallets**, copy the system wallet address, and send a small amount of the native asset (ETH, BNB, POL, …) to it on each enabled EVM chain.
 
-系统钱包只用于平台基础设施交易，例如智能合约部署、智能合约归集等需要由系统主动发起的链上操作；业务收款资金仍按合约规则流向你的收款归集地址。这里不需要存入业务资金，只需要保留覆盖近期操作的小额 Gas，避免因 Gas 不足导致合约部署或归集任务无法广播。归集并非每笔收款各触发一次——系统通过归集延迟与金额门槛两道闸门批量归集，进一步压低 Gas 开销，详见[「Gas 成本与资金归集」](#gas-成本与资金归集)。
+The system wallet is only used for infrastructure transactions the system must initiate itself — contract deployment, contract sweeps and similar on-chain operations. Business funds still flow to your collection address per the contract rules. Do not park business funds here; keep just enough gas to cover recent operations so deployments and sweeps are never blocked. Sweeps are not per-payment — the delay and value gates batch them to keep gas low, see [Gas costs and fund sweeping](#gas-costs-and-fund-sweeping).
 
-### 7. 配置项目
+### 7. Configure a project
 
-登录管理后台，进入 **项目** **项目列表** 页面，创建或编辑项目。项目是 API 对接的基本隔离单元，每个项目都有独立的 `Appid` 和 `HMAC密钥`，用于接口鉴权与签名。
+Log in to the admin panel, go to **Projects → Project list**, and create or edit a project. A project is the basic isolation unit for API integration; each one has its own `Appid` and `HMAC secret` for authentication and signing.
 
-请至少确认以下配置：
+Confirm at least the following:
 
-- **IP 白名单**：限制允许调用网关 API 的商户服务器 IP；测试阶段可使用 `*`，生产环境建议收窄到固定出口 IP 或网段。
-- **通知地址**：用于接收账单收款、充值收款等 Webhook 事件；如暂未配置，项目会显示为未就绪。
-- **收款归集地址**：业务资金最终流入的地址。启用智能合约收款或充值收款前必须配置 EVM 多签地址；该地址会写入智能合约规则，一旦设置不可修改。
+- **IP whitelist** — restricts which merchant server IPs may call the gateway API. `*` is fine while testing; narrow it to fixed egress IPs or CIDR ranges in production.
+- **Notification URL** — receives payment, deposit and other webhook events; the project shows as *not ready* until configured.
+- **Collection address** — the final destination of business funds. Before enabling contract payments or deposits you must configure an EVM multisig address; it is written into the contract rules and **cannot be changed once set**.
 
-## API 对接
+## API integration
 
-部署完成后，参考 [API 对接文档](https://xca.sh/docs/#api-base) 接入账单收款、充值收款和 Webhook 回调。
+After deployment, follow the [API documentation](https://xca.sh/docs/#api-base) to integrate payments, deposits and webhook callbacks. A machine-readable reference also lives in [API.md](API.md).
 
-创建账单收款时可传入账单收款级 `notify_url` 覆盖项目默认 Webhook；兼容易支付 V1 的 `submit.php` 入口也会将 `notify_url` 翻译为账单收款自身的通知地址。
+Invoice creation accepts an invoice-level `notify_url` that overrides the project's default webhook; the EasyPay V1-compatible `submit.php` entry point maps `notify_url` to the invoice-level notification URL as well.
 
-## 运维命令
+## Operations
 
-### 停止服务
+Stop the services (containers are removed, database volumes are kept):
 
 ```bash
 docker compose down
 ```
 
-该命令会停止并移除生产 Docker Compose 服务容器，不会删除数据库数据卷。
-
-### 升级到最新版
+Upgrade to the latest version (pulls the latest `main` and runs the full production upgrade flow):
 
 ```bash
 ./scripts/upgrade.sh
 ```
 
-该命令会拉取 `main` 分支最新版并执行完整生产升级流程。
+## Tech stack
 
-## 技术栈
+- **Backend**: Django 5.2 + Django REST Framework
+- **Task queue**: Celery + Redis
+- **Database**: PostgreSQL
+- **Blockchain interaction**: web3.py (EVM)
+- **Wallet derivation**: BIP44 HD wallets (bip-utils)
+- **Payment page**: React 19 + Vite + Tailwind CSS
+- **Deployment**: Docker Compose
 
-- **后端**：Django 5.2 + Django REST Framework
-- **任务队列**：Celery + Redis
-- **数据库**：PostgreSQL
-- **区块链交互**：web3.py（EVM）
-- **钱包派生**：BIP44 HD 钱包（bip-utils）
-- **前端账单收款页**：React 19 + Vite + Tailwind CSS
-- **部署**：Docker Compose
+## Roadmap
 
-## 路线图
+- [x] Tron support
+- [ ] Solana support
+- [ ] Documentation site improvements
 
-- [ ] Solana 链支持
-- [x] Tron 链支持
-- [ ] 完善文档站
+## Hosted cloud
 
-## 云服务
+If you'd rather not deploy and maintain Xcash yourself, use the official hosted version at **[xca.sh](https://xca.sh)** — no deployment, no maintenance, continuously updated, and the first $500 of monthly volume is fee-free.
 
-如果你不想自己部署和维护，可以直接使用官方托管版本：
+## Support
 
-**[xca.sh](https://xca.sh)** — 开箱即用，免部署，持续更新。
+- **Bugs & questions**: [open an issue](https://github.com/xca-sh/xcash/issues)
+- **Commercial support**: tech@xca.sh
 
-## 商业支持
+## Contributing
 
-如果你在部署或使用过程中需要专业协助，欢迎联系我们获取技术支持服务：
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-tech@xca.sh
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request。
+If Xcash saves you money, consider giving it a ⭐ — it helps other merchants find the project.
 
 ## License
 
