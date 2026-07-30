@@ -30,7 +30,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --group production --no-group dev
 
 # Python 'run' stage
-FROM python:3.13-slim-bookworm AS python-run-stage
+FROM python:3.14-slim-bookworm AS python-run-stage
 
 ARG APP_HOME=/app
 
@@ -76,7 +76,7 @@ USER django
 ENTRYPOINT ["/entrypoint"]
 
 # Caddy 镜像内置构建期 collectstatic 产物，避免运行期用 Docker volume 共享静态文件。
-FROM caddy:2.11.2-alpine AS caddy-run-stage
+FROM caddy:2.11.4-alpine AS caddy-run-stage
 
 COPY ./Caddyfile /etc/caddy/Caddyfile
 COPY --from=python-run-stage /app/staticfiles /srv/staticfiles
