@@ -22,9 +22,9 @@ jobs:
     name: Lint (ruff + black)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -81,11 +81,11 @@ jobs:
     steps:
       # fetch-depth: 0 —— django-migration-linter 要按 origin/main 求迁移文件差集，
       # 浅克隆下拿不到该 ref，脚本会退化成 HEAD（等于什么都不检查）。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -123,16 +123,16 @@ jobs:
     name: Frontend (pay-fronted)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 版本由 pay-fronted/package.json 的 packageManager 字段决定，不在此重复声明。
       # 但必须显式指出该文件的位置：action 默认只读仓库根目录的 package.json，
       # 而本项目根目录没有这个文件，缺了这行会以 "No pnpm version is specified" 直接失败。
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: pay-fronted/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: pnpm
@@ -157,15 +157,15 @@ jobs:
     name: Docker 生产镜像构建
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # 构建 caddy-run-stage 会连带构建它依赖的 python-build-stage 与
       # python-run-stage，一次覆盖 Dockerfile 全部阶段（含镜像内 collectstatic
       # 与 compilemessages）。只构建、不推送。
       - name: 构建生产镜像
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./compose/production/django/Dockerfile
