@@ -43,19 +43,19 @@ dev = [
     "werkzeug[watchdog]==3.1.8",
     "ipdb==0.13.13",
     # Testing
-    "mypy==2.1.0",
+    "mypy==2.3.0",
     "django-stubs[compatible-mypy]==6.0.7",
-    "pytest==9.0.3",
+    "pytest==9.1.1",
     "pytest-sugar==1.1.1",
     "djangorestframework-stubs[compatible-mypy]==3.17.1",
     # Code quality
     # black 是本项目唯一的格式化器（见 .pre-commit-config.yaml 的说明）；
     # 必须列在依赖里，否则本地 `uv run black` 不可用，只有 pre-commit 自建环境能跑。
-    "black==25.1.0",
-    "ruff==0.15.15",
-    "coverage==7.14.1",
-    "djlint==1.36.4",
-    "pre-commit==4.6.0",
+    "black==25.12.0",
+    "ruff==0.16.0",
+    "coverage==7.15.2",
+    "djlint==1.43.0",
+    "pre-commit==4.6.1",
     # Django
     "django-debug-toolbar==6.3.0",
     "django-coverage-plugin==3.2.2",
