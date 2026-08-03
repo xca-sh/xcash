@@ -10,7 +10,7 @@ dependencies = [
     "web3==7.16.0",
     "base58==2.1.1",
     "bip-utils==2.12.1",
-    "redis==8.0.1",
+    "redis==8.1.0",
     "hiredis==3.4.0",
     "cryptography==48.0.1",
     "argon2-cffi==25.1.0",
