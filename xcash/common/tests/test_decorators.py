@@ -1,12 +1,17 @@
+import json
 from unittest.mock import patch
 
 from celery import Celery
 from celery import Task
 from django.test import SimpleTestCase
+from django_redis import get_redis_connection
 
 from common.decorators import PENDING_ONCE_ACQUIRE_SCRIPT
 from common.decorators import PENDING_ONCE_PROMOTE_SCRIPT
 from common.decorators import PENDING_ONCE_RELEASE_SCRIPT
+from common.decorators import PENDING_ONCE_STATUS_ACQUIRED
+from common.decorators import PENDING_ONCE_STATUS_BUSY
+from common.decorators import PENDING_ONCE_STATUS_TOOK_OVER_CORRUPTED
 from common.decorators import PendingOnceTask
 from common.decorators import singleton_task
 
@@ -249,6 +254,204 @@ class PendingOnceTaskTests(SimpleTestCase):
                 self.task.apply_async(kwargs={"chain_pk": 1})
 
         publish.assert_not_called()
+
+
+class RealRedisPendingOnceTask(PendingOnceTask):
+    name = "common.tests.real_redis_pending_once"
+    # 有意与生产 key 隔离：测试连的是缓存库，本地开发同时在用同一个库。
+    pending_once_state_key = "xcash:test:celery:pending-once:task"
+
+    def run(self):
+        return "ok"
+
+
+class PendingOnceLuaScriptTests(SimpleTestCase):
+    """在真实 Redis 上执行三段 Lua。
+
+    上面的 FakePendingOnceRedis 是按设计意图重写的状态机，一行 Lua 也跑不到；而
+    pending-once 的并发正确性恰恰由 Lua 的原子性与所有权比对承担。这里直连 Redis
+    覆盖脚本本身的状态迁移与返回值契约，Fake 只负责验证 Python 侧的分支处理。
+    """
+
+    state_key = "xcash:test:celery:pending-once:lua"
+    field = "example-task"
+
+    def setUp(self):
+        self.client = get_redis_connection("default")
+        self.client.delete(self.state_key)
+        self.addCleanup(self.client.delete, self.state_key)
+
+    def acquire(self, task_id, *, publishing_lease_ms=30_000, pending_lease_ms=600_000):
+        status, owner = self.client.eval(
+            PENDING_ONCE_ACQUIRE_SCRIPT,
+            1,
+            self.state_key,
+            self.field,
+            task_id,
+            publishing_lease_ms,
+            pending_lease_ms,
+        )
+        return int(status), owner.decode("utf-8")
+
+    def promote(self, task_id):
+        return int(
+            self.client.eval(
+                PENDING_ONCE_PROMOTE_SCRIPT,
+                1,
+                self.state_key,
+                self.field,
+                task_id,
+            )
+        )
+
+    def release(self, task_id):
+        return int(
+            self.client.eval(
+                PENDING_ONCE_RELEASE_SCRIPT,
+                1,
+                self.state_key,
+                self.field,
+                task_id,
+            )
+        )
+
+    def marker(self):
+        return json.loads(self.client.hget(self.state_key, self.field))
+
+    def test_first_publish_stores_publishing_marker(self):
+        self.assertEqual(
+            self.acquire("task-1"),
+            (PENDING_ONCE_STATUS_ACQUIRED, "task-1"),
+        )
+        marker = self.marker()
+        self.assertEqual(marker["state"], "publishing")
+        self.assertEqual(marker["task_id"], "task-1")
+
+    def test_second_publish_is_rejected_and_returns_current_owner(self):
+        self.acquire("task-1")
+        self.assertEqual(
+            self.acquire("task-2"),
+            (PENDING_ONCE_STATUS_BUSY, "task-1"),
+        )
+
+    def test_promote_and_release_require_matching_task_id(self):
+        """所有权比对是整个设计的支点。
+
+        worker 抢跑并释放标记后，producer 迟到的 promote 不能把标记复活（否则下一轮
+        发布会被一个已消费的幽灵标记挡住）；旧任务的 after_return 也不能删掉后继任务
+        刚写入的标记。
+        """
+        self.acquire("task-1")
+        self.assertEqual(self.promote("intruder"), 0)
+        self.assertEqual(self.promote("task-1"), 1)
+        self.assertEqual(self.marker()["state"], "pending")
+        self.assertEqual(self.release("intruder"), 0)
+        self.assertEqual(self.release("task-1"), 1)
+        self.assertEqual(self.release("task-1"), 0)
+
+    def test_expired_publishing_lease_can_be_taken_over(self):
+        self.acquire("task-1")
+        self.assertEqual(
+            self.acquire("task-2", publishing_lease_ms=0),
+            (PENDING_ONCE_STATUS_ACQUIRED, "task-2"),
+        )
+
+    def test_expired_pending_lease_can_be_taken_over(self):
+        self.acquire("task-1")
+        self.promote("task-1")
+        self.assertEqual(
+            self.acquire("task-2", pending_lease_ms=0),
+            (PENDING_ONCE_STATUS_ACQUIRED, "task-2"),
+        )
+
+    def test_live_pending_lease_blocks_takeover(self):
+        """与上一条对称：租约未到期必须挡住接管，否则去重形同虚设。"""
+        self.acquire("task-1")
+        self.promote("task-1")
+        self.assertEqual(
+            self.acquire("task-2"),
+            (PENDING_ONCE_STATUS_BUSY, "task-1"),
+        )
+
+    def test_corrupted_marker_is_taken_over_instead_of_blocking_forever(self):
+        """损坏标记必须能被接管，否则该任务会永久停止投递直到有人手工 HDEL。"""
+        self.client.hset(self.state_key, self.field, "not-json")
+        self.assertEqual(
+            self.acquire("task-1"),
+            (PENDING_ONCE_STATUS_TOOK_OVER_CORRUPTED, "task-1"),
+        )
+        self.assertEqual(self.marker()["state"], "publishing")
+
+    def test_marker_with_unknown_state_is_taken_over(self):
+        self.client.hset(
+            self.state_key,
+            self.field,
+            json.dumps({"state": "weird", "task_id": "x", "updated_at_ms": 1}),
+        )
+        status, _ = self.acquire("task-1")
+        self.assertEqual(status, PENDING_ONCE_STATUS_TOOK_OVER_CORRUPTED)
+
+    def test_marker_missing_fields_is_taken_over(self):
+        self.client.hset(self.state_key, self.field, json.dumps({"state": "pending"}))
+        status, _ = self.acquire("task-1")
+        self.assertEqual(status, PENDING_ONCE_STATUS_TOOK_OVER_CORRUPTED)
+
+    def test_state_key_never_carries_ttl(self):
+        """生产 Redis 是 volatile-lru：标记一旦带 TTL，内存吃紧时会被优先淘汰，
+        去重保护恰好在最需要它的时刻失效。租约必须只写在 value 里。
+        """
+        self.acquire("task-1")
+        self.assertEqual(self.client.ttl(self.state_key), -1)
+        self.promote("task-1")
+        self.assertEqual(self.client.ttl(self.state_key), -1)
+
+
+class PendingOnceTaskRedisIntegrationTests(SimpleTestCase):
+    """PendingOnceTask 与真实 Redis 的接线测试。
+
+    Fake 的 eval 签名是照着调用方写的：KEYS/ARGV 顺序或返回值解码若与生产 Lua 不一致，
+    Fake 永远测不出来。这里跑通 publish -> promote -> worker 释放 的完整链路。
+    """
+
+    def setUp(self):
+        self.task = RealRedisPendingOnceTask()
+        self.client = get_redis_connection("default")
+        self.client.delete(self.task.pending_once_state_key)
+        self.addCleanup(self.client.delete, self.task.pending_once_state_key)
+
+    def test_duplicate_publish_is_suppressed_until_worker_starts(self):
+        with patch.object(
+            Task,
+            "apply_async",
+            autospec=True,
+            return_value="published",
+        ) as publish:
+            first = self.task.apply_async(task_id="task-1")
+            duplicate = self.task.apply_async(task_id="task-2")
+            self.task.before_start("task-1", (), {})
+            third = self.task.apply_async(task_id="task-3")
+
+        self.assertEqual(first, "published")
+        self.assertEqual(duplicate.id, "task-1")
+        self.assertEqual(third, "published")
+        self.assertEqual(publish.call_count, 2)
+
+    def test_corrupted_marker_does_not_stop_publishing(self):
+        self.client.hset(
+            self.task.pending_once_state_key,
+            self.task.pending_once_field((), {}),
+            "not-json",
+        )
+        with patch.object(
+            Task,
+            "apply_async",
+            autospec=True,
+            return_value="published",
+        ) as publish:
+            result = self.task.apply_async(task_id="task-1")
+
+        self.assertEqual(result, "published")
+        publish.assert_called_once()
 
 
 class SingletonTaskTests(SimpleTestCase):

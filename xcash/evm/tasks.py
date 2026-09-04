@@ -10,6 +10,7 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import TxTaskStatus
 from chains.tasks import dispatch_block_confirmation_checks_if_needed
+from common.decorators import PENDING_ONCE_SCAN_PENDING_LEASE_MS
 from common.decorators import PendingOnceTask
 from common.decorators import singleton_task
 from common.time import ago
@@ -236,7 +237,12 @@ def poll_active_evm_chains() -> None:
         poll_evm_chain_tx_tasks.delay(chain.pk)
 
 
-@shared_task(base=PendingOnceTask, ignore_result=True)
+@shared_task(
+    base=PendingOnceTask,
+    ignore_result=True,
+    # 每 2 秒一轮，pending 标记残留期间整链停扫，因此收敛到 60 秒租约而非默认 10 分钟。
+    pending_once_pending_lease_ms=PENDING_ONCE_SCAN_PENDING_LEASE_MS,
+)
 @singleton_task(timeout=64)
 def scan_active_evm_chains() -> None:
     """每 2 秒巡检活跃 EVM 链，仅调度到期（now - last_scanned_at ≥ 扫描周期）的链。

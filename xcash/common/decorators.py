@@ -17,6 +17,17 @@ PENDING_ONCE_STATE_KEY = "xcash:celery:pending-once:v1"
 PENDING_ONCE_PUBLISHING_LEASE_MS = 30 * 1000
 PENDING_ONCE_PENDING_LEASE_MS = 10 * 60 * 1000
 
+# 每 2 秒调度一次的扫描巡检专用的 pending 租约。消息在 worker 早 ack 之后、
+# before_start 释放标记之前丢失（OOM kill、docker kill），标记会一直残留到租约到期；
+# 用默认 10 分钟意味着 10 分钟不扫链。扫描 tick 无参、幂等、单轮成本极低，把租约压到
+# 60 秒可以把事故盲区收敛一个量级，代价仅是极端情况下多投递一条 tick。
+PENDING_ONCE_SCAN_PENDING_LEASE_MS = 60 * 1000
+
+# acquire 脚本的返回状态码，与 PENDING_ONCE_ACQUIRE_SCRIPT 内的字面量一一对应。
+PENDING_ONCE_STATUS_BUSY = 0
+PENDING_ONCE_STATUS_ACQUIRED = 1
+PENDING_ONCE_STATUS_TOOK_OVER_CORRUPTED = 2
+
 # pending 标记不能使用 Redis TTL：生产 Redis 采用 volatile-lru，内存吃紧时 TTL key
 # 会被优先淘汰，去重保护会在最需要它时失效。租约时间写在 value 中，由 Lua 依据
 # Redis 服务器时间原子判断是否允许接管。
@@ -25,26 +36,29 @@ local marker = redis.call("HGET", KEYS[1], ARGV[1])
 local redis_time = redis.call("TIME")
 local now_ms = redis_time[1] * 1000 + math.floor(redis_time[2] / 1000)
 
-local function store_publishing_marker()
+local function store_publishing_marker(status)
     redis.call("HSET", KEYS[1], ARGV[1], cjson.encode({
         state = "publishing",
         task_id = ARGV[2],
         updated_at_ms = now_ms
     }))
-    return {1, ARGV[2]}
+    return {status, ARGV[2]}
 end
 
 if not marker then
-    return store_publishing_marker()
+    return store_publishing_marker(1)
 end
 
+-- 无法解析的标记必须接管而不是报错：本基类唯一的写入方只会写合法 JSON，因此损坏的
+-- 标记不可能对应一条真实在途消息。若在此 fail closed，该任务会永久停止投递直到有人
+-- 手工 HDEL——对每 2 秒一轮的扫描巡检等同于全线停摆。接管的代价只是可能多投一条 tick。
 local decoded_ok, decoded = pcall(cjson.decode, marker)
 if not decoded_ok
     or type(decoded) ~= "table"
     or type(decoded.state) ~= "string"
     or type(decoded.task_id) ~= "string"
     or type(decoded.updated_at_ms) ~= "number" then
-    return {-1, ""}
+    return store_publishing_marker(2)
 end
 
 local lease_ms
@@ -53,12 +67,12 @@ if decoded.state == "publishing" then
 elseif decoded.state == "pending" then
     lease_ms = tonumber(ARGV[4])
 else
-    return {-1, ""}
+    return store_publishing_marker(2)
 end
 
 local age_ms = now_ms - decoded.updated_at_ms
 if age_ms >= lease_ms then
-    return store_publishing_marker()
+    return store_publishing_marker(1)
 end
 
 return {0, decoded.task_id}
@@ -159,9 +173,15 @@ class PendingOnceTask(DjangoTask):
 
         status = int(result[0])
         owner_task_id = self.pending_once_text(result[1])
-        if status < 0:
-            raise RuntimeError("pending-once 标记格式损坏")
-        return client, status == 1, owner_task_id
+        if status == PENDING_ONCE_STATUS_TOOK_OVER_CORRUPTED:
+            # 脚本已经接管，本轮照常投递。记 warning 而非 critical：去重保护立即恢复，
+            # 没有业务损失，但标记被外力改坏本身值得留痕排查。
+            logger.warning(
+                "pending-once 标记损坏，已接管并继续投递",
+                task=self.name,
+                task_id=task_id,
+            )
+        return client, status != PENDING_ONCE_STATUS_BUSY, owner_task_id
 
     def promote_pending_once(self, *, client, field: str, task_id: str) -> None:
         result = int(
