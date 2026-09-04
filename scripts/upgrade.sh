@@ -29,6 +29,10 @@ POSTGRES_WAIT_TIMEOUT="${POSTGRES_WAIT_TIMEOUT:-120}"
 # - production migrate 中：DB 可能处于中间态，不自动启动业务服务
 # - production migrate 后：DB 已到新 schema，后置步骤失败时按新镜像尝试恢复服务
 LOCK_ACQUIRED=false
+# 停机迁移期间必须全部停掉的业务服务。任何会读写业务库的常驻服务都要列在这里——
+# 漏掉一个，它就会在 migrate 执行期间继续按旧代码读写处于中间态的 schema。
+# 收敛成单一定义，避免 stop / ps 两处各写一份而在新增服务时漏改。
+APP_SERVICES=(django worker worker-scan beat)
 APP_SERVICES_STOP_REQUESTED=false
 APP_SERVICES_TO_RESTORE=()
 REHEARSAL_IN_PROGRESS=false
@@ -229,7 +233,7 @@ stop_app_services() {
 
   log "stop app services ${reason}"
   if [[ "${APP_SERVICES_STOP_REQUESTED}" != "true" ]]; then
-    running_services="$("${COMPOSE[@]}" ps --services --filter status=running django worker beat)"
+    running_services="$("${COMPOSE[@]}" ps --services --filter status=running "${APP_SERVICES[@]}")"
     if [[ -n "${running_services}" ]]; then
       while IFS= read -r service; do
         [[ -n "${service}" ]] && APP_SERVICES_TO_RESTORE+=("${service}")
@@ -238,7 +242,7 @@ stop_app_services() {
   fi
 
   APP_SERVICES_STOP_REQUESTED=true
-  "${COMPOSE[@]}" stop django worker beat
+  "${COMPOSE[@]}" stop "${APP_SERVICES[@]}"
 }
 
 restore_pre_migration_services() {

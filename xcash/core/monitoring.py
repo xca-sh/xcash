@@ -14,12 +14,23 @@ if TYPE_CHECKING:
 
 from datetime import timedelta  # noqa: E402  运行期需要真实类型用于价格新鲜度计算
 
+from chains.models import Chain
+from chains.models import ChainType
 from chains.models import TxTaskStatus
+from config.performance import get_int_default
 from core.runtime_settings import get_crypto_price_max_age
 from core.runtime_settings import get_webhook_event_timeout
 from webhooks.models import WebhookEvent
 
 logger = structlog.get_logger()
+
+# 扫描调度停滞多久判定为异常。各链 scan_interval_seconds 最长 10s、扫描任务硬超时
+# 50s，正常态 last_scanned_at 落后不会超过 60s；取 300s 是 5 倍冗余，既不会因单次
+# RPC 抖动误报，又能把「扫描彻底停摆」的发现时间压在 5 分钟内。
+SCAN_STALL_ALERT_AFTER_SECONDS = get_int_default(
+    "SCAN_STALL_ALERT_AFTER_SECONDS",
+    300,
+)
 
 # EVM/Tron 资源水位需要多链实时 RPC，badge 等高频展示入口不能在每次页面渲染时
 # 触发。统一由异步巡检 scan_operational_risks 把计数写入缓存，展示层只读缓存。
@@ -47,6 +58,32 @@ class OperationalRiskService:
             status=WebhookEvent.Status.PENDING,
             created_at__lte=now - cls.webhook_event_timeout(),
         ).select_related("project")
+
+    @classmethod
+    def stalled_scan_chains(cls) -> list[Chain]:
+        """返回扫描调度已停滞的链。
+
+        判据只看 Chain.last_scanned_at 是否长时间不推进。该字段由 _scan_evm_chain /
+        scan_tron_chain 的 finally 分支推进，与本轮 RPC 成功与否无关——所以它停滞
+        只可能意味着「扫描任务根本没被执行」：worker 死亡或反复重启、beat 停摆、
+        队列积压、broker 不可写都会命中同一个信号，一个判据覆盖全部。
+
+        exclude 未配 API Key 的 Tron 链，是为了与 scan_active_tron_chains 的调度口径
+        逐字对齐——判据必须只覆盖「真的会被调度扫描」的链。当前 CheckConstraint
+        chain_active_requires_runtime_config 已保证 active 的 Tron 链必有非空
+        tron_api_key，故这一句实际不会命中；保留它是为了将来放宽该约束时，本探测不会
+        与调度口径分叉、把永不扫描的链报成停滞。
+        """
+        stalled_before = timezone.now() - timedelta(
+            seconds=SCAN_STALL_ALERT_AFTER_SECONDS
+        )
+        return list(
+            Chain.objects.filter(
+                active=True,
+                type__in=(ChainType.EVM, ChainType.TRON),
+                last_scanned_at__lt=stalled_before,
+            ).exclude(type=ChainType.TRON, tron_api_key="")
+        )
 
     @classmethod
     def evm_low_native_balance_alerts(cls, *, limit: int = 8) -> list[dict]:

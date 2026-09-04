@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import eth_abi
 import httpx
+from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.admin.sites import AdminSite
 from django.db import IntegrityError
 from django.test import SimpleTestCase
@@ -706,6 +707,50 @@ class TronHttpClientTests(SimpleTestCase):
     TRON_RESOURCE_SAFETY_MARGIN_BPS=10_000,
     TRON_BANDWIDTH_SAFETY_BYTES=0,
 )
+class TronHttpClientSoftTimeLimitTests(SimpleTestCase):
+    """Celery 软超时必须原样穿透 Tron HTTP 重试层。
+
+    SoftTimeLimitExceeded 继承自 Exception，落进 _request_with_retry 的通用分支后
+    会被 _is_retriable_http_error 判为不可重试、进而包成 TronClientError；而调用方
+    scan_tron_chain 对该错误只打 warning 就 return，任务"正常完成"，软超时语义被
+    彻底抹掉，TronScanner 里那条负责落盘已扫进度的中断分支也不会被触发。
+    """
+
+    def make_chain(self):
+        return SimpleNamespace(
+            tron_base_url="https://api.trongrid.io",
+            code="tron-mainnet",
+            tron_api_key="",
+        )
+
+    @patch("tron.client.time.sleep")
+    @patch("tron.client.httpx.get")
+    def test_soft_time_limit_propagates_without_retry_or_backoff(
+        self, get_mock, sleep_mock
+    ):
+        # 断言 SoftTimeLimitExceeded 本身上抛，即已证明它没有被包装成 TronClientError
+        # （后者是 RuntimeError 子类，类型不匹配会让断言失败）。
+        get_mock.side_effect = SoftTimeLimitExceeded()
+
+        with self.assertRaises(SoftTimeLimitExceeded):
+            TronHttpClient(chain=self.make_chain()).get_latest_solid_block_number()
+
+        # 只尝试一次：软超时后再发请求只会继续消耗剩余的 10s 硬超时预算。
+        self.assertEqual(get_mock.call_count, 1)
+        sleep_mock.assert_not_called()
+
+    @patch("tron.client._TRON_HTTP_RETRY_BACKOFF_SECONDS", (0, 0))
+    @patch("tron.client.httpx.get")
+    def test_ordinary_http_error_still_retries_and_wraps(self, get_mock):
+        # 反向用例：确认穿透分支没有顺带关掉普通网络故障的重试与统一包装。
+        get_mock.side_effect = httpx.ConnectError("boom")
+
+        with self.assertRaises(TronClientError):
+            TronHttpClient(chain=self.make_chain()).get_latest_solid_block_number()
+
+        self.assertEqual(get_mock.call_count, 3)
+
+
 class TronTxTaskBroadcastResourceGuardTests(TestCase):
     def setUp(self):
         self.chain = Chain.objects.create(

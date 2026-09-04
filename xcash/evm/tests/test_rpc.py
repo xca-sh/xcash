@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from unittest.mock import patch
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.test import SimpleTestCase
 from django.test import TestCase
 from web3 import Web3
@@ -388,3 +389,61 @@ class EvmScannerRpcClientTests(TestCase):
 
         self.assertEqual(block["number"], 93_739_122)
         build_poa_retry_w3_mock.assert_called_once()
+
+
+class EvmScannerSoftTimeLimitTests(SimpleTestCase):
+    """Celery 软超时必须原样穿透 RPC 重试层。
+
+    SoftTimeLimitExceeded 继承自 Exception，一旦被 _call_with_retry 当成普通 RPC
+    故障，就会走"退避 sleep → 重试 → 包成 EvmScannerRpcError"这条路；而调用方
+    _scan_evm_chain 对 EvmScannerRpcError 只打 warning 并继续跑确认调度。结果是
+    已达 40s 软限制的任务被拖到 50s 硬超时（SIGKILL），finally 里的 mark_scanned
+    与本段 chunk 游标提交都来不及执行，还连带触发 prefork 子进程重建。
+    """
+
+    def make_chain(self, *, get_logs):
+        return SimpleNamespace(
+            code="bsc-mainnet",
+            evm_log_max_block_range=10,
+            w3=SimpleNamespace(eth=SimpleNamespace(get_logs=get_logs)),
+        )
+
+    def call_get_logs(self, chain):
+        return EvmScannerRpcClient(chain=chain).get_logs(
+            from_block=100,
+            to_block=109,
+            addresses=[
+                Web3.to_checksum_address("0x00000000000000000000000000000000000000aa")
+            ],
+            topic0=Web3.to_hex(Web3.keccak(text="Transfer(address,address,uint256)")),
+            summary="获取 EVM 日志失败",
+        )
+
+    def test_soft_time_limit_propagates_without_retry_or_backoff(self):
+        # 断言 SoftTimeLimitExceeded 本身上抛，即已证明它没有被包装成
+        # EvmScannerRpcError（后者是 RuntimeError 子类，类型不匹配会让断言失败）。
+        get_logs = Mock(side_effect=SoftTimeLimitExceeded())
+        chain = self.make_chain(get_logs=get_logs)
+
+        with (
+            patch.object(rpc_module.time, "sleep") as sleep_mock,
+            self.assertRaises(SoftTimeLimitExceeded),
+        ):
+            self.call_get_logs(chain)
+
+        # 只尝试一次：软超时后再发 RPC 只会继续消耗剩余的 10s 硬超时预算。
+        self.assertEqual(get_logs.call_count, 1)
+        sleep_mock.assert_not_called()
+
+    def test_ordinary_rpc_error_still_retries_and_wraps(self):
+        # 反向用例：确认穿透分支没有顺带关掉普通 RPC 故障的重试与统一包装。
+        get_logs = Mock(side_effect=TimeoutError("read timeout"))
+        chain = self.make_chain(get_logs=get_logs)
+
+        with (
+            patch.object(rpc_module, "_EVM_RPC_RETRY_BACKOFF_SECONDS", (0, 0)),
+            self.assertRaises(EvmScannerRpcError),
+        ):
+            self.call_get_logs(chain)
+
+        self.assertEqual(get_logs.call_count, 3)

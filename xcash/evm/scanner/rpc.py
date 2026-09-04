@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 import structlog
+from celery.exceptions import SoftTimeLimitExceeded
 from web3 import Web3
 from web3.exceptions import ExtraDataLengthError
 from web3.middleware import ExtraDataToPOAMiddleware
@@ -311,6 +312,14 @@ class EvmScannerRpcClient:
         for attempt in range(max_attempts):
             try:
                 return fn()
+            except SoftTimeLimitExceeded:
+                # 软超时必须原样立即穿透。它继承自 Exception，若落进下面的通用分支，
+                # 会被当成一次普通 RPC 故障：先 sleep 退避、再重试，最后包成
+                # EvmScannerRpcError——而调用方 _scan_evm_chain 对该错误只打 warning
+                # 并继续跑确认调度。结果是已经到达 40s 软限制的任务被一路拖到 50s 硬
+                # 超时，那是 SIGKILL：任务的 finally（mark_scanned）与本段游标提交都
+                # 来不及执行，还连带触发 prefork 子进程重建。
+                raise
             except Exception as exc:  # noqa: BLE001
                 if non_retriable_predicate is not None and non_retriable_predicate(exc):
                     raise

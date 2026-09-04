@@ -35,11 +35,11 @@ TRUSTED_PROXY_IPS="172.16.0.0/12"
 # 钱包助记词加密密钥：地址派生与签名已在主系统内部闭环，密钥随主应用一起加载。
 WALLET_MNEMONIC_ENCRYPTION_KEY=$(generate_secret 64)
 
-# 主环境文件 .env：主应用容器（django/worker/beat）的 env_file + docker compose 插值 + 本地 dev 共用。
+# 主环境文件 .env：主应用容器（django/worker/worker-scan/beat）的 env_file + docker compose 插值 + 本地 dev 共用。
 # 已存在时脚本已在入口拒绝执行，避免覆盖 WALLET_MNEMONIC_ENCRYPTION_KEY 等关键密钥。
 cat > "$ENV_FILE" <<EOF
 # Xcash 主环境变量
-# 用途：主应用容器（django/worker/beat）的 env_file + docker compose 解析期插值 + 本地 dev。
+# 用途：主应用容器（django/worker/worker-scan/beat）的 env_file + docker compose 解析期插值 + 本地 dev。
 # 由 scripts/init_env.sh 生成，缺失密钥自动随机填充。请妥善保管并备份，切勿提交版本库。
 #
 # >>> WALLET_MNEMONIC_ENCRYPTION_KEY 生成后【严禁修改】 <<<

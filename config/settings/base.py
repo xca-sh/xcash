@@ -448,11 +448,14 @@ CELERY_TASK_ROUTES = {
     "tron.tasks.scan_active_tron_chains": {"queue": "scan"},
     "stress.tasks.prepare_stress": {"queue": "stress"},
     "stress.tasks.execute_stress_case": {"queue": "stress"},
+    "stress.tasks.execute_stress_case_payment": {"queue": "stress"},
     "stress.tasks.execute_deposit_case": {"queue": "stress"},
+    "stress.tasks.execute_deposit_case_payment": {"queue": "stress"},
     "stress.tasks.check_webhook_timeout": {"queue": "stress"},
     "stress.tasks.check_deposit_webhook_timeout": {"queue": "stress"},
     "stress.tasks.finalize_stress_timeout": {"queue": "stress"},
     "stress.tasks.verify_deposit_collection": {"queue": "stress"},
+    "stress.tasks.verify_invoice_collection": {"queue": "stress"},
 }
 
 # -------------------------------------------------------------------------------

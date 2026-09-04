@@ -388,7 +388,7 @@ docker compose exec -T db sh -c 'pg_dump --format=custom --no-owner --no-privile
 
 ```bash
 # 1. 停止业务服务，保留数据库
-docker compose stop django worker beat
+docker compose stop django worker worker-scan beat
 
 # 2. 把 .env 恢复到位（务必是与该 dump 同时点的那一份）
 
@@ -401,11 +401,16 @@ docker compose up -d
 
 ## 运维命令
 
-查看各服务运行与健康状态（`healthy` / `unhealthy` 来自内置健康检查）：
+查看各服务运行状态：
 
 ```bash
 docker compose ps
 ```
+
+> 只有 `db` 与 `redis` 配了容器健康检查，因为它们被 `depends_on: service_healthy` 用作启动门控。
+> 应用服务（django / worker / worker-scan / caddy）**有意不配**——Docker Compose 不会因 unhealthy
+> 做任何事（自动重启是 Swarm 的能力），状态仅供 `ps` 展示，却要为此付出常驻开销。应用存活请用
+> 下面的 HTTP 探针从容器外部监控。
 
 停止服务（移除服务容器，保留数据库数据卷）：
 
@@ -424,6 +429,46 @@ docker compose down
 ```bash
 docker compose up -d --scale worker=3
 ```
+
+链数较多、扫描吃紧时单独扩容扫描 worker：
+
+```bash
+docker compose up -d --scale worker-scan=2
+```
+
+### Celery worker 分工
+
+任务分两个队列、由两个服务分别消费，**互不抢占执行容量**：
+
+| 服务 | 队列 | 职责 |
+| --- | --- | --- |
+| `worker` | `celery` | 交易广播、确认、入账、Webhook 投递等业务任务 |
+| `worker-scan` | `scan` | 各链充值扫描（受链 RPC 延迟支配，单任务硬超时 50s） |
+
+两者共用同一镜像与 `PERFORMANCE` 档位并发值——档位描述的是**单个 worker 容器**的并发，
+加容器与调档位是两条正交的扩容路径。扫描任务与业务任务同池时，链 RPC 持续劣化会把广播、
+确认、Webhook 一起饿死，这是必须隔离的原因。
+
+### 存活监控（必须接入）
+
+容器内不做应用健康检查，**应用存活完全依赖外部 HTTP 探针**。请在 uptime 监控里配置以下两个
+端点，非 200 即告警。两者都无需鉴权，响应体只含 `status` 字段，失败细节仅写入结构化日志。
+
+| 端点 | 200 | 503 |
+| --- | --- | --- |
+| `GET /health` | 进程可服务请求，且 Postgres 可查询、Redis 可读写 | 至少一个硬依赖不可用 |
+| `GET /health/scanning` | 所有活跃链的扫描都在正常周期内 | 至少一条链的 `last_scanned_at` 超过 `SCAN_STALL_ALERT_AFTER_SECONDS`（默认 300 秒）未推进 |
+
+`/health` 的 Redis 探测是**写入后立即读回**，因此能识别"连得上但写不进"——典型如 maxmemory
+打满且无可淘汰键，此时 `redis-cli ping` 仍然正常。
+
+`/health/scanning` 由 django 进程回答，与被监控的 Celery worker 属于不同故障域：worker 死亡、
+beat 停摆、队列积压、broker 不可写都会命中同一个信号。它有意不参与任何容器的 healthcheck——
+扫描停摆时 django 本身是健康的，混入会导致误杀。
+
+> **已知盲区**：这两个探针覆盖不到业务 worker（`celery` 队列）单独死亡的情况——此时广播与确认
+> 停止，但两个端点仍返回 200。若要覆盖，需要再加一条基于业务事实的判据（如 QUEUED 状态的
+> TxTask 长时间未被广播）。
 
 ## 技术栈
 

@@ -1,8 +1,12 @@
-"""容器存活探测端点。
+"""存活探测端点。
 
-只回答一个问题：本进程现在还能不能正常服务请求——即它的两个硬依赖
+/health 只回答一个问题：本进程现在还能不能正常服务请求——即它的两个硬依赖
 （Postgres、Redis）是否可用。业务层面的异常巡检是 core/monitoring.py 的职责，
-不在这里做：健康探测被高频调用（默认 30s 一次），必须恒定廉价。
+判据一律定义在那里，本模块只提供 HTTP 入口：健康探测被高频调用（默认 30s 一次），
+必须恒定廉价。
+
+/health/scanning 是唯一的例外形态：它探测的是【别的进程】（Celery worker）还在不在
+干活。这类探测无法交给 Celery 巡检任务——巡检和故障对象会是同一个进程，一起死。
 
 安全约束：该端点无鉴权（容器内探测无法携带商户签名），因此响应体只允许出现
 status 字段。绝不返回版本号、依赖拓扑、异常堆栈等信息——那会把内部结构白送给
@@ -17,6 +21,9 @@ from django.db import connection
 from django.db import transaction
 from django.http import HttpRequest
 from django.http import JsonResponse
+
+from core.monitoring import SCAN_STALL_ALERT_AFTER_SECONDS
+from core.monitoring import OperationalRiskService
 
 logger = structlog.get_logger()
 
@@ -60,5 +67,31 @@ def health_view(request: HttpRequest) -> JsonResponse:
     if unhealthy:
         logger.warning("health_probe_unhealthy", components=unhealthy)
         return JsonResponse({"status": "unhealthy"}, status=503)
+
+    return JsonResponse({"status": "ok"})
+
+
+@transaction.non_atomic_requests
+def scanning_health_view(request: HttpRequest) -> JsonResponse:
+    """扫描存活探测：503 表示至少一条活跃链的扫描调度已停滞。
+
+    有意与 /health 分开，不能合并：
+    - /health 是 django 容器自己的 healthcheck。扫描停摆时 django 进程本身完全
+      健康，把它并进去会让 django 被误判为不健康。
+    - 本端点必须由【django 进程】而非 Celery 任务回答。既有的 scan_operational_risks
+      巡检跑在 worker 里，worker 一死它跟着一起死，巡检和故障对象是同一个进程，
+      扫描停摆时不会有任何人被告知。本端点给外部监控（uptime 探针）拉取，
+      故障域与被监控对象天然分离。
+
+    安全约束同 /health：无鉴权，响应体只出现 status，停滞链的细节只写结构化日志。
+    """
+    stalled = OperationalRiskService.stalled_scan_chains()
+    if stalled:
+        logger.warning(
+            "scanning_probe_stalled",
+            stall_after_seconds=SCAN_STALL_ALERT_AFTER_SECONDS,
+            chains=[chain.code for chain in stalled],
+        )
+        return JsonResponse({"status": "stalled"}, status=503)
 
     return JsonResponse({"status": "ok"})

@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 import structlog
+from celery.exceptions import SoftTimeLimitExceeded
 from django.db import Error as DatabaseLayerError
 from django.utils import timezone
 from web3 import Web3
@@ -374,6 +375,12 @@ class EvmObservedTransferProcessor:
     ) -> None:
         try:
             TransferService.create_observed_transfer(observed=observed)
+        except SoftTimeLimitExceeded:
+            # 软超时继承自 Exception，被下面的逐事件容错分支吞掉会让扫描继续遍历剩余
+            # 事件，一路跑到硬超时被 SIGKILL——那条路径连 chunk 游标提交都来不及执行，
+            # 本段已扫区块的进度会彻底丢失。上抛后由 scan_chain 的分段提交保住已完成
+            # 的 chunk。与 Tron 侧 TronScanner 的同名分支保持一致。
+            raise
         except DatabaseLayerError:
             # 数据库层异常多为暂时性故障（死锁被牺牲、连接抖动、超时），必须上抛，
             # 让本轮扫描中断、游标不推进，由下一轮重扫幂等恢复；

@@ -217,15 +217,29 @@ def poll_evm_chain_tx_tasks(chain_pk: int) -> None:
 
 
 @shared_task(ignore_result=True)
+@singleton_task(timeout=64)
 def poll_active_evm_chains() -> None:
-    """按固定周期为每条活跃 EVM 链派发一次在途交易终局轮询。"""
+    """按固定周期为每条活跃 EVM 链派发一次在途交易终局轮询。
+
+    互斥锁的作用同 scan_active_evm_chains：业务 worker 可以横向扩容
+    （docker compose up -d --scale worker=N），多个实例并发跑这段巡检时，同一条链会被
+    各自投递一次 poll_evm_chain_tx_tasks。重复消息不会重复执行（后者自带 per-chain 锁
+    会跳过），但会白占 celery 队列，放大 broker 的内存压力。
+    """
     for chain in Chain.objects.filter(active=True, type=ChainType.EVM):
         poll_evm_chain_tx_tasks.delay(chain.pk)
 
 
 @shared_task(ignore_result=True)
+@singleton_task(timeout=64)
 def scan_active_evm_chains() -> None:
-    """每 2 秒巡检活跃 EVM 链，仅调度到期（now - last_scanned_at ≥ 扫描周期）的链。"""
+    """每 2 秒巡检活跃 EVM 链，仅调度到期（now - last_scanned_at ≥ 扫描周期）的链。
+
+    互斥锁与 tron.tasks.scan_active_tron_chains 对称：scan 队列可以横向扩容
+    （docker compose up -d --scale worker-scan=N），多个实例并发跑这段巡检时，
+    同一条到期链会被各自投递一次 _scan_evm_chain。重复消息不会重复执行（后者自带
+    per-chain 锁会跳过），但会白占 scan 队列，放大 broker 的内存压力。
+    """
     for chain in Chain.objects.filter(active=True, type=ChainType.EVM):
         if chain.is_due_for_scan:
             _scan_evm_chain.delay(chain.pk)
