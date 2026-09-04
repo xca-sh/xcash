@@ -10,6 +10,7 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import TxTaskStatus
 from chains.tasks import dispatch_block_confirmation_checks_if_needed
+from common.decorators import PendingOnceTask
 from common.decorators import singleton_task
 from common.time import ago
 from evm.models import EvmTxTask
@@ -72,7 +73,12 @@ def _chain_dispatch_next(completed_task: EvmTxTask) -> None:
         _broadcast_evm_task.delay(next_task.pk)
 
 
-@shared_task(ignore_result=True, soft_time_limit=55, time_limit=60)
+@shared_task(
+    base=PendingOnceTask,
+    ignore_result=True,
+    soft_time_limit=55,
+    time_limit=60,
+)
 @singleton_task(timeout=64)
 @db_transaction.atomic
 def dispatch_evm_tx_tasks() -> None:
@@ -216,7 +222,7 @@ def poll_evm_chain_tx_tasks(chain_pk: int) -> None:
     EvmTaskPoller.poll_chain(chain=chain)
 
 
-@shared_task(ignore_result=True)
+@shared_task(base=PendingOnceTask, ignore_result=True)
 @singleton_task(timeout=64)
 def poll_active_evm_chains() -> None:
     """按固定周期为每条活跃 EVM 链派发一次在途交易终局轮询。
@@ -230,7 +236,7 @@ def poll_active_evm_chains() -> None:
         poll_evm_chain_tx_tasks.delay(chain.pk)
 
 
-@shared_task(ignore_result=True)
+@shared_task(base=PendingOnceTask, ignore_result=True)
 @singleton_task(timeout=64)
 def scan_active_evm_chains() -> None:
     """每 2 秒巡检活跃 EVM 链，仅调度到期（now - last_scanned_at ≥ 扫描周期）的链。
