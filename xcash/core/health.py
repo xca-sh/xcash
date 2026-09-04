@@ -73,7 +73,14 @@ def health_view(request: HttpRequest) -> JsonResponse:
 
 @transaction.non_atomic_requests
 def scanning_health_view(request: HttpRequest) -> JsonResponse:
-    """扫描存活探测：503 表示至少一条活跃链的扫描调度已停滞。
+    """扫描存活探测：503 表示至少一条活跃链的扫描不健康。
+
+    两条判据缺一不可，覆盖两种彼此独立的失效：
+    - stalled：扫描任务【根本没被执行】（worker 死亡、beat 停摆、队列积压、
+      broker 不可写）。
+    - failing：扫描任务【在跑但一直失败】（RPC 凭据失效、节点持续报错、每轮撞
+      软超时）。这类故障下 Chain.last_scanned_at 仍被 finally 分支照常推进，
+      只看 stalled 会一路报健康，而实际游标和入账完全不动。
 
     有意与 /health 分开，不能合并：
     - /health 是 django 容器自己的 healthcheck。扫描停摆时 django 进程本身完全
@@ -83,14 +90,16 @@ def scanning_health_view(request: HttpRequest) -> JsonResponse:
       扫描停摆时不会有任何人被告知。本端点给外部监控（uptime 探针）拉取，
       故障域与被监控对象天然分离。
 
-    安全约束同 /health：无鉴权，响应体只出现 status，停滞链的细节只写结构化日志。
+    安全约束同 /health：无鉴权，响应体只出现 status，问题链的细节只写结构化日志。
     """
     stalled = OperationalRiskService.stalled_scan_chains()
-    if stalled:
+    failing = OperationalRiskService.failing_scan_chains()
+    if stalled or failing:
         logger.warning(
-            "scanning_probe_stalled",
+            "scanning_probe_unhealthy",
             stall_after_seconds=SCAN_STALL_ALERT_AFTER_SECONDS,
-            chains=[chain.code for chain in stalled],
+            stalled_chains=[chain.code for chain in stalled],
+            failing_chains=[chain.code for chain in failing],
         )
         return JsonResponse({"status": "stalled"}, status=503)
 

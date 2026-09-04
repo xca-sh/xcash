@@ -61,11 +61,19 @@ services:
     logging: *default-logging
     # maxmemory 给缓存 + broker 共用实例设上限，避免无限增长打爆主机。
     #
-    # 淘汰策略必须是 noeviction：本实例里带 TTL、因而可被 volatile-lru 淘汰的键
-    # 只有 singleton_task 的互斥锁与限流键，总量 KB 级——淘汰它们在 broker 队列
-    # 面前腾不出任何有意义的空间，却会让金融任务的互斥与限流【静默失效】，系统
-    # 看起来还在工作而保护已经没了。noeviction 下同样的内存压力表现为 cache 写入
-    # 直接抛错、任务显式失败、日志可见。金融系统里显式失败优于静默失效。
+    # volatile-lru 在本实例是【泄压阀】，不要改成 noeviction：可淘汰的 TTL 键不止
+    # singleton_task 的锁与限流键，还包括终态账单详情（1h）、SaaS 权限（1h）、AML
+    # 结果等一批可重建的业务缓存，量级足以在内存吃紧时腾出有意义的空间。换成
+    # noeviction 后没有任何键可淘汰，到顶即全实例拒写：Celery 无法发布任务、缓存写
+    # 直接抛错、依赖 nonce 写入的签名 API 拒绝请求，而 redis-cli ping 仍报 healthy。
+    #
+    # 代价是内存压力下 singleton_task 的锁可能被淘汰，互斥退化。这可以接受：入账唯一
+    # 入口 TransferService.create_observed_transfer 用 select_for_update 按
+    # (chain, hash, event_index) 查重，锁失效只导致重复执行，不会重复入账。
+    # 局部浪费优于全实例拒写。
+    #
+    # 想两者兼得只能把 broker 与缓存拆成物理隔离的两个 Redis 实例，各配各的淘汰策略
+    # （Redis 的 maxmemory 与淘汰策略是实例级的，无法按逻辑库区分）。
     command:
       - redis-server
       - --appendonly
@@ -73,7 +81,7 @@ services:
       - --maxmemory
       - "256mb"
       - --maxmemory-policy
-      - noeviction
+      - volatile-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 15s

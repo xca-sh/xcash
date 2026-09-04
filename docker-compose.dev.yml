@@ -25,9 +25,9 @@ services:
     image: redis:8.2.1
     container_name: xcash_dev_redis
     restart: unless-stopped
-    # 与生产一致：maxmemory 上限 + noeviction。可被淘汰的只有 singleton_task 的互斥
-    # 锁与限流键（KB 级），淘汰它们腾不出空间却会让互斥静默失效；noeviction 下内存
-    # 压力表现为写入直接报错，本地也能复现生产的失败形态。
+    # 与生产一致：maxmemory 上限 + volatile-lru（只淘汰带 TTL 的可重建缓存，broker
+    # 任务键与 timeout=None 的配置缓存豁免），让本地也能复现生产的淘汰行为。
+    # 改动前请先读生产 compose 里关于该策略的说明。
     command:
       - redis-server
       - --appendonly
@@ -35,7 +35,7 @@ services:
       - --maxmemory
       - "256mb"
       - --maxmemory-policy
-      - noeviction
+      - volatile-lru
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:

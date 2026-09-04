@@ -86,6 +86,46 @@ class OperationalRiskService:
         )
 
     @classmethod
+    def failing_scan_chains(cls) -> list[Chain]:
+        """返回扫描任务在跑、但当前处于失败状态的链。
+
+        与 stalled_scan_chains 互补，二者缺一不可：
+        - stalled 看「任务有没有被执行」——Chain.last_scanned_at 是否推进。
+        - failing 看「执行了但一直失败」。这条必须单独判，因为 last_scanned_at 由
+          扫描任务的 finally 分支无条件推进、与本轮 RPC 成败无关：RPC 凭据失效、
+          节点持续 5xx、每轮都撞软超时时，游标和入账完全不动，而 last_scanned_at
+          照常刷新，只看 stalled 会一路报健康。
+
+        判据取游标的 last_error_at 是否非空。这个字段语义干净：任何一轮成功扫描
+        （_advance_cursor）或确认无新块（_mark_cursor_idle）都会把它连同 last_error
+        一起清空，只有失败才写入，EVM 与 Tron 两侧对称。因此「非空」精确等价于
+        「最近一轮扫描是坏的」，不需要额外的时间窗口，也不需要新增字段。
+
+        代价是单次 RPC 抖动也会让本判据成立。这交给外部监控的「连续 N 次失败才
+        告警」去吸收——探针只负责如实反映当前状态，不做去抖。
+        """
+        from tron.models import TronWatchCursor
+
+        from evm.models import EvmScanCursor
+
+        chain_ids = set(
+            EvmScanCursor.objects.filter(
+                enabled=True,
+                last_error_at__isnull=False,
+                chain__active=True,
+            ).values_list("chain_id", flat=True)
+        ) | set(
+            TronWatchCursor.objects.filter(
+                enabled=True,
+                last_error_at__isnull=False,
+                chain__active=True,
+            ).values_list("chain_id", flat=True)
+        )
+        if not chain_ids:
+            return []
+        return list(Chain.objects.filter(pk__in=chain_ids))
+
+    @classmethod
     def evm_low_native_balance_alerts(cls, *, limit: int = 8) -> list[dict]:
         """按在途主动任务估算 EVM sender 需要的原生币余额。"""
         from evm.models import EvmTxTask

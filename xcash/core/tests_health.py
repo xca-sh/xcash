@@ -12,6 +12,7 @@ from chains.models import Chain
 from chains.tests_fixtures import make_evm_chain
 from chains.tests_fixtures import make_tron_chain
 from core.monitoring import SCAN_STALL_ALERT_AFTER_SECONDS
+from evm.models import EvmScanCursor
 
 
 class HealthEndpointTests(TestCase):
@@ -63,6 +64,11 @@ class ScanningHealthEndpointTests(TestCase):
 
     Celery worker 死亡时，跑在它内部的巡检任务会一起停摆，无法自我上报。该端点由
     django 进程回答，故障域与被监控对象分离，使扫描停摆能在一个探测周期内被发现。
+
+    两类失效都必须锁死，它们的信号来源不同：
+    - 调度停滞：Chain.last_scanned_at 不再推进。
+    - 持续失败：扫描在跑但每轮都报错。此时 last_scanned_at 照常推进，只能靠游标的
+      last_error_at 识别；漏掉这条会让 RPC 故障期间探针一路返回 200。
     """
 
     def stall(self, chain):
@@ -107,6 +113,57 @@ class ScanningHealthEndpointTests(TestCase):
     def test_inactive_chain_never_triggers_alert(self):
         # 停用的链本就不参与扫描调度，其 last_scanned_at 会一直停在停用时刻。
         self.stall(make_evm_chain(code=ChainCode.Anvil, active=False))
+
+        self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 200)
+
+    def test_returns_503_when_scan_runs_but_keeps_failing(self):
+        """扫描一直在跑却一直失败时必须报警。
+
+        这是最容易漏掉的一类：Chain.last_scanned_at 由扫描任务的 finally 分支
+        无条件推进、与 RPC 成败无关，所以只看「调度是否停滞」时该场景会一路
+        返回 200，而游标和入账其实完全不动。
+        """
+        chain = make_evm_chain(code=ChainCode.Anvil)
+        EvmScanCursor.objects.create(
+            chain=chain,
+            enabled=True,
+            last_error="rpc down",
+            last_error_at=timezone.now(),
+        )
+
+        response = self.client.get(reverse("health-scanning"))
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"status": "stalled"})
+
+    def test_cleared_cursor_error_returns_to_ok(self):
+        # 成功扫描会清空 last_error_at（_advance_cursor / _mark_cursor_idle），
+        # 探针必须随之恢复 200，否则一次抖动就会永久红着。
+        chain = make_evm_chain(code=ChainCode.Anvil)
+        cursor = EvmScanCursor.objects.create(
+            chain=chain,
+            enabled=True,
+            last_error="rpc down",
+            last_error_at=timezone.now(),
+        )
+
+        self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 503)
+
+        EvmScanCursor.objects.filter(pk=cursor.pk).update(
+            last_error="", last_error_at=None
+        )
+
+        self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 200)
+
+    def test_disabled_cursor_error_never_triggers_alert(self):
+        # 停用的游标不参与扫描，其 last_error_at 会停在停用前的那次失败上。
+        chain = make_evm_chain(code=ChainCode.Anvil)
+        EvmScanCursor.objects.create(
+            chain=chain,
+            enabled=False,
+            last_error="rpc down",
+            last_error_at=timezone.now(),
+        )
 
         self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 200)
 

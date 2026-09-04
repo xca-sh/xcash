@@ -457,14 +457,18 @@ docker compose up -d --scale worker-scan=2
 | 端点 | 200 | 503 |
 | --- | --- | --- |
 | `GET /health` | 进程可服务请求，且 Postgres 可查询、Redis 可读写 | 至少一个硬依赖不可用 |
-| `GET /health/scanning` | 所有活跃链的扫描都在正常周期内 | 至少一条链的 `last_scanned_at` 超过 `SCAN_STALL_ALERT_AFTER_SECONDS`（默认 300 秒）未推进 |
+| `GET /health/scanning` | 所有活跃链的扫描都在正常周期内推进，且没有链处于失败状态 | 至少一条链**调度停滞**（`last_scanned_at` 超过 `SCAN_STALL_ALERT_AFTER_SECONDS`，默认 300 秒未推进）或**持续失败**（扫描游标的 `last_error_at` 非空） |
 
 `/health` 的 Redis 探测是**写入后立即读回**，因此能识别"连得上但写不进"——典型如 maxmemory
 打满且无可淘汰键，此时 `redis-cli ping` 仍然正常。
 
 `/health/scanning` 由 django 进程回答，与被监控的 Celery worker 属于不同故障域：worker 死亡、
-beat 停摆、队列积压、broker 不可写都会命中同一个信号。它有意不参与任何容器的 healthcheck——
-扫描停摆时 django 本身是健康的，混入会导致误杀。
+beat 停摆、队列积压、broker 不可写都会命中「调度停滞」，RPC 凭据失效或节点持续报错则命中
+「持续失败」。它有意不参与任何容器的 healthcheck——扫描停摆时 django 本身是健康的，混入会
+导致误杀。
+
+「持续失败」判据对单次 RPC 抖动敏感（一轮失败即成立，下一轮成功自动恢复）。**请在监控侧配置
+「连续 N 次失败才告警」**——探针只如实反映当前状态，不做去抖。
 
 > **已知盲区**：这两个探针覆盖不到业务 worker（`celery` 队列）单独死亡的情况——此时广播与确认
 > 停止，但两个端点仍返回 200。若要覆盖，需要再加一条基于业务事实的判据（如 QUEUED 状态的
