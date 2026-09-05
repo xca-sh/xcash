@@ -27,9 +27,7 @@ x-logging: &default-logging
 # 常驻开销（celery inspect ping 每次需拉起完整 Django + Celery 进程，实测约 69MB RSS）。
 # 应用存活由容器外部的 HTTP 探针监测：GET /health、GET /health/scanning。
 #
-# django / worker / beat 三者共享的部分。抽成独立扩展字段而非挂在 django 服务上，
-# 是为了让「哪个服务有 container_name」由各服务自己声明，
-# 不必先继承再用 !reset 取消（那种写法既依赖较新的 Compose 版本，也难读）。
+# django / worker / worker-scan / beat 共享配置，容器名由各服务单独声明。
 x-django-base: &django-base
   build:
     context: .
@@ -141,9 +139,7 @@ services:
   # Webhook 这些业务任务会被一起饿死。
   worker:
     <<: *django-base
-    # 【有意不设 container_name】：固定容器名会让 `docker compose up -d --scale worker=N`
-    # 因名字冲突直接失败。worker 是本项目唯一需要横向扩容的无状态服务
-    # （PERFORMANCE=high 下单容器 8 并发未必够），必须保留 --scale 能力。
+    container_name: xcash_worker
     environment:
       REMAP_SIGTERM: SIGQUIT
       CELERY_WORKER_QUEUES: celery
@@ -151,10 +147,11 @@ services:
     command: /start-worker
 
   # 扫描 worker：只消费 scan 队列（CELERY_TASK_ROUTES 已把扫描任务路由到该队列）。
-  # 同样不设 container_name，保留 --scale worker-scan=N 的能力；并发沿用 PERFORMANCE
-  # 档位值，档位描述的是【单个 worker 容器】的并发，加容器与调档位是两条正交的路。
+  # 两组 worker 当前各运行一个容器，并发沿用 PERFORMANCE 档位值。
+  # 将来需要 --scale 横向扩容时，先移除对应 worker 的 container_name。
   worker-scan:
     <<: *django-base
+    container_name: xcash_worker_scan
     environment:
       REMAP_SIGTERM: SIGQUIT
       CELERY_WORKER_QUEUES: scan
@@ -165,8 +162,7 @@ services:
     <<: *django-base
     # 【container_name 必须保留】：它同时起到「禁止 --scale」的作用，不要为了扩容删掉。
     # beat 是全部定时任务的唯一投递源，跑 N 个实例会让每个周期任务被投递 N 遍，队列
-    # 随即按倍数积压。worker / worker-scan 则相反：无状态、靠 Redis BRPOP 天然分流，
-    # 可安全横向扩容。
+    # 随即按倍数积压。
     container_name: xcash_beat
     # beat 有意不配 healthcheck：Celery 没有给 beat 提供存活查询接口（inspect ping
     # 只对 worker 有效），任何探测都只能验证「进程在」，与 restart 策略的保障重复。

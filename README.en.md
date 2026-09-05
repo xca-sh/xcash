@@ -413,17 +413,22 @@ Stop the services (containers are removed, database volumes are kept):
 docker compose down
 ```
 
-Upgrade to the latest version (pulls the latest `main` and runs the full production upgrade flow):
+Upgrade to the latest version (make sure you are on `main`, then pull the code manually and run the production upgrade):
 
 ```bash
+git pull
 ./scripts/upgrade.sh
 ```
 
-Scale out Celery workers (horizontal scaling beyond the `PERFORMANCE` tiers, as volume grows):
+The script deploys the current working tree without pulling code or switching branches, and requires a clean working tree by default.
+It checks the database for pending migrations to decide whether a rehearsal is needed.
+After building and any required rehearsal, it stops the old Beat, Django, and both workers.
+Once production migrations and initialization finish, it starts Django, the workers, and Caddy before starting Beat.
+This service switch also runs when there are no pending migrations.
 
-```bash
-docker compose up -d --scale worker=3
-```
+Each Celery worker service currently runs one container, named `xcash_worker` and `xcash_worker_scan`.
+Adjust concurrency through the `PERFORMANCE` tier. To use `--scale` in the future, first remove
+`container_name` from the corresponding worker service. Beat must remain a single instance.
 
 ## Tech stack
 

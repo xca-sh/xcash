@@ -22,10 +22,10 @@ with Path(os.environ["COMMAND_LOG"]).open("a") as output:
     output.write(json.dumps([tool, *args]) + "\n")
 
 if tool == "git":
-    if args[:2] == ["rev-parse", "HEAD"]:
-        print("test-head")
-    if args[:2] == ["diff", "--quiet"]:
-        sys.exit(0 if os.environ["MIGRATIONS_CHANGED"] == "false" else 1)
+    if args != ["status", "--porcelain"]:
+        sys.exit("upgrade must not update code or rely on Git history")
+    if os.environ.get("DIRTY_WORKTREE") == "true":
+        print(" M local-change.py")
     sys.exit(0)
 if tool == "flock":
     sys.exit(0)
@@ -49,9 +49,18 @@ elif command == "run":
     operation = args[args.index("manage.py") + 1:]
     rehearsal = "POSTGRES_HOST=migration-rehearsal-db" in args
     if operation == ["migrate", "--plan"]:
-        print("chains.0001_initial")
-        if not rehearsal and failure == "production_plan":
-            sys.exit(23)
+        if os.environ["PENDING_MIGRATIONS"] == "true":
+            print("chains.0001_initial")
+        else:
+            print("Planned operations:")
+            print("  No planned migration operations.")
+        if not rehearsal:
+            stopped = any(
+                '"stop", "beat"' in line
+                for line in Path(os.environ["COMMAND_LOG"]).read_text().splitlines()
+            )
+            if failure == ("production_plan" if stopped else "pending_plan"):
+                sys.exit(23)
     elif operation == ["migrate", "--noinput"]:
         if failure == ("rehearsal" if rehearsal else "production_migrate"):
             sys.exit(23)
@@ -73,7 +82,7 @@ def run_upgrade(tmp_path):
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
     log_path = tmp_path / "commands.jsonl"
 
-    def run(*, migrations=False, quiesced=False, failure="", running=None):
+    def run(*, migrations=False, quiesced=False, failure="", running=None, dirty=False):
         env = {
             **os.environ,
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -82,10 +91,10 @@ def run_upgrade(tmp_path):
             "COMPOSE_FILE": "docker-compose.yml",
             "BACKUP_DIR": str(tmp_path / "backups"),
             "UPGRADE_LOCK_FILE": str(tmp_path / "upgrade.lock"),
-            "SKIP_GIT_PULL": "false",
             "ALLOW_DIRTY_UPGRADE": "false",
+            "DIRTY_WORKTREE": str(dirty).lower(),
             "STOP_BEFORE_REHEARSAL": str(quiesced).lower(),
-            "MIGRATIONS_CHANGED": str(migrations).lower(),
+            "PENDING_MIGRATIONS": str(migrations).lower(),
             "FAIL_POINT": failure,
             "RUNNING_SERVICES": running or "django\nworker\nworker-scan\nbeat",
         }
@@ -134,7 +143,11 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
     build = command_index(commands, ["build"])
     stop_beat = commands.index(["stop", "beat"])
     stop_runtime = commands.index(["stop", "django", "worker", "worker-scan"])
-    migrate = command_index(commands, ["run"], contains="POSTGRES_HOST=db")
+    migrate = next(
+        index
+        for index, command in enumerate(commands)
+        if "POSTGRES_HOST=db" in command and command[-2:] == ["migrate", "--noinput"]
+    )
     start_runtime = command_index(commands, ["up"], contains="worker")
     start_beat = commands.index(["up", "-d", "--no-deps", "beat"])
     assert build < stop_beat < stop_runtime < migrate < start_runtime < start_beat
@@ -155,6 +168,20 @@ def test_build_failure_leaves_existing_services_running(run_upgrade):
     result, commands = run_upgrade(failure="build")
     assert result.returncode != 0
     assert not any(c[0] in ("stop", "start") for c in commands)
+
+
+def test_pending_plan_failure_aborts_before_stopping_services(run_upgrade):
+    result, commands = run_upgrade(failure="pending_plan")
+    assert result.returncode != 0
+    assert not any(c[0] in ("stop", "start") for c in commands)
+    assert not any(c[-2:] == ["migrate", "--noinput"] for c in commands)
+
+
+def test_dirty_worktree_aborts_before_docker_commands(run_upgrade):
+    result, commands = run_upgrade(dirty=True)
+    assert result.returncode != 0
+    assert "git worktree is dirty" in result.stderr
+    assert commands == []
 
 
 @pytest.mark.parametrize("failure", ["production_plan", "stop_runtime"])

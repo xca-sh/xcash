@@ -10,7 +10,6 @@ umask 077
 
 ENV_FILE="${ENV_FILE:-.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
-SKIP_GIT_PULL="${SKIP_GIT_PULL:-false}"
 # 默认在线 dump（不停机生成演练数据，缩短停机窗口、提升升级体验）：dump 期间
 # django/worker/beat 继续服务，仅在 production migrate 前才停机。
 # 代价：dump 时刻到停机时刻之间的新写入不在演练样本内。要求"演练样本即上线前最后
@@ -140,23 +139,6 @@ ensure_git_clean() {
   if [[ -n "$(git status --porcelain)" ]]; then
     die "git worktree is dirty; commit or stash changes before production upgrade"
   fi
-}
-
-pull_code() {
-  if [[ "${SKIP_GIT_PULL}" == "true" ]]; then
-    log "skip git pull; using current working tree"
-    return
-  fi
-
-  ensure_git_clean
-  # 发布渠道锁定 main 最新。显式 checkout 是收敛动作：若有人在服务器上切到其他
-  # 分支排查问题后忘记切回，bare git pull 会把那个分支当作"最新版"部署上线。
-  # 将来开始按 release tag 发版时，再引入版本参数（注意 detached HEAD 下需跳过 pull）。
-  log "fetch and fast-forward main"
-  git fetch --prune
-  git checkout main
-  git pull --ff-only
-  ensure_git_clean
 }
 
 wait_for_postgres() {
@@ -305,9 +287,9 @@ print_rehearsal_failure_help() {
 
 trap cleanup EXIT
 
-# 不接受任何位置参数：发布渠道已锁定 main 最新（见 pull_code）。显式拒绝而非
-# 静默忽略，防止有人习惯性传 "./upgrade.sh v1.2.0" 却被实际升级到 main 而不自知。
-[[ $# -eq 0 ]] || die "unexpected argument: $1 — this script always upgrades to latest main (set SKIP_GIT_PULL=true to deploy the current tree)"
+# 版本由用户在运行前选择并拉取；脚本只部署当前工作区，不切分支或更新代码。
+# 拒绝版本参数，避免用户误以为脚本会自动切换到指定版本。
+[[ $# -eq 0 ]] || die "unexpected argument: $1 — this script deploys the current working tree; update code manually before running it"
 
 require_command docker
 require_command git
@@ -322,6 +304,8 @@ source "${ENV_FILE}"
 set +a
 
 [[ -n "${POSTGRES_PASSWORD:-}" ]] || die "POSTGRES_PASSWORD is required"
+ensure_git_clean
+log "deploy current working tree; update code manually with git pull before running this script"
 
 # 互斥锁：避免两人同时执行 upgrade.sh 造成 dump/restore/migrate 交叉污染。
 # 文件描述符 9 在脚本退出时自动释放，无需在 cleanup 中显式处理。
@@ -341,16 +325,6 @@ mkdir -p "${BACKUP_DIR}"
 BACKUP_DIR="$(cd "${BACKUP_DIR}" && pwd)"
 MAIN_DUMP="${BACKUP_DIR}/xcash-pre-upgrade-$(date +%Y%m%d-%H%M%S).dump"
 
-PRE_UPGRADE_HEAD="$(git rev-parse HEAD)"
-pull_code
-POST_UPGRADE_HEAD="$(git rev-parse HEAD)"
-if [[ "${SKIP_GIT_PULL}" != "true" ]] && git diff --quiet "${PRE_UPGRADE_HEAD}" "${POST_UPGRADE_HEAD}" -- \
-  ':(glob)**/migrations/*.py' \
-  ':(exclude,glob)**/migrations/__init__.py'; then
-  RUN_MIGRATION_REHEARSAL=false
-  log "no migration file changes detected; skip migration rehearsal"
-fi
-
 log "build production images"
 "${COMPOSE[@]}" build
 
@@ -362,6 +336,16 @@ log "ensure database and cache dependencies are running"
 # up -d --remove-orphans 应用——那时真实数据已完成演练并进入受控升级路径。
 "${COMPOSE[@]}" up -d --no-recreate db redis
 wait_for_postgres db
+
+# 代码已由用户提前拉取，无法用本次运行前后的 Git 差异判断迁移。
+# 用新镜像只读查询生产库的待执行计划；查询失败必须中止，不能当作无需迁移。
+log "check pending production migrations"
+run_main_manage db migrate --plan 2>&1 \
+  | tee "${TMP_DIR}/main-pending-plan.log" >"${TMP_DIR}/main-pending.plan"
+if [[ -z "$(extract_plan "${TMP_DIR}/main-pending.plan")" ]]; then
+  RUN_MIGRATION_REHEARSAL=false
+  log "no pending migrations; skip migration rehearsal"
+fi
 
 if [[ "${RUN_MIGRATION_REHEARSAL}" == "true" ]]; then
 if [[ "${STOP_BEFORE_REHEARSAL}" == "true" ]]; then
@@ -401,7 +385,7 @@ delete_rehearsal_dump
 fi
 
 if [[ "${APP_SERVICES_STOP_REQUESTED}" != "true" ]]; then
-  # 没有迁移文件只跳过演练，不能跳过版本切换屏障；队列路由等纯代码变更也
+  # 没有待执行迁移只跳过演练，不能跳过版本切换屏障；队列路由等纯代码变更也
   # 需要先停止旧进程。构建和在线演练完成后才停服务，保持停机窗口尽可能短。
   stop_app_services "before production migration"
 fi

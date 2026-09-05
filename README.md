@@ -418,27 +418,22 @@ docker compose ps
 docker compose down
 ```
 
-升级到最新版（拉取 `main` 分支最新版并执行完整生产升级流程）：
+升级到最新版（确认当前位于 `main` 分支，手动拉取代码后执行生产升级）：
 
 ```bash
+git pull
 ./scripts/upgrade.sh
 ```
 
-脚本默认在构建及必要的迁移演练完成后，自动停止旧 Beat，再停止 Django 和两组 worker；
+脚本只部署当前工作区，不执行 Git 拉取或分支切换；默认要求工作区干净。
+脚本根据数据库实际待执行的迁移决定是否演练，在构建及必要的演练完成后，
+自动停止旧 Beat，再停止 Django 和两组 worker；
 完成生产迁移及初始化后，先启动新版 Django、worker 和 Caddy，再启动 Beat。
-没有迁移文件变化时也执行这个切换顺序，使用者无需额外手动停止服务。
+没有待执行迁移时也执行这个切换顺序，使用者无需额外手动停止服务。
 
-扩容 Celery worker（业务量增长时，`PERFORMANCE` 档位之外的横向扩容手段）：
-
-```bash
-docker compose up -d --scale worker=3
-```
-
-链数较多、扫描吃紧时单独扩容扫描 worker：
-
-```bash
-docker compose up -d --scale worker-scan=2
-```
+两组 Celery worker 当前各运行一个容器，固定容器名为 `xcash_worker` 和
+`xcash_worker_scan`，通过 `PERFORMANCE` 档位调整并发。
+将来需要 `--scale` 横向扩容时，先移除对应 worker 服务的 `container_name`；Beat 必须保持单实例。
 
 ### Celery worker 分工
 
@@ -449,8 +444,8 @@ docker compose up -d --scale worker-scan=2
 | `worker` | `celery` 及该组的周期专属队列 | 交易广播、确认、入账、Webhook 投递等业务任务 |
 | `worker-scan` | `scan` 及该组的周期专属队列 | 各链充值扫描（受链 RPC 延迟支配，单任务硬超时 50s） |
 
-两者共用同一镜像与 `PERFORMANCE` 档位并发值——档位描述的是**单个 worker 容器**的并发，
-加容器与调档位是两条正交的扩容路径。扫描任务与业务任务同池时，链 RPC 持续劣化会把广播、
+两者共用同一镜像与 `PERFORMANCE` 档位并发值——档位描述的是**单个 worker 容器**的并发。
+扫描任务与业务任务同池时，链 RPC 持续劣化会把广播、
 确认、Webhook 一起饿死，这是必须隔离的原因。
 
 周期入口的队列合并由 `common.redis_transport.Transport` 完成：每个入口使用
@@ -468,7 +463,7 @@ Beat 入口保留原行为。周期入口使用普通 `@shared_task(ignore_resul
 发布异常仍抛出，下一次 Beat tick 可以重新尝试。
 
 现有 `-Q celery`、`-Q scan` 启动参数无需修改：worker 在 `celeryd_after_setup` 时
-自动订阅对应组的专属队列。统一通过 `./scripts/upgrade.sh` 升级，脚本负责先停止旧
+自动订阅对应组的专属队列。手动 `git pull` 后统一通过 `./scripts/upgrade.sh` 升级，脚本负责先停止旧
 Beat 和 worker，再依次启动新版 worker、Beat，避免切换期间混用新旧投递逻辑。旧队列中的
 积压仍由原消费组处理，本次改动不会清空业务队列。旧版缓存 hash `xcash:celery:pending-once:v1`
 不再读取；全部进程升级后可删除该单独 key，无需清空 Redis。以后升级 Kombu 时需运行
