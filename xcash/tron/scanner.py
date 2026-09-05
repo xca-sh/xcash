@@ -95,6 +95,15 @@ class TronScanner:
                     F("latest_block_number"), latest_solid_block
                 )
             )
+
+            from chains.tasks import dispatch_block_confirmation_checks_if_needed
+
+            # 与 EVM 对齐：刷新链高后先派发已有充值的确认，扫块阶段即使持续软超时，
+            # 也不会把确认调度一起跳过。
+            dispatch_block_confirmation_checks_if_needed(
+                chain=chain,
+                previous_latest_block=previous_latest_block,
+            )
             latest_block = max(
                 latest_solid_block - cls.scan_safe_lag_blocks(),
                 0,
@@ -134,10 +143,11 @@ class TronScanner:
                         cls._persist_observed_transfer_safely(observed=event.observed)
                     blocks_scanned += 1
                     last_successfully_scanned = block_number
-        except TronClientError as exc:
+        except (TronClientError, SoftTimeLimitExceeded) as exc:
             # 已经成功扫完的块仍需落到游标，避免下一轮重新扫一遍 + 让错误信息可见。
             # 顺序：先 advance（清 last_error），再 mark_error（写新 last_error），
-            # 保证 last_error 反映最近一次失败而非被 advance 覆盖。
+            # 保证 last_error 反映最近一次失败而非被 advance 覆盖；软超时也必须记录，
+            # 否则任务 finally 刷新 last_scanned_at 后，外部探针会误报健康。
             cls.flush_scan_progress(
                 cursor=cursor,
                 latest_block=latest_block,
@@ -146,10 +156,7 @@ class TronScanner:
             cls._mark_cursor_error(cursor=cursor, exc=exc)
             raise
         except BaseException:
-            # TronClientError 之外的中断同样必须落盘进度，典型是 Celery 软超时：
-            # 单轮最多 DEFAULT_TRON_SCAN_BATCH_SIZE 块、每块要读整块交易，总耗时很容易
-            # 越过软超时，而这条路径若不提交，本轮已扫完的二十几块会连带回退、下一轮
-            # 从同一起点重来——节点持续偏慢时游标就再也推不动，充值全面滞留。
+            # 其他中断同样必须落盘已完成的进度，避免下一轮从同一起点重来。
             cls.flush_scan_progress(
                 cursor=cursor,
                 latest_block=latest_block,
@@ -162,13 +169,14 @@ class TronScanner:
                 latest_block=latest_block,
                 scanned_block=last_successfully_scanned,
             )
-
-        from chains.tasks import dispatch_block_confirmation_checks_if_needed
-
-        dispatch_block_confirmation_checks_if_needed(
-            chain=chain,
-            previous_latest_block=previous_latest_block,
-        )
+            if cursor.enabled and last_successfully_scanned is None:
+                # RPC 已恢复但没有新块时，本轮同样成功；不能等下一次游标推进才解除
+                # 故障探针，否则会把已恢复的节点继续报成失败。
+                TronWatchCursor.objects.filter(pk=cursor.pk).update(
+                    last_error="",
+                    last_error_at=None,
+                    updated_at=timezone.now(),
+                )
 
         return TronScanSummary(
             filter_addresses=len(matched_addresses_seen),

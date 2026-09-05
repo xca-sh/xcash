@@ -1997,6 +1997,8 @@ class TronScannerTests(TestCase):
         cursor = TronWatchCursor.objects.get(chain=self.chain)
         # 中断块之前的两块已扫完，游标必须停在最后一个成功块上。
         self.assertEqual(cursor.last_scanned_block, interrupt_at_block - 1)
+        self.assertIsNotNone(cursor.last_error_at)
+        self.assertIn("SoftTimeLimitExceeded", cursor.last_error)
 
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")

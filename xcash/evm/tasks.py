@@ -9,9 +9,6 @@ from django.db.models import Q
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import TxTaskStatus
-from chains.tasks import dispatch_block_confirmation_checks_if_needed
-from common.decorators import PENDING_ONCE_SCAN_PENDING_LEASE_MS
-from common.decorators import PendingOnceTask
 from common.decorators import singleton_task
 from common.time import ago
 from evm.models import EvmTxTask
@@ -75,7 +72,6 @@ def _chain_dispatch_next(completed_task: EvmTxTask) -> None:
 
 
 @shared_task(
-    base=PendingOnceTask,
     ignore_result=True,
     soft_time_limit=55,
     time_limit=60,
@@ -177,7 +173,6 @@ def scan_stuck_queued_evm_tx_tasks(limit: int = 32) -> int:
 def _scan_evm_chain(chain_pk: int) -> None:
     """按链执行一次 EVM VaultSlot 充值日志统一扫描。"""
     chain = Chain.objects.get(pk=chain_pk)
-    previous_latest_block = chain.latest_block_number
 
     try:
         try:
@@ -188,19 +183,8 @@ def _scan_evm_chain(chain_pk: int) -> None:
             # 软超时要求立刻收尾，不再做后续动作；游标已按 chunk 分段提交，进度不丢。
             raise
         except Exception:  # noqa: BLE001
-            # 扫描段的故障不能连带吞掉本轮确认调度：二者是相互独立的职责，
-            # 此前共用一个 try 导致扫描一异常就整段跳过。
+            # 确认派发已在扫描器刷新链高后完成，后续扫描异常不阻断已有充值的确认。
             logger.exception("EVM 自扫描失败", chain=chain.code)
-
-        try:
-            dispatch_block_confirmation_checks_if_needed(
-                chain=chain,
-                previous_latest_block=previous_latest_block,
-            )
-        except SoftTimeLimitExceeded:
-            raise
-        except Exception:  # noqa: BLE001
-            logger.exception("EVM 确认调度派发失败", chain=chain.code)
         logger.info("EVM 自扫描完成", chain=chain.name)
     finally:
         # 无论本轮是否命中 RPC 异常都推进 last_scanned_at，按固定周期重试，
@@ -223,7 +207,7 @@ def poll_evm_chain_tx_tasks(chain_pk: int) -> None:
     EvmTaskPoller.poll_chain(chain=chain)
 
 
-@shared_task(base=PendingOnceTask, ignore_result=True)
+@shared_task(ignore_result=True)
 @singleton_task(timeout=64)
 def poll_active_evm_chains() -> None:
     """按固定周期为每条活跃 EVM 链派发一次在途交易终局轮询。
@@ -237,12 +221,7 @@ def poll_active_evm_chains() -> None:
         poll_evm_chain_tx_tasks.delay(chain.pk)
 
 
-@shared_task(
-    base=PendingOnceTask,
-    ignore_result=True,
-    # 每 2 秒一轮，pending 标记残留期间整链停扫，因此收敛到 60 秒租约而非默认 10 分钟。
-    pending_once_pending_lease_ms=PENDING_ONCE_SCAN_PENDING_LEASE_MS,
-)
+@shared_task(ignore_result=True)
 @singleton_task(timeout=64)
 def scan_active_evm_chains() -> None:
     """每 2 秒巡检活跃 EVM 链，仅调度到期（now - last_scanned_at ≥ 扫描周期）的链。

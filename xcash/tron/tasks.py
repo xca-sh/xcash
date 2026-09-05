@@ -26,8 +26,6 @@ from chains.models import TxTaskType
 from chains.vault_slot_balances import refresh_vault_slot_balance_for_collect_task
 from chains.vault_slots import mark_deployed_by_task
 from chains.vault_slots import mark_deployed_if_on_chain_for_task
-from common.decorators import PENDING_ONCE_SCAN_PENDING_LEASE_MS
-from common.decorators import PendingOnceTask
 from common.decorators import singleton_task
 from common.time import ago
 
@@ -218,7 +216,6 @@ def broadcast_tron_task(pk: int) -> None:
 
 
 @shared_task(
-    base=PendingOnceTask,
     ignore_result=True,
     soft_time_limit=55,
     time_limit=60,
@@ -397,12 +394,7 @@ def scan_tron_chain(chain_pk: int) -> None:
         chain.mark_scanned()
 
 
-@shared_task(
-    base=PendingOnceTask,
-    ignore_result=True,
-    # 每 2 秒一轮，pending 标记残留期间整链停扫，因此收敛到 60 秒租约而非默认 10 分钟。
-    pending_once_pending_lease_ms=PENDING_ONCE_SCAN_PENDING_LEASE_MS,
-)
+@shared_task(ignore_result=True)
 @singleton_task(timeout=64)
 def scan_active_tron_chains() -> None:
     """每 2 秒巡检活跃 Tron 链，仅调度到期（now - last_scanned_at ≥ 扫描周期）的链。"""

@@ -1,5 +1,6 @@
 import structlog
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.db import OperationalError
 
 from chains.adapters import AdapterFactory
@@ -342,17 +343,24 @@ def dispatch_block_confirmation_checks_if_needed(
 
     链高事实由各链扫描器在同一链路内刷新；确认调度只关心“高度确实前进”
     且存在已完成业务归类的 CONFIRMING 转账，避免空链每轮扫描都投递任务。
+    调用点必须在批量扫块之前；普通派发故障仅记录，不能反过来阻断扫描入库。
     """
-    chain.refresh_from_db(fields=["latest_block_number"])
-    if chain.latest_block_number <= previous_latest_block:
-        return
+    try:
+        chain.refresh_from_db(fields=["latest_block_number"])
+        if chain.latest_block_number <= previous_latest_block:
+            return
 
-    has_confirming_transfers = Transfer.objects.filter(
-        chain=chain,
-        status=TransferStatus.CONFIRMING,
-        processed_at__isnull=False,
-    ).exists()
-    if not has_confirming_transfers:
-        return
+        has_confirming_transfers = Transfer.objects.filter(
+            chain=chain,
+            status=TransferStatus.CONFIRMING,
+            processed_at__isnull=False,
+        ).exists()
+        if not has_confirming_transfers:
+            return
 
-    block_number_updated.delay(chain.pk)
+        block_number_updated.delay(chain.pk)
+    except SoftTimeLimitExceeded:
+        # 信号可能正好落在派发阶段；仍交给扫描器记录失败并立即退出。
+        raise
+    except Exception:  # noqa: BLE001
+        logger.exception("充值确认调度派发失败", chain=chain.code)

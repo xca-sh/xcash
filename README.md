@@ -438,16 +438,37 @@ docker compose up -d --scale worker-scan=2
 
 ### Celery worker 分工
 
-任务分两个队列、由两个服务分别消费，**互不抢占执行容量**：
+任务分两个消费组、由两个服务分别消费，**互不抢占执行容量**：
 
 | 服务 | 队列 | 职责 |
 | --- | --- | --- |
-| `worker` | `celery` | 交易广播、确认、入账、Webhook 投递等业务任务 |
-| `worker-scan` | `scan` | 各链充值扫描（受链 RPC 延迟支配，单任务硬超时 50s） |
+| `worker` | `celery` 及该组的周期专属队列 | 交易广播、确认、入账、Webhook 投递等业务任务 |
+| `worker-scan` | `scan` 及该组的周期专属队列 | 各链充值扫描（受链 RPC 延迟支配，单任务硬超时 50s） |
 
 两者共用同一镜像与 `PERFORMANCE` 档位并发值——档位描述的是**单个 worker 容器**的并发，
 加容器与调档位是两条正交的扩容路径。扫描任务与业务任务同池时，链 RPC 持续劣化会把广播、
 确认、Webhook 一起饿死，这是必须隔离的原因。
+
+周期入口的队列合并由 `common.redis_transport.Transport` 完成：每个入口使用
+`periodic.<完整任务名>` 专属队列，在同一段 Redis Lua 内检查全部优先级分桶，已有
+消息就保留，队列为空才写入。正常发布与 unacked 重投共用此规则；worker 停机多久，
+每种入口的待消费消息都最多一条。没有额外标记、TTL 或租约，也不依赖 worker 清理。
+已经取走的消息属于 worker 的预取/执行容量，执行互斥继续使用 `singleton_task`。
+
+目前仅覆盖 `config/periodic_tasks.py` 登记的 5 个无参数入口：EVM/TRON 广播调度、
+EVM/TRON 活跃链扫描调度、EVM 活跃链交易轮询调度。带参数子任务、独立业务消息和其余
+Beat 入口保留原行为。周期入口使用普通 `@shared_task(ignore_result=True)`，必须在执行时
+查询当前状态；参数、ETA/countdown、过期时间或 Canvas 在 transport 发布边界被拒绝。
+`apply_async()` / `delay()` 保留 Celery 标准返回值，但返回的 AsyncResult ID 只标识本次
+发布请求，不能据此认定它已独立入队或等待独立执行结果，因为该请求可能已被合并。
+发布异常仍抛出，下一次 Beat tick 可以重新尝试。
+
+现有 `-Q celery`、`-Q scan` 启动参数无需修改：worker 在 `celeryd_after_setup` 时
+自动订阅对应组的专属队列。升级时先停止 Beat，统一更新并重启 worker，再启动新 Beat，
+避免旧 worker 不订阅新队列或旧 producer 继续向共享队列写入。旧队列中的积压仍由原
+消费组处理，本次改动不会清空业务队列。旧版缓存 hash `xcash:celery:pending-once:v1`
+不再读取；全部进程升级后可删除该单独 key，无需清空 Redis。以后升级 Kombu 时需运行
+`xcash/common/tests/test_redis_transport.py`，验证发布、优先级、前缀及恢复路径的兼容性。
 
 ### 存活监控（必须接入）
 

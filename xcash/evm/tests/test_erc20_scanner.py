@@ -1114,6 +1114,8 @@ class EvmErc20ScannerTests(TestCase):
 
         cursor = EvmScanCursor.objects.get(chain=self.chain)
         self.assertEqual(cursor.last_scanned_block, 118)
+        self.assertIsNotNone(cursor.last_error_at)
+        self.assertIn("SoftTimeLimitExceeded", cursor.last_error)
 
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
@@ -1186,10 +1188,12 @@ class EvmErc20ScannerTests(TestCase):
         poll_chain_mock.assert_called_once()
 
     @patch("chains.tasks.block_number_updated.delay")
-    @patch("evm.tasks.EvmScannerService.scan_chain")
+    @patch("evm.scanner.logs.EvmLogScanner.scan_range")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_failure_does_not_block_confirmation_dispatch(
         self,
-        scan_chain_mock,
+        get_latest_block_number_mock,
+        scan_range_mock,
         block_number_updated_delay_mock,
     ):
         """扫描段抛出非 RPC 异常时，本轮确认派发仍要照常执行。"""
@@ -1208,12 +1212,9 @@ class EvmErc20ScannerTests(TestCase):
             processed_at=timezone.now(),
         )
 
-        def advance_block_then_fail(chain):
-            # 模拟「扫描已推进部分链高后中途失败」：确认派发依据的是链高确实前进。
-            Chain.objects.filter(pk=chain.pk).update(latest_block_number=20)
-            raise RuntimeError("scanner exploded")
-
-        scan_chain_mock.side_effect = advance_block_then_fail
+        # 真实执行刷新链高与确认派发，只在后续日志扫描阶段注入故障。
+        get_latest_block_number_mock.return_value = 20
+        scan_range_mock.side_effect = RuntimeError("scanner exploded")
 
         _scan_evm_chain(self.chain.pk)
 
@@ -1221,10 +1222,12 @@ class EvmErc20ScannerTests(TestCase):
 
     @patch("chains.tasks.block_number_updated.delay")
     @patch("evm.tasks.EvmTaskPoller.poll_chain")
-    @patch("evm.tasks.EvmScannerService.scan_chain")
+    @patch("evm.scanner.logs.EvmLogScanner.scan_range")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_evm_chain_dispatches_confirmation_checks_after_block_advance(
         self,
-        scan_chain_mock,
+        get_latest_block_number_mock,
+        scan_range_mock,
         poll_chain_mock,
         block_number_updated_delay_mock,
     ):
@@ -1245,10 +1248,8 @@ class EvmErc20ScannerTests(TestCase):
             processed_at=timezone.now(),
         )
 
-        def advance_block(chain):
-            Chain.objects.filter(pk=chain.pk).update(latest_block_number=20)
-
-        scan_chain_mock.side_effect = advance_block
+        get_latest_block_number_mock.return_value = 20
+        scan_range_mock.return_value = None
 
         _scan_evm_chain(self.chain.pk)
 

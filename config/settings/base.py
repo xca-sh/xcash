@@ -1,6 +1,7 @@
 # ruff: noqa: ERA001, E501
 """Base settings to build other settings files upon."""
 
+import ssl
 import sys
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from config.admin_path import admin_route_prefix  # noqa: E402
 from config.admin_path import normalize_admin_path  # noqa: E402
 from config.performance import get_bool_default  # noqa: E402
 from config.performance import get_int  # noqa: E402
+from config.periodic_tasks import PERIODIC_TASK_QUEUES  # noqa: E402
 
 configure_structlog()
 
@@ -388,6 +390,12 @@ LOGGING = {
 CELERY_TIMEZONE = TIME_ZONE
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#std:setting-broker_url
 CELERY_BROKER_URL = REDIS_URL
+# 沿用 Redis transport，仅替换可合并周期队列的原子写入与重投。
+CELERY_BROKER_TRANSPORT = "common.redis_transport:Transport"
+# 自定义 transport 名称不会触发 Kombu 对 rediss 别名的自动 TLS 设置。
+CELERY_BROKER_USE_SSL = (
+    {"ssl_cert_reqs": ssl.CERT_REQUIRED} if REDIS_URL.startswith("rediss://") else False
+)
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#std:setting-result_backend
 CELERY_RESULT_BACKEND = "django-db"
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#result-extended
@@ -443,9 +451,8 @@ CELERY_WORKER_HIJACK_ROOT_LOGGER = False  # 减少日志开销
 # 队列隔离：扫描任务路由到独立队列，防止被 confirm/broadcast/process 高频任务饥饿。
 CELERY_TASK_ROUTES = {
     "evm.tasks._scan_evm_chain": {"queue": "scan"},
-    "evm.tasks.scan_active_evm_chains": {"queue": "scan"},
     "tron.tasks.scan_tron_chain": {"queue": "scan"},
-    "tron.tasks.scan_active_tron_chains": {"queue": "scan"},
+    **{task: {"queue": queue} for task, queue in PERIODIC_TASK_QUEUES.items()},
     "stress.tasks.prepare_stress": {"queue": "stress"},
     "stress.tasks.execute_stress_case": {"queue": "stress"},
     "stress.tasks.execute_stress_case_payment": {"queue": "stress"},

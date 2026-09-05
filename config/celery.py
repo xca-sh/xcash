@@ -2,8 +2,11 @@ import os
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import celeryd_after_setup
 
 from config.performance import get_int_default
+from config.periodic_tasks import PERIODIC_TASK_GROUPS
+from config.periodic_tasks import PERIODIC_TASK_QUEUES
 
 # set the default Django settings module for the 'celery' program.
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.dev")
@@ -18,6 +21,16 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks()
+
+
+@celeryd_after_setup.connect
+def subscribe_periodic_queues(sender, instance, **kwargs):  # noqa: ARG001
+    """-Q 仍选择业务分组；在 consumer 启动前添加该组的周期专属队列。"""
+    queues = instance.app.amqp.queues
+    selected = set(queues.consume_from)
+    for task, group in PERIODIC_TASK_GROUPS.items():
+        if group in selected:
+            queues.select_add(PERIODIC_TASK_QUEUES[task])
 
 
 WEBHOOK_EVENTS_SCHEDULE_SECONDS = get_int_default(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import structlog
+from celery.exceptions import SoftTimeLimitExceeded
 from django.db import transaction
 from django.db.models import F
 from django.db.models.functions import Greatest
@@ -46,11 +47,21 @@ class EvmLogScanner:
         if not cursor.enabled:
             return
         rpc_client = rpc_client or EvmScannerRpcClient(chain=chain)
+        previous_latest_block = chain.latest_block_number
 
         try:
             latest_block = rpc_client.get_latest_block_number()
             Chain.objects.filter(pk=chain.pk).update(
                 latest_block_number=Greatest(F("latest_block_number"), latest_block)
+            )
+
+            from chains.tasks import dispatch_block_confirmation_checks_if_needed
+
+            # 已入库充值的确认只依赖链高，不依赖本轮日志全部扫完。先派发再扫日志，
+            # 避免持续软超时饿死 FULL 确认，也不在软超时后的清理预算里追加派发。
+            dispatch_block_confirmation_checks_if_needed(
+                chain=chain,
+                previous_latest_block=previous_latest_block,
             )
 
             token_registry = load_token_registry(chain=chain)
@@ -82,7 +93,9 @@ class EvmLogScanner:
                 )
                 cls._advance_cursor(cursor=cursor, scanned_to_block=chunk_to)
                 chunk_from = chunk_to + 1
-        except EvmScannerRpcError as exc:
+        except (EvmScannerRpcError, SoftTimeLimitExceeded) as exc:
+            # 软超时同样是本轮扫描失败；此前 chunk 的进度已提交，只记录错误并原样
+            # 上抛，否则 last_scanned_at 刷新后，外部探针会把持续超时报成健康。
             cls._mark_cursor_error(cursor=cursor, exc=exc)
             raise
 
@@ -287,7 +300,7 @@ class EvmLogScanner:
 
     @staticmethod
     def _mark_cursor_error(*, cursor: EvmScanCursor, exc: Exception) -> None:
-        """记录本轮 RPC 错误到游标，便于运维观察。"""
+        """记录本轮 RPC 错误或软超时到游标，便于运维观察。"""
         logger.warning(
             "EVM 日志扫描失败",
             chain=cursor.chain.code,
