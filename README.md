@@ -424,6 +424,10 @@ docker compose down
 ./scripts/upgrade.sh
 ```
 
+脚本默认在构建及必要的迁移演练完成后，自动停止旧 Beat，再停止 Django 和两组 worker；
+完成生产迁移及初始化后，先启动新版 Django、worker 和 Caddy，再启动 Beat。
+没有迁移文件变化时也执行这个切换顺序，使用者无需额外手动停止服务。
+
 扩容 Celery worker（业务量增长时，`PERFORMANCE` 档位之外的横向扩容手段）：
 
 ```bash
@@ -464,9 +468,9 @@ Beat 入口保留原行为。周期入口使用普通 `@shared_task(ignore_resul
 发布异常仍抛出，下一次 Beat tick 可以重新尝试。
 
 现有 `-Q celery`、`-Q scan` 启动参数无需修改：worker 在 `celeryd_after_setup` 时
-自动订阅对应组的专属队列。升级时先停止 Beat，统一更新并重启 worker，再启动新 Beat，
-避免旧 worker 不订阅新队列或旧 producer 继续向共享队列写入。旧队列中的积压仍由原
-消费组处理，本次改动不会清空业务队列。旧版缓存 hash `xcash:celery:pending-once:v1`
+自动订阅对应组的专属队列。统一通过 `./scripts/upgrade.sh` 升级，脚本负责先停止旧
+Beat 和 worker，再依次启动新版 worker、Beat，避免切换期间混用新旧投递逻辑。旧队列中的
+积压仍由原消费组处理，本次改动不会清空业务队列。旧版缓存 hash `xcash:celery:pending-once:v1`
 不再读取；全部进程升级后可删除该单独 key，无需清空 Redis。以后升级 Kombu 时需运行
 `xcash/common/tests/test_redis_transport.py`，验证发布、优先级、前缀及恢复路径的兼容性。
 

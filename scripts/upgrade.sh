@@ -29,10 +29,11 @@ POSTGRES_WAIT_TIMEOUT="${POSTGRES_WAIT_TIMEOUT:-120}"
 # - production migrate 中：DB 可能处于中间态，不自动启动业务服务
 # - production migrate 后：DB 已到新 schema，后置步骤失败时按新镜像尝试恢复服务
 LOCK_ACQUIRED=false
-# 停机迁移期间必须全部停掉的业务服务。任何会读写业务库的常驻服务都要列在这里——
+# 切换版本前必须全部停掉的业务服务。任何会读写业务库的常驻服务都要列在这里——
 # 漏掉一个，它就会在 migrate 执行期间继续按旧代码读写处于中间态的 schema。
 # 收敛成单一定义，避免 stop / ps 两处各写一份而在新增服务时漏改。
-APP_SERVICES=(django worker worker-scan beat)
+APP_RUNTIME_SERVICES=(django worker worker-scan)
+APP_SERVICES=("${APP_RUNTIME_SERVICES[@]}" beat)
 APP_SERVICES_STOP_REQUESTED=false
 APP_SERVICES_TO_RESTORE=()
 REHEARSAL_IN_PROGRESS=false
@@ -89,7 +90,7 @@ cleanup() {
     elif [[ "${PRODUCTION_MIGRATE_COMPLETED}" == "true" ]]; then
       printf '\n[upgrade] failure after production migrations completed; starting services on migrated schema\n' >&2
       run_cleanup_command "start services on migrated schema" \
-        "${COMPOSE[@]}" up -d --remove-orphans
+        start_application_services
     elif [[ "${REHEARSAL_IN_PROGRESS}" == "true" ]]; then
       print_rehearsal_failure_help
       if [[ "${APP_SERVICES_STOP_REQUESTED}" == "true" ]]; then
@@ -242,7 +243,16 @@ stop_app_services() {
   fi
 
   APP_SERVICES_STOP_REQUESTED=true
-  "${COMPOSE[@]}" stop "${APP_SERVICES[@]}"
+  # 先停调度源，再停消费者，避免 worker 退出时旧 Beat 继续向旧队列投递。
+  "${COMPOSE[@]}" stop beat
+  "${COMPOSE[@]}" stop "${APP_RUNTIME_SERVICES[@]}"
+}
+
+start_application_services() {
+  # 正常升级与迁移后的失败恢复共用此顺序。&& 不能省略：cleanup 的条件命令
+  # 会抑制函数内部的 errexit，worker 启动命令失败时仍须阻止启动 Beat。
+  "${COMPOSE[@]}" up -d --remove-orphans "${APP_RUNTIME_SERVICES[@]}" caddy \
+    && "${COMPOSE[@]}" up -d --no-deps beat
 }
 
 restore_pre_migration_services() {
@@ -390,7 +400,9 @@ REHEARSAL_IN_PROGRESS=false
 delete_rehearsal_dump
 fi
 
-if [[ "${RUN_MIGRATION_REHEARSAL}" == "true" && "${STOP_BEFORE_REHEARSAL}" != "true" ]]; then
+if [[ "${APP_SERVICES_STOP_REQUESTED}" != "true" ]]; then
+  # 没有迁移文件只跳过演练，不能跳过版本切换屏障；队列路由等纯代码变更也
+  # 需要先停止旧进程。构建和在线演练完成后才停服务，保持停机窗口尽可能短。
   stop_app_services "before production migration"
 fi
 
@@ -415,6 +427,6 @@ run_main_manage db ensure_default_reference_data
 run_main_manage db ensure_default_superuser
 
 log "start application services"
-"${COMPOSE[@]}" up -d --remove-orphans
+start_application_services
 
 log "upgrade completed"
