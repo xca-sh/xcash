@@ -101,5 +101,7 @@ LOGGING = {
             "level": "ERROR",
             "propagate": False,
         },
+        # 本配置整体覆盖 base.LOGGING，需保留其 HTTPX 降噪规则，避免就绪轮询刷屏。
+        "httpx": {"level": "WARNING"},
     },
 }
