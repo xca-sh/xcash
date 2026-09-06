@@ -38,8 +38,10 @@ pay-fronted/node_modules/
 .vscode/
 *.swp
 *~
-.env
-.env.*
+# Docker 忽略规则不会像 Git 一样自动匹配任意层级；运行密钥只能在启动时注入。
+**/.env*
+# 本地主网部署目录含独立凭据与运维产物，不属于应用运行源码。
+xcash/tron/mainnet_deployment/
 
 # 系统文件
 .DS_Store
@@ -48,9 +50,8 @@ Thumbs.db
 # 日志
 *.log
 
-# 运维敏感产物：upgrade.sh 在 production migrate 失败时【有意保留】backups/ 下的
-# 生产库 dump 供回滚使用。生产镜像是 COPY . /app，若不在此排除，下一次
+# 运维敏感产物：备份与失败演练可能留下生产库 dump。生产镜像是 COPY . /app，若不排除，下一次
 # docker compose build 会把含加密助记词、商户与账单数据的完整 dump 打进镜像层。
-backups/
-*.dump
-*.sql
+**/backups/
+**/*.dump
+**/*.sql

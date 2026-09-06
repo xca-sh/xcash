@@ -22,6 +22,7 @@ UPGRADE_LOCK_FILE="${UPGRADE_LOCK_FILE:-/tmp/xcash-upgrade.lock}"
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 # postgres 就绪等待上限（秒）：避免 DB 起不来时在持有升级锁的情况下无限 hang。
 POSTGRES_WAIT_TIMEOUT="${POSTGRES_WAIT_TIMEOUT:-120}"
+APP_READY_TIMEOUT="${APP_READY_TIMEOUT:-360}"
 
 # cleanup 需要区分失败发生在哪个阶段：
 # - production migrate 前：production 库未被触碰，只恢复本脚本停过的旧容器
@@ -38,6 +39,7 @@ APP_SERVICES_TO_RESTORE=()
 REHEARSAL_IN_PROGRESS=false
 PRODUCTION_MIGRATE_STARTED=false
 PRODUCTION_MIGRATE_COMPLETED=false
+APPLICATION_START_ATTEMPTED=false
 # 演练 dump 文件路径，dump 时赋值；cleanup 在 nounset 下引用，故先声明为空。
 MAIN_DUMP=""
 RUN_MIGRATION_REHEARSAL=true
@@ -86,6 +88,8 @@ cleanup() {
         printf '[upgrade] 优先看上方迁移报错，判断能否修正后前滚（fix-forward）。\n' >&2
       fi
       printf '[upgrade] 核对/恢复 schema 后，再用 docker compose up -d 拉起服务。\n' >&2
+    elif [[ "${APPLICATION_START_ATTEMPTED}" == "true" ]]; then
+      printf '\n[upgrade] application startup/readiness failed; inspect running services before retrying.\n' >&2
     elif [[ "${PRODUCTION_MIGRATE_COMPLETED}" == "true" ]]; then
       printf '\n[upgrade] failure after production migrations completed; starting services on migrated schema\n' >&2
       run_cleanup_command "start services on migrated schema" \
@@ -231,10 +235,18 @@ stop_app_services() {
 }
 
 start_application_services() {
-  # 正常升级与迁移后的失败恢复共用此顺序。&& 不能省略：cleanup 的条件命令
-  # 会抑制函数内部的 errexit，worker 启动命令失败时仍须阻止启动 Beat。
+  APPLICATION_START_ATTEMPTED=true
+  # cleanup 的条件调用会抑制 errexit，每个门控必须显式传播失败。
   "${COMPOSE[@]}" up -d --remove-orphans "${APP_RUNTIME_SERVICES[@]}" caddy \
-    && "${COMPOSE[@]}" up -d --no-deps beat
+    || return 1
+  run_main_manage db wait_for_runtime --phase consumers --timeout "${APP_READY_TIMEOUT}" \
+    || return 1
+  "${COMPOSE[@]}" up -d --no-deps beat || return 1
+  if ! run_main_manage db wait_for_runtime --phase scheduler --timeout "${APP_READY_TIMEOUT}"; then
+    # 消费回执不完整时暂停投递源，保留应用进程供排查；不能打印升级成功。
+    "${COMPOSE[@]}" stop beat || true
+    return 1
+  fi
 }
 
 restore_pre_migration_services() {
@@ -304,6 +316,7 @@ source "${ENV_FILE}"
 set +a
 
 [[ -n "${POSTGRES_PASSWORD:-}" ]] || die "POSTGRES_PASSWORD is required"
+[[ "${APP_READY_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] || die "APP_READY_TIMEOUT must be a positive integer"
 ensure_git_clean
 log "deploy current working tree; update code manually with git pull before running this script"
 

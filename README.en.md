@@ -423,12 +423,48 @@ git pull
 The script deploys the current working tree without pulling code or switching branches, and requires a clean working tree by default.
 It checks the database for pending migrations to decide whether a rehearsal is needed.
 After building and any required rehearsal, it stops the old Beat, Django, and both workers.
-Once production migrations and initialization finish, it starts Django, the workers, and Caddy before starting Beat.
+Once production migrations and initialization finish, it starts Django, the workers, and Caddy.
+It checks `/health` through Caddy and verifies both workers' main and periodic queue subscriptions before starting Beat.
+Success then requires fresh heartbeat messages published after the final check starts and executed by both worker pools.
 This service switch also runs when there are no pending migrations.
+Each readiness phase has a 360-second timeout, configurable with `APP_READY_TIMEOUT`.
+A failed check exits nonzero. Beat stays stopped if the first check fails and is stopped if the final scheduling check fails;
+application processes remain available for diagnosis. These checks cover the local HTTP and task pipeline;
+external monitoring must still cover public TLS and chain RPC health.
+
+Normal worker shutdown uses Celery warm shutdown: idle workers exit immediately, while running tasks finish.
+The 330-second container grace period covers the current longest production task's 290-second hard limit plus cleanup.
+This is an upper bound, not a fixed delay. Revisit the shutdown budget and monitoring window when adding longer tasks.
+
+Local image builds recursively exclude `.env*`, backups, and the local mainnet deployment directory.
+Inject runtime secrets through `env_file`. Keep custom environment files with other names outside the build context,
+or explicitly exclude them in `.dockerignore`.
 
 Each Celery worker service currently runs one container, named `xcash_worker` and `xcash_worker_scan`.
 Adjust concurrency through the `PERFORMANCE` tier. To use `--scale` in the future, first remove
 `container_name` from the corresponding worker service. Beat must remain a single instance.
+
+### External health monitoring
+
+The admin operational inspection page, dashboard attention items, and sidebar badge use the same worker heartbeat
+status, checked when the page is opened. Continuous detection and proactive notifications require an independent
+external monitor, including when the admin site itself is unavailable.
+
+Monitor all three unauthenticated endpoints and alert on non-200 responses or timeouts.
+Responses contain only `status`; diagnostic details go to structured logs.
+
+| Endpoint | Checks |
+| --- | --- |
+| `GET /health` | HTTP serving, PostgreSQL queries, and Redis read/write availability |
+| `GET /health/scanning` | Active-chain scan progress and scan errors |
+| `GET /health/workers` | Fresh scheduling and execution heartbeats from both worker pools |
+
+Beat publishes a heartbeat per worker group every 30 seconds. Each uses a coalesced periodic queue, so at most one
+message remains queued even if a worker is down. The HTTP endpoint only reads cached receipts; it neither calls
+`inspect` nor publishes tasks. Missing receipts, publication or execution older than 360 seconds, and cache failures
+return 503. Old queued messages cannot mask a stopped Beat. Startup remains unhealthy until both pools execute
+a heartbeat, including deployments with no active chains. Configure consecutive-failure thresholds in the monitor.
+Heartbeats verify scheduling and execution capacity, not transaction outcomes or Webhook delivery success.
 
 ## Tech stack
 

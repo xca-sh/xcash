@@ -7,12 +7,25 @@ from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import RedirectView
 
+from config.worker_health import WORKER_HEALTH_MAX_AGE_SECONDS
+from config.worker_health import worker_health_status
 from core.dashboard_metrics import build_dashboard_metrics
 from core.monitoring import OperationalRiskService
 
 
 class HomeView(RedirectView):
     pattern_name = "admin:index"
+
+
+def worker_health_for_request(request=None):
+    # Web 在每次请求内独立判断心跳是否过期，不能依赖可能已停摆的 worker 刷新风险计数。
+    # 页面与侧栏共享本次快照，既减少缓存读取，也避免临界时刻同页显示不同状态。
+    if request is not None and hasattr(request, "xcash_worker_health"):
+        return request.xcash_worker_health
+    health = worker_health_status()
+    if request is not None:
+        request.xcash_worker_health = health
+    return health
 
 
 def _operational_inspection_risk_count(request=None) -> int:
@@ -28,6 +41,7 @@ def _operational_inspection_risk_count(request=None) -> int:
         + risk_summary["stalled_webhook_event_count"]
         + resource_risk_counts["evm_low_native_balance_count"]
         + resource_risk_counts["tron_low_resource_count"]
+        + worker_health_for_request(request)["risk_count"]
     )
     if request is not None:
         request._xcash_operational_risk_count = risk_count
@@ -257,11 +271,47 @@ def _build_tron_resource_rows(resource_risk_summary: dict) -> list[dict]:
     return rows
 
 
-def _build_operational_inspection_payload(metrics, resource_risk_summary=None):
+def build_worker_health_rows(health):
+    if health["status"] == "unhealthy":
+        return [
+            _inspection_row(
+                level=_("高"),
+                title=_("无法读取任务消费心跳"),
+                description=_(
+                    "请检查 Redis 连接与服务日志，当前无法确认任务处理是否正常。"
+                ),
+                tone="danger",
+            )
+        ]
+    titles = {
+        "celery": _("业务任务消费心跳异常"),
+        "scan": _("链扫描任务消费心跳异常"),
+    }
+    return [
+        _inspection_row(
+            level=_("高"),
+            title=titles[group],
+            description=_(
+                "尚未收到心跳，或最近 %(seconds)s 秒内没有新鲜的调度与执行回执。"
+                "请检查 worker、Beat、Redis 与任务积压。"
+            )
+            % {"seconds": WORKER_HEALTH_MAX_AGE_SECONDS},
+            tone="danger",
+        )
+        for group in health["groups"]
+    ]
+
+
+def _build_operational_inspection_payload(
+    metrics, resource_risk_summary=None, *, worker_health=None
+):
     # 改动原因：首页摘要与独立巡检页必须共用同一套异常组装逻辑，避免两个入口出现口径漂移。
     inspection_sections = []
     attention_items = []
     resource_risk_summary = resource_risk_summary or _empty_resource_risk_summary()
+    worker_health = (
+        worker_health if worker_health is not None else worker_health_for_request()
+    )
 
     admin_security_rows = _build_admin_security_rows()
     inspection_sections.append(
@@ -298,6 +348,18 @@ def _build_operational_inspection_payload(metrics, resource_risk_summary=None):
         )
     )
     attention_items.extend(tron_resource_rows)
+
+    worker_rows = build_worker_health_rows(worker_health)
+    inspection_sections.append(
+        _inspection_section(
+            title=_("任务消费巡检"),
+            subtitle=_("业务任务与链扫描的执行心跳"),
+            rows=worker_rows,
+            empty_text=_("业务任务与链扫描的消费心跳均正常"),
+            tone="danger",
+        )
+    )
+    attention_items.extend(worker_rows)
 
     failed_attempt_rows = [
         _inspection_row(
@@ -384,10 +446,24 @@ def _build_operational_inspection_payload(metrics, resource_risk_summary=None):
     }
 
 
-def _build_operational_inspection_summary_cards(snapshot, resource_risk_summary):
+def _build_operational_inspection_summary_cards(
+    snapshot, resource_risk_summary, worker_health
+):
     # 改动原因：独立巡检页需要先给出风险摘要，用户不必逐段滚动才能判断当前是否有异常。
     admin_path_configured = settings.ADMIN_PATH_CONFIGURED
     return [
+        _summary_card(
+            title=_("任务消费风险"),
+            metric=worker_health["risk_count"],
+            subtitle=(
+                _("两组消费心跳均正常")
+                if worker_health["status"] == "ok"
+                else _("消费心跳异常，请查看巡检明细")
+            ),
+            tone="danger",
+            active_count=worker_health["risk_count"],
+            background="bg-rose-50",
+        ),
         _summary_card(
             title=_("后台安全"),
             metric=0 if admin_path_configured else 1,
@@ -450,7 +526,9 @@ def dashboard_callback(request, context):
     metrics = build_dashboard_metrics()
     snapshot = metrics["snapshot"]
     chart_rows = metrics["chart_rows"]
-    inspection_payload = _build_operational_inspection_payload(metrics)
+    inspection_payload = _build_operational_inspection_payload(
+        metrics, worker_health=worker_health_for_request(request)
+    )
 
     # 后台首页改为实时经营看板，优先展示商户最关心的成交、转化、积压和失败指标。
     snapshot_cards = [
@@ -617,6 +695,7 @@ def dashboard_callback(request, context):
 def operational_inspection_view(request):
     # 改动原因：“异常巡检”菜单需要落到独立页面，而不是继续复用 admin 首页。
     metrics = build_dashboard_metrics()
+    worker_health = worker_health_for_request(request)
     resource_risk_summary = OperationalRiskService.build_summary(
         limit=4,
         include_resource_checks=True,
@@ -630,6 +709,7 @@ def operational_inspection_view(request):
     inspection_payload = _build_operational_inspection_payload(
         metrics,
         resource_risk_summary=resource_risk_summary,
+        worker_health=worker_health,
     )
     overview_context = admin.site.each_context(request)
     overview_context.update(
@@ -638,6 +718,7 @@ def operational_inspection_view(request):
             "inspection_summary_cards": _build_operational_inspection_summary_cards(
                 metrics["snapshot"],
                 resource_risk_summary,
+                worker_health,
             ),
             "inspection_sections": inspection_payload["inspection_sections"],
             "attention_items_count": len(inspection_payload["attention_items"]),

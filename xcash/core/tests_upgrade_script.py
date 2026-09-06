@@ -67,6 +67,9 @@ elif command == "run":
     elif not rehearsal and operation == ["ensure_default_reference_data"]:
         if failure == "bootstrap":
             sys.exit(23)
+    elif operation[:1] == ["wait_for_runtime"]:
+        if failure == "ready_" + operation[operation.index("--phase") + 1]:
+            sys.exit(23)
 """
 
 
@@ -81,8 +84,17 @@ def run_upgrade(tmp_path):
     (tmp_path / ".env").write_text("POSTGRES_PASSWORD=upgrade-test\n")
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
     log_path = tmp_path / "commands.jsonl"
+    log_path.touch()
 
-    def run(*, migrations=False, quiesced=False, failure="", running=None, dirty=False):
+    def run(
+        *,
+        migrations=False,
+        quiesced=False,
+        failure="",
+        running=None,
+        dirty=False,
+        ready_timeout="360",
+    ):
         env = {
             **os.environ,
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -97,6 +109,7 @@ def run_upgrade(tmp_path):
             "PENDING_MIGRATIONS": str(migrations).lower(),
             "FAIL_POINT": failure,
             "RUNNING_SERVICES": running or "django\nworker\nworker-scan\nbeat",
+            "APP_READY_TIMEOUT": ready_timeout,
         }
         result = subprocess.run(  # noqa: S603 - 实际升级命令全部被隔离的 CLI 替身接管
             ["/bin/bash", str(UPGRADE_SCRIPT)],
@@ -150,7 +163,10 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
     )
     start_runtime = command_index(commands, ["up"], contains="worker")
     start_beat = commands.index(["up", "-d", "--no-deps", "beat"])
+    consumers_ready = command_index(commands, ["run"], contains="consumers")
+    scheduler_ready = command_index(commands, ["run"], contains="scheduler")
     assert build < stop_beat < stop_runtime < migrate < start_runtime < start_beat
+    assert start_runtime < consumers_ready < start_beat < scheduler_ready
     assert commands.count(["stop", "beat"]) == 1
     assert commands.count(["stop", "django", "worker", "worker-scan"]) == 1
     rehearsal = [c for c in commands if "POSTGRES_HOST=migration-rehearsal-db" in c]
@@ -181,6 +197,13 @@ def test_dirty_worktree_aborts_before_docker_commands(run_upgrade):
     result, commands = run_upgrade(dirty=True)
     assert result.returncode != 0
     assert "git worktree is dirty" in result.stderr
+    assert commands == []
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "invalid"])
+def test_invalid_readiness_timeout_aborts_before_touching_services(run_upgrade, value):
+    result, commands = run_upgrade(ready_timeout=value)
+    assert result.returncode != 0
     assert commands == []
 
 
@@ -219,3 +242,19 @@ def test_worker_start_failure_cannot_start_beat_even_during_cleanup(run_upgrade)
     result, commands = run_upgrade(failure="start_runtime")
     assert result.returncode != 0
     assert ["up", "-d", "--no-deps", "beat"] not in commands
+
+
+def test_consumer_readiness_failure_never_starts_beat(run_upgrade):
+    result, commands = run_upgrade(failure="ready_consumers")
+    assert result.returncode != 0
+    assert ["up", "-d", "--no-deps", "beat"] not in commands
+    assert "upgrade completed" not in result.stdout
+
+
+def test_scheduler_readiness_failure_stops_beat_without_cleanup_restart(run_upgrade):
+    result, commands = run_upgrade(failure="ready_scheduler")
+    assert result.returncode != 0
+    start = commands.index(["up", "-d", "--no-deps", "beat"])
+    assert ["stop", "beat"] in commands[start + 1 :]
+    assert commands.count(["up", "-d", "--no-deps", "beat"]) == 1
+    assert "upgrade completed" not in result.stdout

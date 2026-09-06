@@ -279,6 +279,12 @@ class OperationalInspectionSidebarBadgeTests(TestCase):
 
     def setUp(self):
         _cache.clear()
+        worker_health = patch(
+            "core.dashboard.worker_health_status",
+            return_value={"status": "ok", "groups": [], "risk_count": 0},
+        )
+        worker_health.start()
+        self.addCleanup(worker_health.stop)
 
     def tearDown(self):
         _cache.clear()
@@ -342,6 +348,14 @@ class OperationalInspectionSidebarBadgeTests(TestCase):
 
 
 class OperationalInspectionPayloadTests(TestCase):
+    def setUp(self):
+        worker_health = patch(
+            "core.dashboard.worker_health_status",
+            return_value={"status": "ok", "groups": [], "risk_count": 0},
+        )
+        worker_health.start()
+        self.addCleanup(worker_health.stop)
+
     def empty_metrics(self):
         return {
             "recent_failed_attempts": [],

@@ -25,7 +25,7 @@ x-logging: &default-logging
 # 与 redis——它们门控 django/worker/worker-scan/beat 的启动时机，是功能件。应用服务有意不配：
 # Compose 不会因 unhealthy 做任何事（自动重启是 Swarm 能力），状态仅供 `ps` 展示，却要付出
 # 常驻开销（celery inspect ping 每次需拉起完整 Django + Celery 进程，实测约 69MB RSS）。
-# 应用存活由容器外部的 HTTP 探针监测：GET /health、GET /health/scanning。
+# 应用存活由外部 HTTP 探针监测：GET /health、/health/scanning、/health/workers。
 #
 # django / worker / worker-scan / beat 共享配置，容器名由各服务单独声明。
 x-django-base: &django-base
@@ -141,9 +141,11 @@ services:
     <<: *django-base
     container_name: xcash_worker
     environment:
-      REMAP_SIGTERM: SIGQUIT
       CELERY_WORKER_QUEUES: celery
-    stop_grace_period: 60s
+      # 显式覆盖 env_file 可能遗留的 SIGQUIT：正常停机必须让在途任务完成。
+      REMAP_SIGTERM: ""
+    # 当前生产最长任务硬超时 290s；预留退出和未确认消息恢复时间。
+    stop_grace_period: 330s
     command: /start-worker
 
   # 扫描 worker：只消费 scan 队列（CELERY_TASK_ROUTES 已把扫描任务路由到该队列）。
@@ -153,9 +155,9 @@ services:
     <<: *django-base
     container_name: xcash_worker_scan
     environment:
-      REMAP_SIGTERM: SIGQUIT
       CELERY_WORKER_QUEUES: scan
-    stop_grace_period: 60s
+      REMAP_SIGTERM: ""
+    stop_grace_period: 330s
     command: /start-worker
 
   beat:

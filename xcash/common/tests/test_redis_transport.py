@@ -4,17 +4,26 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
+from wsgiref.simple_server import WSGIRequestHandler
+from wsgiref.simple_server import make_server
 
+import httpx
 import pytest
+import yaml
 from celery import Celery
 from celery.beat import ScheduleEntry
 from celery.beat import Scheduler
+from django.core.cache import cache
+from django.core.management import call_command
+from django.core.wsgi import get_wsgi_application
 from kombu import Producer
 from kombu.exceptions import OperationalError
 from redis import Redis
@@ -24,6 +33,9 @@ from redis.exceptions import OutOfMemoryError
 from config.celery import subscribe_periodic_queues
 from config.periodic_tasks import PERIODIC_TASK_GROUPS
 from config.periodic_tasks import PERIODIC_TASK_QUEUES
+from config.worker_health import WORKER_HEALTH_MAX_AGE_SECONDS
+from config.worker_health import stale_worker_groups
+from core.management.commands.wait_for_runtime import missing_consumer_groups
 
 SCAN_TASK = "evm.tasks.scan_active_evm_chains"
 BUSINESS_TASK = "evm.tasks.dispatch_evm_tx_tasks"
@@ -122,7 +134,9 @@ def test_beat_stopped_worker_keeps_one_message_per_entry(broker):
         for _ in range(60):
             for entry in entries:
                 scheduler.apply_async(entry, producer=producer)
-    assert [queue_size(broker, name) for name in PERIODIC_TASK_QUEUES] == [1] * 5
+    assert [queue_size(broker, name) for name in PERIODIC_TASK_QUEUES] == [1] * len(
+        PERIODIC_TASK_QUEUES
+    )
     # 共享业务队列仍可逐条保存带参数消息，不能跟着合并。
     for index in range(10):
         broker.app.send_task("evm.tasks._scan_evm_chain", args=[index])
@@ -372,6 +386,130 @@ def test_project_registered_entries_really_use_bounded_queues(broker):
         for _ in range(20):
             project_app.tasks[name].apply_async(producer=producer)
         assert queue_size(broker, name) == 1
+
+
+def test_real_beat_worker_http_health_and_warm_shutdown(broker, settings, tmp_path):
+    """真实 Beat→Redis→prefork→缓存→HTTP，并在任务执行中验证生产 TERM 退出策略。"""
+    settings.ALLOWED_HOSTS = ["127.0.0.1"]
+    settings.CACHES = {
+        "default": {
+            **settings.CACHES["default"],
+            "KEY_PREFIX": broker.prefix,
+        }
+    }
+    root = Path(__file__).resolve().parents[3]
+    compose = yaml.safe_load((root / "docker-compose.yml").read_text())
+    receipt_key = f"{broker.prefix}shutdown-receipts"
+    config = {
+        "celery": {
+            key: broker.app.conf[key]
+            for key in (
+                "broker_url",
+                "broker_transport",
+                "broker_transport_options",
+                "task_routes",
+                "task_serializer",
+                "task_ignore_result",
+                "task_publish_retry",
+                "result_backend",
+            )
+        },
+        "caches": settings.CACHES,
+        "receipt_key": receipt_key,
+        "schedule": str(tmp_path / "beat-schedule"),
+    }
+    processes = []
+    outputs = []
+
+    def start(mode, group="celery"):
+        service = "worker" if group == "celery" else "worker-scan"
+        env = {
+            **os.environ,
+            "DJANGO_SETTINGS_MODULE": "config.settings.test",
+            "PYTHONPATH": os.pathsep.join([str(root), *sys.path]),
+            "REMAP_SIGTERM": compose["services"][service]["environment"].get(
+                "REMAP_SIGTERM", ""
+            ),
+        }
+        output = (tmp_path / f"{mode}-{group}-{len(processes)}.log").open("w")
+        outputs.append(output)
+        process = subprocess.Popen(  # noqa: S603 - 只执行隔离前缀内的测试进程
+            [sys.executable, "-m", "common.tests.runtime_health_worker"],
+            stdin=subprocess.PIPE,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+        )
+        processes.append(process)
+        process.stdin.write(
+            json.dumps(
+                {
+                    **config,
+                    "mode": mode,
+                    "group": group,
+                    "hostname": f"{group}-{uuid4().hex}@localhost",
+                }
+            )
+        )
+        process.stdin.close()
+        return process
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, message, *args):
+            pass
+
+    server = make_server(
+        "127.0.0.1", 0, get_wsgi_application(), handler_class=QuietHandler
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}/health/workers"
+    try:
+        business = start("worker", "celery")
+        start("worker", "scan")
+        with patch("core.management.commands.wait_for_runtime.app", broker.app):
+            deadline = monotonic() + 30
+            while missing_consumer_groups(1):
+                assert (
+                    monotonic() < deadline
+                ), "worker queue subscriptions never became ready"
+                time.sleep(0.2)
+        assert httpx.get(url, timeout=3, trust_env=False).status_code == 503
+        beat = start("beat")
+        call_command("wait_for_runtime", phase="scheduler", timeout=30, url=url)
+        assert httpx.get(url, timeout=3, trust_env=False).json() == {"status": "ok"}
+
+        beat.terminate()
+        beat.wait(timeout=10)
+        assert stale_worker_groups(published_after=time.time()) == ["celery", "scan"]
+        future = time.time() + WORKER_HEALTH_MAX_AGE_SECONDS + 1
+        with patch("config.worker_health.time.time", return_value=future):
+            assert httpx.get(url, timeout=3, trust_env=False).status_code == 503
+
+        broker.app.send_task("runtime_test.slow", queue="celery")
+        assert broker.client.blpop(receipt_key, timeout=15)[1] == b"started"
+        business.terminate()
+        business.wait(timeout=25)
+        assert (
+            broker.client.lpop(receipt_key) == b"completed"
+        ), "TERM interrupted active work"
+        assert business.returncode == 0
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=25)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        cache.delete_many(["health:worker:celery", "health:worker:scan"])
+        for output in outputs:
+            output.close()
 
 
 @pytest.mark.parametrize("scheme", ["redis", "rediss"])

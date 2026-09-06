@@ -5,8 +5,8 @@
 判据一律定义在那里，本模块只提供 HTTP 入口：健康探测被高频调用（默认 30s 一次），
 必须恒定廉价。
 
-/health/scanning 是唯一的例外形态：它探测的是【别的进程】（Celery worker）还在不在
-干活。这类探测无法交给 Celery 巡检任务——巡检和故障对象会是同一个进程，一起死。
+/health/scanning 与 /health/workers 探测其他进程是否仍在干活。任务执行产生的
+事实由 Web 独立检查是否过期，告警不能依赖故障 worker 自己运行巡检。
 
 安全约束：该端点无鉴权（容器内探测无法携带商户签名），因此响应体只允许出现
 status 字段。绝不返回版本号、依赖拓扑、异常堆栈等信息——那会把内部结构白送给
@@ -22,6 +22,7 @@ from django.db import transaction
 from django.http import HttpRequest
 from django.http import JsonResponse
 
+from config.worker_health import worker_health_status
 from core.monitoring import SCAN_STALL_ALERT_AFTER_SECONDS
 from core.monitoring import OperationalRiskService
 
@@ -31,6 +32,18 @@ logger = structlog.get_logger()
 # 典型如 maxmemory 打满且无可淘汰键时写入会被拒绝）。TTL 取小值，探测键无需留存。
 HEALTH_PROBE_CACHE_KEY = "health:probe"
 HEALTH_PROBE_CACHE_TTL = 30
+
+
+@transaction.non_atomic_requests
+def workers_health_view(request: HttpRequest) -> JsonResponse:
+    """两组 worker 都需有新鲜的调度与执行心跳；依赖错误同样返回 503。"""
+    health = worker_health_status()
+    if health["status"] == "stalled":
+        logger.warning("workers_probe_stalled", groups=health["groups"])
+    return JsonResponse(
+        {"status": health["status"]},
+        status=200 if health["status"] == "ok" else 503,
+    )
 
 
 @transaction.non_atomic_requests

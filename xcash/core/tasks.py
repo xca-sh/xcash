@@ -2,9 +2,22 @@ import structlog
 from celery import shared_task
 
 from common.decorators import singleton_task
+from config.worker_health import record_worker_health
 from core.monitoring import OperationalRiskService
 
 logger = structlog.get_logger()
+
+
+@shared_task(bind=True, ignore_result=True, soft_time_limit=8, time_limit=10)
+def report_business_worker_health(self):
+    """只在业务 worker 实际取得执行容量后更新心跳。"""
+    record_worker_health(self)
+
+
+@shared_task(bind=True, ignore_result=True, soft_time_limit=8, time_limit=10)
+def report_scan_worker_health(self):
+    """没有活跃链时也能验证扫描 worker 的执行能力。"""
+    record_worker_health(self)
 
 
 @shared_task(ignore_result=True, soft_time_limit=100, time_limit=110)

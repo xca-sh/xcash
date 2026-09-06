@@ -8,6 +8,7 @@ from django.views.generic import RedirectView
 from core.dashboard import operational_inspection_view
 from core.health import health_view
 from core.health import scanning_health_view
+from core.health import workers_health_view
 from invoices.epay.views import EpaySubmitView
 from invoices.views import payment_view
 
@@ -47,6 +48,7 @@ urlpatterns = [
     # 扫描存活探测，供外部 uptime 监控拉取。有意不参与 django 容器的 healthcheck：
     # 扫描停摆时 django 本身是健康的，混入会导致误杀。
     path("health/scanning", scanning_health_view, name="health-scanning"),
+    path("health/workers", workers_health_view, name="health-workers"),
     path("v1/", include("config.api_v1")),
     path("epay/submit.php", EpaySubmitView.as_view(), name="epay-submit"),
     # 支付前端 SPA：返回 index.html，由 React 根据 sys_no 渲染支付页

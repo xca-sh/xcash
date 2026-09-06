@@ -2,11 +2,15 @@ import os
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import before_task_publish
 from celery.signals import celeryd_after_setup
 
 from config.performance import get_int_default
 from config.periodic_tasks import PERIODIC_TASK_GROUPS
 from config.periodic_tasks import PERIODIC_TASK_QUEUES
+from config.periodic_tasks import WORKER_HEALTH_TASK_GROUPS
+from config.worker_health import WORKER_HEALTH_INTERVAL_SECONDS
+from config.worker_health import stamp_worker_health_probe
 
 # set the default Django settings module for the 'celery' program.
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.dev")
@@ -21,6 +25,7 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks()
+before_task_publish.connect(stamp_worker_health_probe)
 
 
 @celeryd_after_setup.connect
@@ -187,6 +192,10 @@ invoices_tasks = {
 # core app
 # ---------------------------
 core_tasks = {
+    **{
+        task: {"task": task, "schedule": WORKER_HEALTH_INTERVAL_SECONDS}
+        for task in WORKER_HEALTH_TASK_GROUPS
+    },
     "scan_operational_risks": {
         # 巡检 Webhook 卡单风险；告警先走结构化日志，后续再接外部通知渠道。
         "task": "core.tasks.scan_operational_risks",
