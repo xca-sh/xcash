@@ -9,18 +9,18 @@ requires-python = "==3.13.*"
 dependencies = [
     "web3==7.16.0",
     "base58==2.1.1",
-    "bip-utils==2.12.1",
-    "redis==8.0.1",
-    "hiredis==3.4.0",
+    "bip-utils==2.12.2",
+    "redis==8.1.0",
+    "hiredis==3.4.1",
     "cryptography==48.0.1",
     "argon2-cffi==25.1.0",
     "shortuuid==1.0.13",
     "httpx==0.28.1",
     # Django
-    "django==5.2.16",
+    "django==5.2.17",
     "django-environ==0.14.0",
-    "django-unfold==0.102.0",
-    "djangorestframework==3.17.1",
+    "django-unfold==0.104.1",
+    "djangorestframework==3.18.0",
     "django-redis==7.0.0",
     "django-cors-headers==4.9.0",
     "django-smart-ratelimit[redis]==4.12.1",
@@ -29,7 +29,7 @@ dependencies = [
     "django-celery-results==2.6.0",
     # Logging
     "structlog==26.1.0",
-    "gunicorn==26.0.0",
+    "gunicorn==26.2.0",
     # 迁移文件在模块顶层 import IgnoreMigration，production migrate 必须能加载该符号；
     # 仅 dev settings 把它加入 INSTALLED_APPS，production 装而不启用，运行时无副作用。
     "django-migration-linter==6.0.0",
