@@ -28,7 +28,7 @@ jobs:
       # 后续升级交给 dependabot 的 github-actions 分组跟进。
       # prune-cache 在 v9 把默认值从 true 改成了 false（缓存更大、恢复更快），
       # 这里显式设回 true 保持原有缓存体积，避免吃满仓库的 Actions 缓存配额。
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           prune-cache: true
@@ -91,7 +91,7 @@ jobs:
           fetch-depth: 0
 
       # 钉具体版本与 prune-cache 的理由同 lint job。
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           prune-cache: true
