@@ -1,9 +1,7 @@
-// src/components/OrderSummaryPanel.jsx
-// 订单摘要面板：移动端是顶部品牌横幅，桌面端是左侧固定的深色品牌侧栏。
 import { useEffect, useMemo, useState } from "react"
-import { Clock, Moon, Sun, ShieldCheck } from "lucide-react"
+import { Clock, Moon, Sun, ShieldCheck, Globe, ChevronDown } from "lucide-react"
 import LogoMark from "@/components/LogoMark"
-import { useI18n } from "@/hooks/useI18n"
+import { useI18n, SUPPORTED_LOCALES } from "@/hooks/useI18n"
 import { getInvoiceDisplayStatus } from "@/lib/invoiceStatus"
 import { getRemainingMs } from "@/lib/dateTime"
 import { cn } from "@/lib/utils"
@@ -97,9 +95,60 @@ function PanelIconButton({ onClick, label, title, children }) {
   )
 }
 
+function LanguageDropdown({ locale, setLocale }) {
+  const [open, setOpen] = useState(false)
+  const current = SUPPORTED_LOCALES.find((l) => l.code === locale) || SUPPORTED_LOCALES[0]
+
+  useEffect(() => {
+    if (!open) return
+    const close = (e) => {
+      if (!e.target.closest("[data-lang-dropdown]")) setOpen(false)
+    }
+    document.addEventListener("click", close)
+    return () => document.removeEventListener("click", close)
+  }, [open])
+
+  return (
+    <div className="relative" data-lang-dropdown>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Select language"
+        className="flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/80 transition-colors hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+      >
+        <Globe className="size-3.5" />
+        <span>{current.label}</span>
+        <ChevronDown className={cn("size-3 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1.5 min-w-[10rem] overflow-hidden rounded-lg border border-white/15 bg-[#1a1a2e] shadow-xl animate-in fade-in-0 zoom-in-95">
+          {SUPPORTED_LOCALES.map((l) => (
+            <button
+              key={l.code}
+              type="button"
+              onClick={() => {
+                setLocale(l.code)
+                setOpen(false)
+              }}
+              className={cn(
+                "flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-white/10",
+                l.code === locale
+                  ? "bg-white/10 text-white font-medium"
+                  : "text-white/70"
+              )}
+            >
+              <span className="text-xs font-bold leading-none w-5 opacity-70">{l.flag}</span>
+              <span>{l.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function OrderSummaryPanel({ invoice, isDark, toggleTheme }) {
   const { t, locale, setLocale } = useI18n()
-  const toggleLocale = () => setLocale(locale === "zh" ? "en" : "zh")
 
   const hasPayMethod = Boolean(invoice?.crypto && invoice?.pay_amount)
   const displayStatus = getInvoiceDisplayStatus(invoice)
@@ -125,13 +174,7 @@ function OrderSummaryPanel({ invoice, isDark, toggleTheme }) {
           <span className="text-sm font-semibold tracking-tight">Xcash</span>
         </a>
         <div className="flex items-center gap-2">
-          <PanelIconButton
-            onClick={toggleLocale}
-            label="Switch language"
-            title={locale === "zh" ? "Switch to English" : "切换到中文"}
-          >
-            {locale === "zh" ? "EN" : "中"}
-          </PanelIconButton>
+          <LanguageDropdown locale={locale} setLocale={setLocale} />
           <PanelIconButton onClick={toggleTheme} label="Toggle theme" title="Toggle theme">
             {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </PanelIconButton>
