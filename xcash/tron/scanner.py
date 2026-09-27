@@ -16,15 +16,16 @@ from django.utils import timezone
 from eth_utils import keccak
 from tron.client import TronClientError
 from tron.client import TronHttpClient
-from tron.codec import TronAddressCodec
 from tron.models import TronWatchCursor
 
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import VaultSlot
+from chains.registry import match_recipient_addresses
 from chains.service import MAX_TRANSFER_VALUE
 from chains.service import ObservedTransferPayload
 from chains.service import TransferService
+from common.tron_codec import TronAddressCodec
 from currencies.models import CryptoOnChain
 
 logger = structlog.get_logger()
@@ -677,9 +678,8 @@ class TronScanner:
             chain=chain,
             candidates=candidate_addresses,
         )
-        from invoices.models import DifferRecipientAddress
-
-        matched_addresses |= DifferRecipientAddress.matched_addresses_for_candidates(
+        # VaultSlot 之外的业务收款地址（如钱包直收地址）由业务模块登记，见 chains.registry。
+        matched_addresses |= match_recipient_addresses(
             chain=chain,
             candidates=candidate_addresses,
         )

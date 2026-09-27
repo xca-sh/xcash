@@ -330,7 +330,7 @@ class CryptoOnChain(models.Model):
             return
 
         if self.chain.type == ChainType.TRON:
-            from tron.codec import TronAddressCodec
+            from common.tron_codec import TronAddressCodec
 
             try:
                 if TronAddressCodec.is_valid_base58(self.address):

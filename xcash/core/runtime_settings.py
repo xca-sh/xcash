@@ -4,6 +4,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.core.cache import cache
+from django.core.exceptions import FieldDoesNotExist
 
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from core.models import SystemSettings
@@ -64,24 +65,21 @@ def get_webhook_event_timeout() -> timedelta:
 
 
 def get_vault_slot_collect_delay(chain_type: str) -> timedelta:
-    # 归集延迟按链类型取；系统参数单例尚未创建时，直接读取模型字段 default，
-    # 避免运行时再维护一份按链类型复制的默认值。
-    from chains.models import ChainType
-
-    field_by_type = {
-        ChainType.EVM: "evm_vault_slot_collect_delay_minutes",
-        ChainType.TRON: "tron_vault_slot_collect_delay_minutes",
-    }
+    # 归集延迟按链类型取，字段统一命名为 <链类型>_vault_slot_collect_delay_minutes。
+    # 按命名约定查字段而不是 import chains.ChainType 建映射表：平台参数层处于依赖
+    # 最底层，不能反向依赖链引擎（见 pyproject.toml 的 [tool.importlinter]）。
+    # 系统参数单例尚未创建时直接读取模型字段 default，避免再维护一份默认值。
+    field_name = f"{chain_type!s}_vault_slot_collect_delay_minutes"
     try:
-        field_name = field_by_type[chain_type]
-    except KeyError:
+        field = SystemSettings._meta.get_field(field_name)
+    except FieldDoesNotExist:
         raise ValueError(f"VaultSlot 归集不支持链类型: {chain_type}") from None
 
     system_settings = get_system_settings()
     if system_settings is not None:
         minutes = getattr(system_settings, field_name)
     else:
-        minutes = SystemSettings._meta.get_field(field_name).get_default()
+        minutes = field.get_default()
     return timedelta(minutes=minutes)
 
 

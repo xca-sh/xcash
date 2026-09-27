@@ -12,7 +12,7 @@ help:
 	@echo "  开发环境准备：无需 .env，dev 脚本自带本地默认值（127.0.0.1 + postgres/postgres）；"
 	@echo "                需要覆盖时再手写 .env（生产 .env 由 make init-env 生成）"
 	@echo "  make dev-sync              同步本地开发依赖（uv dev group）"
-	@echo "  make lint                  ruff + black 检查（不改文件）"
+	@echo "  make lint                  ruff + black + 模块分层检查（不改文件）"
 	@echo "  make fmt                   black 格式化"
 	@echo "  make typecheck             mypy 增量类型排查（存量错误多，非门禁）"
 	@echo "  make clean                 清理本地缓存产物（pycache / mypy / ruff / pytest / staticfiles）"
@@ -57,6 +57,7 @@ dev-sync:
 lint:
 	uv run ruff check .
 	uv run black --check .
+	PYTHONPATH=xcash uv run lint-imports
 
 fmt:
 	uv run black .

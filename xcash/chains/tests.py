@@ -3,6 +3,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.core import checks
+from django.core.exceptions import ImproperlyConfigured
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db import transaction
@@ -13,6 +14,7 @@ from django.utils import timezone
 from web3 import Web3
 
 from chains.adapters import TxCheckStatus
+from chains.checks import chain_registry_check
 from chains.constants import ChainCode
 from chains.constants import ChainType
 from chains.models import Address
@@ -31,6 +33,8 @@ from chains.models import VaultSlotBalance
 from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.models import Wallet
+from chains.registry import ChainFamily
+from chains.registry import register_chain_family
 from chains.tasks import process_transfer
 from chains.tests_fixtures import make_evm_chain
 from currencies.models import Crypto
@@ -2009,3 +2013,104 @@ class ReapStaleConfirmingTransfersTests(TestCase):
 
         self.assertEqual(reaped, 0)
         self.assertTrue(Transfer.objects.filter(pk=transfer.pk).exists())
+
+
+class TransferHandlerRegistryTests(TestCase):
+    """chains 经注册表把入账交给业务处理器；装配缺失时必须失败，不能静默吞掉入账。"""
+
+    def setUp(self):
+        self.crypto = Crypto.objects.create(
+            name="Registry Coin",
+            symbol="RGC",
+            coingecko_id="registry-coin",
+        )
+        self.chain = make_evm_chain(code=ChainCode.Ethereum)
+        self.transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=100,
+            block_hash="0x" + "21" * 32,
+            hash="0x" + "22" * 32,
+            crypto=self.crypto,
+            from_address=Web3.to_checksum_address("0x" + "23" * 20),
+            to_address=Web3.to_checksum_address("0x" + "24" * 20),
+            value=Decimal("1000000"),
+            amount=Decimal("1"),
+            timestamp=1_700_000_020,
+            datetime=timezone.now(),
+        )
+
+    def test_process_without_handlers_keeps_transfer_unprocessed(self):
+        # 没有任何处理器时若照常标记已处理，这笔入账将永远不会再被匹配。
+        with (
+            patch.dict("chains.registry._transfer_handlers", clear=True),
+            self.assertRaises(ImproperlyConfigured),
+        ):
+            self.transfer.process()
+
+        self.transfer.refresh_from_db()
+        self.assertIsNone(self.transfer.processed_at)
+
+    @patch("deposits.service.DepositService.try_match_deposit_transfer")
+    @patch("invoices.service.InvoiceService.try_match_invoice")
+    def test_process_stops_at_first_matching_handler(
+        self, match_invoice_mock, match_deposit_mock
+    ):
+        match_invoice_mock.return_value = True
+
+        self.transfer.process()
+
+        match_invoice_mock.assert_called_once()
+        match_deposit_mock.assert_not_called()
+        self.transfer.refresh_from_db()
+        self.assertIsNotNone(self.transfer.processed_at)
+
+    @patch("deposits.service.DepositService.try_match_deposit_transfer")
+    @patch("invoices.service.InvoiceService.try_match_invoice")
+    def test_process_falls_through_to_deposit_when_invoice_does_not_match(
+        self, match_invoice_mock, match_deposit_mock
+    ):
+        match_invoice_mock.return_value = False
+        match_deposit_mock.return_value = True
+
+        self.transfer.process()
+
+        match_invoice_mock.assert_called_once()
+        match_deposit_mock.assert_called_once()
+
+    def test_confirm_classified_transfer_without_handler_rolls_back(self):
+        Transfer.objects.filter(pk=self.transfer.pk).update(type=TransferType.Deposit)
+        self.transfer.refresh_from_db()
+
+        with (
+            patch.dict("chains.registry._transfer_handlers", clear=True),
+            self.assertRaises(ImproperlyConfigured),
+        ):
+            self.transfer.confirm()
+
+        self.transfer.refresh_from_db()
+        self.assertEqual(self.transfer.status, TransferStatus.CONFIRMING)
+
+    def test_conflicting_chain_family_registration_is_rejected(self):
+        with (
+            patch.dict("chains.registry._chain_families"),
+            self.assertRaises(ImproperlyConfigured),
+        ):
+            register_chain_family(
+                ChainFamily(
+                    chain_type=ChainType.EVM,
+                    adapter_class=TxCheckStatus,
+                    vault_slot_backend=object(),
+                )
+            )
+
+    def test_registry_check_reports_missing_registrations(self):
+        with (
+            patch.dict("chains.registry._chain_families", clear=True),
+            patch.dict("chains.registry._transfer_handlers", clear=True),
+        ):
+            errors = chain_registry_check()
+
+        self.assertEqual(
+            {error.id for error in errors},
+            {"chains.E002", "chains.E003"},
+        )

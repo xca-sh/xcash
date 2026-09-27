@@ -68,10 +68,11 @@ def _selector(signature: str) -> str:
 class VaultSlotCodecTests(SimpleTestCase):
     def test_predict_uses_tron_create2_prefix_0x41(self):
         from eth_utils import keccak
-        from tron.codec import TronAddressCodec
         from tron.contracts_codec import build_tron_vault_slot_init_code
         from tron.contracts_codec import predict_tron_vault_slot_address
         from tron.contracts_codec import tron_address_to_20_bytes
+
+        from common.tron_codec import TronAddressCodec
 
         factory = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
         implementation = "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb"
@@ -842,7 +843,7 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
         fee_limit: int = 120_000,
         raw_data_hex: str = "0a02abcd",
     ) -> dict:
-        from tron.codec import TronAddressCodec
+        from common.tron_codec import TronAddressCodec
 
         contract_address = contract_address or "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb"
         owner_value = (
@@ -1518,7 +1519,7 @@ class TronTxTaskSimulationRevertTests(TestCase):
         }
 
     def unsigned_transaction(self) -> dict:
-        from tron.codec import TronAddressCodec
+        from common.tron_codec import TronAddressCodec
 
         raw_data_hex = "0a02abcd"
         raw_data = {
@@ -1922,8 +1923,9 @@ class TronScannerTests(TestCase):
         contract_address: str | None = None,
     ) -> dict:
         """构造 TransactionInfo.log 中一条 raw TVM TRC20 Transfer 日志。"""
-        from tron.codec import TronAddressCodec
         from tron.scanner import TRC20_TRANSFER_TOPIC0_HEX
+
+        from common.tron_codec import TronAddressCodec
 
         def address_topic(base58: str) -> str:
             return "0" * 24 + TronAddressCodec.base58_to_hex41(base58)[2:]
@@ -2717,8 +2719,9 @@ class TronScannerTests(TestCase):
     def test_parse_native_transfer_accepts_transfer_contract_skips_others(self):
         # 原生 TRX 解析核心：合法 TransferContract→入账事件；非 TransferContract/执行失败/
         # 金额非正一律跳过。hex41 地址须正确还原为收款 base58 地址。
-        from tron.codec import TronAddressCodec
         from tron.scanner import TronScanner
+
+        from common.tron_codec import TronAddressCodec
 
         to_hex = TronAddressCodec.base58_to_hex41(self.watch_address)
         from_hex = TronAddressCodec.base58_to_hex41(self.sender_address)
@@ -2772,8 +2775,9 @@ class TronScannerTests(TestCase):
         enqueue_processing_mock,
     ):
         # 端到端：块内一笔打给收款地址的原生 TRX TransferContract → 落库一条 TRX Transfer。
-        from tron.codec import TronAddressCodec
         from tron.scanner import TronScanner
+
+        from common.tron_codec import TronAddressCodec
 
         VaultSlot.objects.create(
             chain=self.chain,
@@ -2817,8 +2821,9 @@ class TronScannerTests(TestCase):
         client_cls,
         enqueue_processing_mock,
     ):
-        from tron.codec import TronAddressCodec
         from tron.scanner import TronScanner
+
+        from common.tron_codec import TronAddressCodec
 
         VaultSlot.objects.create(
             chain=self.chain,

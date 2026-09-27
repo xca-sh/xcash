@@ -6,12 +6,12 @@ from django.db.models import Q
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from shortuuid.django_fields import ShortUUIDField
-from tron.codec import TronAddressCodec
 from web3 import Web3
 
 from chains.models import ChainType
 from common.consts import UPPER_ALPHABET
 from common.fields import AddressField
+from common.tron_codec import TronAddressCodec
 
 
 class InvoiceReceivingMode(models.TextChoices):

@@ -18,9 +18,11 @@ from chains.models import ConfirmMode
 from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.models import VaultSlot
+from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.service import ChainService
 from chains.service import TransferService
+from chains.vault_slots import schedule_collect_for_slot
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from common.saas_callback import CallbackEvent
@@ -733,7 +735,7 @@ class InvoiceService:
             address=invoice.pay_address,
         ).exists():
             try:
-                VaultSlot.schedule_collect_for_invoice(invoice.pk)
+                InvoiceService.schedule_collect_for_invoice(invoice.pk)
             except Exception:
                 logger.exception(
                     "调度 Invoice VaultSlot 归集任务失败",
@@ -754,3 +756,40 @@ class InvoiceService:
             chain=invoice.chain.code,
             pay_address=invoice.pay_address,
         )
+
+    @staticmethod
+    def schedule_collect_for_invoice(
+        invoice_pk: int,
+    ) -> VaultSlotCollectSchedule | None:
+        """按账单收款地址定位其 VaultSlot，登记（或复用）该槽位该币种的待归集计划。"""
+        invoice = Invoice.objects.select_related(
+            "project",
+            "chain",
+            "crypto",
+        ).get(pk=invoice_pk)
+
+        if (
+            invoice.chain_id is None
+            or invoice.crypto_id is None
+            or not invoice.pay_address
+        ):
+            return None
+
+        chain = invoice.chain
+        crypto = invoice.crypto
+
+        try:
+            slot = VaultSlot.objects.get(
+                chain=chain,
+                project=invoice.project,
+                usage=VaultSlotUsage.INVOICE,
+                address=invoice.pay_address,
+            )
+        except VaultSlot.DoesNotExist as exc:
+            raise RuntimeError(
+                "Invoice VaultSlot 不存在："
+                f"invoice_id={invoice.pk} chain={chain.code} "
+                f"project_id={invoice.project_id} address={invoice.pay_address}"
+            ) from exc
+
+        return schedule_collect_for_slot(chain=chain, crypto=crypto, slot=slot)

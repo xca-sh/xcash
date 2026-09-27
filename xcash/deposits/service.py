@@ -9,7 +9,9 @@ from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.models import VaultSlot
+from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
+from chains.vault_slots import schedule_collect_for_slot
 from common.saas_callback import CallbackEvent
 from common.saas_callback import SaasCallback
 from common.saas_callback import send_saas_callback
@@ -171,4 +173,34 @@ class DepositService:
         if not deposit.confirmed:
             raise DepositStatusError("Deposit transfer must be confirmed")
 
-        return VaultSlot.schedule_collect_for_deposit(deposit.pk) is not None
+        return DepositService.schedule_collect_for_deposit(deposit.pk) is not None
+
+    @staticmethod
+    def schedule_collect_for_deposit(
+        deposit_pk: int,
+    ) -> VaultSlotCollectSchedule | None:
+        """按充值定位其 VaultSlot，登记（或复用）该槽位该币种的待归集计划。"""
+        deposit = Deposit.objects.select_related(
+            "customer",
+            "transfer__chain",
+            "transfer__crypto",
+        ).get(pk=deposit_pk)
+        transfer = deposit.transfer
+        chain = transfer.chain
+        crypto = transfer.crypto
+
+        try:
+            slot = VaultSlot.objects.get(
+                chain=chain,
+                customer=deposit.customer,
+                usage=VaultSlotUsage.DEPOSIT,
+                address=transfer.to_address,
+            )
+        except VaultSlot.DoesNotExist as exc:
+            raise RuntimeError(
+                "VaultSlot 不存在："
+                f"deposit_id={deposit.pk} chain={chain.code} "
+                f"customer_id={deposit.customer_id} address={transfer.to_address}"
+            ) from exc
+
+        return schedule_collect_for_slot(chain=chain, crypto=crypto, slot=slot)

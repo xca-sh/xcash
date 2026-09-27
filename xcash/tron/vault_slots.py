@@ -6,6 +6,8 @@ from tron.intents import build_vault_slot_collect_intent
 from tron.intents import build_vault_slot_deploy_intent
 from tron.models import TronTxTask
 
+from chains.constants import TRON_VAULT_SLOT_CONTRACT_ADDRESSES
+from chains.constants import VaultSlotContractAddresses
 from chains.models import AddressUsage
 from chains.models import Chain
 from chains.models import ChainType
@@ -23,6 +25,14 @@ def collect_token_address(*, crypto, chain: Chain) -> str:
     if crypto.is_native:
         return NATIVE_COLLECT_TOKEN_ADDRESS
     return crypto.address(chain)
+
+
+def contract_addresses(chain: Chain) -> VaultSlotContractAddresses:
+    """Tron / TVM 的 VaultSlot 基础合约按网络独立部署，按链 code 取，避免主网与 Nile 混用。"""
+    try:
+        return TRON_VAULT_SLOT_CONTRACT_ADDRESSES[chain.code]
+    except KeyError as exc:
+        raise RuntimeError(f"链 {chain.code} 未登记 Tron VaultSlot 合约地址") from exc
 
 
 def predict_address(*, chain: Chain, vault: str, salt: bytes) -> str:

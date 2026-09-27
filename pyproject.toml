@@ -61,6 +61,8 @@ dev = [
     "django-coverage-plugin==3.2.2",
     "pytest-django==4.12.0",
     "vulture==2.16",
+    # 模块分层契约检查（见下方 [tool.importlinter]），CI 门禁之一。
+    "import-linter==2.15",
 ]
 production = [
     "psycopg[c]==3.3.4",
@@ -137,6 +139,77 @@ ignore_errors = true
 # （mypy 报 INTERNAL ERROR）。test settings 用 os.environ.setdefault 自带全部默认值，
 # 无需任何环境变量即可导入，故是唯一能让 mypy 开箱可用的选择。
 django_settings_module = "config.settings.test"
+
+# ==== import-linter ====
+# 模块分层契约：上层可以依赖下层，下层不得反向依赖上层。同一行里用 | 分隔的模块
+# 互相独立（不得互相 import），用 : 分隔的可以互相 import。函数内延迟 import 同样
+# 计入（这正是循环依赖最常藏身的地方）；仅 TYPE_CHECKING 下的类型导入不计入。
+# 运行：make lint（CI 的 lint job 同步执行）。各 app 以顶层包形式位于 xcash/ 下，
+# 必须带 PYTHONPATH=xcash 才能被解析到。
+[tool.importlinter]
+root_packages = [
+    "aml",
+    "chains",
+    "common",
+    "core",
+    "currencies",
+    "deposits",
+    "evm",
+    "invoices",
+    "projects",
+    "saas_api",
+    "stress",
+    "tron",
+    "users",
+    "webhooks",
+]
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "模块分层：依赖只能自上而下"
+type = "layers"
+layers = [
+    # 入口与运维聚合层：SaaS 控制面 API、压测工具、后台看板 / 巡检 / 初始化，可依赖一切。
+    "saas_api : stress : core.admin : core.dashboard : core.dashboard_metrics : core.default_data : core.health : core.management : core.monitoring : core.tasks",
+    # 业务层：账单、充值。
+    "invoices | deposits",
+    # 业务支撑层：商户项目、AML、后台用户。
+    "projects | aml | users",
+    # 链族实现：在各自 AppConfig.ready() 里向 chains.registry 登记。
+    "evm | tron",
+    # 链引擎内核与币种目录（Transfer ↔ Crypto、CryptoOnChain ↔ Chain 在模型层互相引用）。
+    "chains : currencies",
+    # 出站投递基础设施：商户 Webhook。
+    "webhooks",
+    # 通用基础组件。
+    "common",
+    # 平台参数：SystemSettings / SystemWallet 模型与运行时参数读取。core 包内的其余模块
+    # 属于最上层；包按模块分属两层，是因为模型迁移出 core 需要跨部署的数据迁移，收益不抵风险。
+    "core.runtime_settings : core.models",
+]
+ignore_imports = [
+    # 测试可以跨层组装夹具。平铺的测试模块无法用通配符表达（通配符只能替换整段模块名），需逐个登记。
+    "**.tests -> **",
+    "**.tests.** -> **",
+    "chains.test_keys -> **",
+    "chains.tests_constants -> **",
+    "chains.tests_fixtures -> **",
+    "chains.tests_models_refactor -> **",
+    # ---- 以下为存量例外：待消化，新代码不得效仿。消化后删除对应行（残留行会让检查报错）。----
+    # AML 筛查结果直接回写账单 / 充值；应改为业务层消费筛查结果。
+    "aml.service -> invoices.models",
+    "aml.service -> deposits.models",
+    # 商户项目校验收款模式时直接查询账单侧的钱包直收地址 / 易支付商户。
+    "projects.models -> invoices.models",
+    "projects.service -> invoices.models",
+    # Django admin 是展示组合层，按页面需要跨层取数。
+    "projects.admin -> invoices.models",
+    "webhooks.admin -> core.monitoring",
+    # HTTP 签名鉴权中间件按 appid 解析商户项目，本属入口层，物理上仍在 common。
+    "common.middlewares -> projects.models",
+    # TVM 与 EVM 复用同一份 VaultSlot 合约字节码构造。
+    "tron.contracts_codec -> evm.contracts_codec",
+]
 
 # ==== black ====
 # 本项目唯一的格式化器。line-length 不配置：black 默认 88，与 [tool.ruff] 一致。

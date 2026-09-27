@@ -255,7 +255,7 @@ class CryptoOnChainImmutabilityTests(TestCase):
         self.assertEqual(mapping.address, Web3.to_checksum_address(raw_address))
 
     def test_tron_hex41_contract_address_is_normalized_to_base58(self):
-        from tron.codec import TronAddressCodec
+        from common.tron_codec import TronAddressCodec
 
         tron = Chain.objects.create(
             code=ChainCode.Tron,

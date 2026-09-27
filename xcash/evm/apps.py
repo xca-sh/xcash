@@ -10,6 +10,9 @@ class EvmConfig(AppConfig):
 
     def ready(self):
         import evm.signals  # noqa: F401, PLC0415
+        from evm import chain_hooks  # noqa: PLC0415
+
+        chain_hooks.register()
 
         post_migrate.connect(
             _install_db_triggers_after_migrate,

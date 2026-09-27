@@ -12,8 +12,9 @@ from django.db.models import Max
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from tron.codec import TronAddressCodec
 from web3 import Web3
+
+from common.tron_codec import TronAddressCodec
 
 logger = structlog.get_logger()
 

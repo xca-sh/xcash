@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from chains.models import Chain
+from chains.registry import get_chain_family
 from chains.types import AddressStr
 from currencies.models import Crypto
 
@@ -82,16 +83,13 @@ class AdapterInterface(ABC):
 
 
 class AdapterFactory:
-    # 各链适配器在首次请求时懒加载，避免类体级别导入产生启动时强依赖。
+    # 各链族在 AppConfig.ready() 里把适配器登记到 chains.registry，这里只按链类型查表，
+    # chains 因此不再反向 import evm / tron。
 
     @staticmethod
     def get_adapter(chain_type: str) -> AdapterInterface:
-        if chain_type == "evm":
-            from evm.adapter import EvmAdapter
-
-            return EvmAdapter()
-        if chain_type == "tron":
-            from tron.adapter import TronAdapter
-
-            return TronAdapter()
-        raise ValueError(f"Unsupported chain adapter: {chain_type}")
+        try:
+            family = get_chain_family(chain_type)
+        except ValueError:
+            raise ValueError(f"Unsupported chain adapter: {chain_type}") from None
+        return family.adapter_class()

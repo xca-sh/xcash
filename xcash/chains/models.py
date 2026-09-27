@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import environ
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
+from django.core.exceptions import ImproperlyConfigured
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db import models
@@ -24,11 +25,14 @@ from chains.constants import EVM_UNKNOWN_SOURCE_ADDRESS
 from chains.constants import NATIVE_COIN_COINGECKO_IDS
 from chains.constants import TRON_MAINNET_BASE_URL
 from chains.constants import TRON_TESTNET_BASE_URL
-from chains.constants import TRON_VAULT_SLOT_CONTRACT_ADDRESSES
 from chains.constants import ChainCode
 from chains.constants import ChainSpec
 from chains.constants import ChainType  # noqa: F401  re-export 给下游模块过渡使用
 from chains.constants import VaultSlotContractAddresses
+from chains.registry import get_chain_family
+from chains.registry import require_transfer_handler
+from chains.registry import require_transfer_handler_for_vault_slot_usage
+from chains.registry import transfer_handlers_in_match_order
 from common.fields import AddressField
 from common.fields import HashField
 from common.models import UndeletableModel
@@ -116,10 +120,10 @@ class Chain(models.Model):
                     "is_testnet",
                 }  # noqa
         self.full_clean()
+        # 包一层事务：链族在 post_save 上挂的配套数据（如 Tron 扫描游标，见
+        # tron.chain_hooks）与链配置同生同灭，任一失败整体回滚。
         with db_transaction.atomic():
-            result = super().save(*args, **kwargs)
-            self._sync_tron_scan_cursor()
-        return result
+            return super().save(*args, **kwargs)
 
     @property
     def spec(self) -> ChainSpec:
@@ -172,26 +176,9 @@ class Chain(models.Model):
         """本链 VaultSlot Factory / Implementation 基础合约地址。
 
         EVM 通过确定性 CREATE2 在所有 EVM 链上共享同一组地址；Tron / TVM 的部署地址
-        按网络独立维护，调用方必须带着具体 chain 获取，避免主网与 Nile 混用。
+        按网络独立维护。具体取值由各链族的 VaultSlot 后端提供（见 chains.registry）。
         """
-        if self.type == ChainType.EVM:
-            from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS  # noqa: PLC0415
-            from evm.constants import (
-                XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS,  # noqa: PLC0415
-            )
-
-            return VaultSlotContractAddresses(
-                factory=XCASH_VAULT_SLOT_FACTORY_ADDRESS,
-                implementation=XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS,
-            )
-        if self.type == ChainType.TRON:
-            try:
-                return TRON_VAULT_SLOT_CONTRACT_ADDRESSES[self.code]
-            except KeyError as exc:
-                raise RuntimeError(
-                    f"链 {self.code} 未登记 Tron VaultSlot 合约地址"
-                ) from exc
-        raise RuntimeError(f"链 {self.code} 不支持 VaultSlot 合约地址")
+        return get_chain_family(self.type).vault_slot_backend.contract_addresses(self)
 
     @property
     def confirm_block_count(self) -> int:
@@ -274,23 +261,6 @@ class Chain(models.Model):
                     % {"expected": self.chain_id, "actual": actual_chain_id}
                 }
             )
-
-    def _sync_tron_scan_cursor(self) -> None:
-        """活跃 Tron 链在配置层即持有按链唯一的扫描游标，避免依赖首次 beat 扫描显式创建。
-
-        游标只锚定区块进度、与具体资产解耦：扫描器每轮按本链全量
-        CryptoOnChain 逐块拉取，新增/下架 TRC20 或原生 TRX 不影响游标，
-        故这里无需再依赖 USDT 是否已配置。
-        """
-        if self.type != ChainType.TRON or not self.active:
-            return
-
-        from tron.models import TronWatchCursor  # noqa: PLC0415
-
-        TronWatchCursor.objects.get_or_create(
-            chain=self,
-            defaults={"last_scanned_block": 0, "enabled": True},
-        )
 
     def content(self):
         return {
@@ -1011,22 +981,6 @@ class VaultSlot(models.Model):
         return schedule_deploy(slot_pk)
 
     @staticmethod
-    def schedule_collect_for_deposit(
-        deposit_pk: int,
-    ) -> VaultSlotCollectSchedule | None:
-        from chains.vault_slots import schedule_collect_for_deposit
-
-        return schedule_collect_for_deposit(deposit_pk)
-
-    @staticmethod
-    def schedule_collect_for_invoice(
-        invoice_pk: int,
-    ) -> VaultSlotCollectSchedule | None:
-        from chains.vault_slots import schedule_collect_for_invoice
-
-        return schedule_collect_for_invoice(invoice_pk)
-
-    @staticmethod
     def schedule_collect_for_slot(
         *, chain: Chain, crypto, slot
     ) -> VaultSlotCollectSchedule | None:
@@ -1542,24 +1496,28 @@ class Transfer(models.Model):
         if self.processed_at:
             return
 
+        # 入账归属哪类业务由各业务模块登记的处理器决定（见 chains.registry）。
+        # 一个处理器都没登记说明进程启动装配不完整：必须抛错回滚，让本笔保持未处理、
+        # 由 fallback_process_transfer 重试，绝不能在没尝试任何匹配时就标记已处理。
+        handlers = transfer_handlers_in_match_order()
+        if not handlers:
+            raise ImproperlyConfigured("未登记任何入账业务处理器，拒绝处理 Transfer")
+
         # Transfer 只承载外部收款事实。若误落库为内部 TxTask 的 hash，直接跳过业务匹配，
         # 避免系统归集/部署等主动交易污染 Invoice / Deposit 入账状态。
         tx_task = TxTask.resolve_by_hash(chain=self.chain, tx_hash=self.hash)
         if tx_task is not None:
             initial_balance_slot = self.vault_slot_initial_native_balance_slot(tx_task)
             if initial_balance_slot is not None:
-                if initial_balance_slot.usage == VaultSlotUsage.INVOICE:
-                    from invoices.service import InvoiceService
-
-                    InvoiceService.try_match_vault_slot_initial_native_balance(
-                        transfer=self,
-                        slot=initial_balance_slot,
-                        payment_datetime=tx_task.created_at,
-                    )
-                elif initial_balance_slot.usage == VaultSlotUsage.DEPOSIT:
-                    from deposits.service import DepositService
-
-                    DepositService.try_match_deposit_transfer(self)
+                # 部署前已打进槽位的原生币，由槽位用途对应的业务认领。
+                handler = require_transfer_handler_for_vault_slot_usage(
+                    initial_balance_slot.usage
+                )
+                handler.try_match_initial_native_balance(
+                    self,
+                    slot=initial_balance_slot,
+                    payment_datetime=tx_task.created_at,
+                )
                 self._mark_processed()
                 return
             logger.warning(
@@ -1571,14 +1529,10 @@ class Transfer(models.Model):
             self._mark_processed()
             return
 
-        # 未命中内部任务的转账统一按外部收款逻辑逐一尝试匹配。
-        from deposits.service import DepositService
-        from invoices.service import InvoiceService
-
-        (
-            InvoiceService.try_match_invoice(self)
-            or DepositService.try_match_deposit_transfer(self)
-        )
+        # 未命中内部任务的转账按处理器登记的匹配顺序逐一尝试，先匹配者胜。
+        for handler in handlers:
+            if handler.try_match(self):
+                break
         self._mark_processed()
 
         if self.confirm_mode == ConfirmMode.QUICK:
@@ -1681,14 +1635,14 @@ class Transfer(models.Model):
         }
 
     def _dispatch_business_confirm(self) -> None:
-        """统一按已归类的业务类型分发确认动作，confirm() 专用。"""
-        from deposits.service import DepositService
-        from invoices.service import InvoiceService
+        """按已归类的业务类型交给对应业务处理器确认，confirm() 专用。
 
-        if self.type == TransferType.Invoice:
-            InvoiceService.confirm_invoice(self.invoice)
-        elif self.type == TransferType.Deposit:
-            DepositService.create_confirmed_deposit(self)
+        未归类的入账没有业务可推进；已归类却查不到处理器属于装配缺失，
+        require_transfer_handler 会抛错回滚本次确认，而不是静默丢掉业务推进。
+        """
+        if self.type == TransferType.Unmatched:
+            return
+        require_transfer_handler(self.type).confirm(self)
 
     def _mark_vault_slot_received(self) -> None:
         """确认后的转入事实才标记 VaultSlot 曾经收到过资金。"""

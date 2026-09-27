@@ -491,7 +491,7 @@ class InvoicePaymentSelectionTests(TestCase):
 
     @patch("invoices.service.send_saas_callback")
     @patch("invoices.service.WebhookService.create_event")
-    @patch("invoices.service.VaultSlot.schedule_collect_for_invoice")
+    @patch("invoices.service.InvoiceService.schedule_collect_for_invoice")
     def test_confirm_differ_invoice_does_not_schedule_collect(
         self,
         schedule_collect_mock,
@@ -2889,7 +2889,7 @@ class TryMatchContractInvoiceTest(TestCase, InvoiceTestMixin):
         self.assertEqual(self.invoice.transfer_id, transfer.pk)
         self.assertEqual(newer_invoice.status, InvoiceStatus.WAITING)
 
-    @patch("chains.models.VaultSlot.schedule_collect_for_invoice")
+    @patch("invoices.service.InvoiceService.schedule_collect_for_invoice")
     @patch("invoices.service.send_saas_callback")
     @patch("invoices.service.WebhookService.create_event")
     def test_confirm_contract_invoice_schedules_erc20_slot_collection(

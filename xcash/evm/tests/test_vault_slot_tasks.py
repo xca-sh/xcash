@@ -39,6 +39,7 @@ from currencies.models import Crypto
 from currencies.models import CryptoOnChain
 from currencies.models import Fiat
 from deposits.models import Deposit
+from deposits.service import DepositService
 from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS
 from evm.intents import DEFAULT_VAULT_SLOT_COLLECT_GAS
 from evm.intents import DEFAULT_VAULT_SLOT_DEPLOY_GAS
@@ -49,6 +50,7 @@ from evm.models import EvmTxTask
 from evm.tests._fixtures import make_evm_chain
 from invoices.models import Invoice
 from invoices.models import InvoiceStatus
+from invoices.service import InvoiceService
 from projects.models import Customer
 from projects.models import Project
 
@@ -849,7 +851,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch("chains.service.TransferService.enqueue_processing"),
             patch("chains.vault_slot_balances.refresh_vault_slot_balance_for_transfer"),
             patch(
-                "chains.models.VaultSlot.schedule_collect_for_invoice"
+                "invoices.service.InvoiceService.schedule_collect_for_invoice"
             ) as schedule_collect,
             patch("invoices.service.WebhookService.create_event"),
             patch("invoices.service.screen_invoice_aml.delay"),
@@ -1387,7 +1389,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         before = timezone.now()
 
         with address_patch:
-            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
 
         self.assertEqual(schedule.chain, self.chain)
         self.assertEqual(schedule.vault_slot, slot)
@@ -1458,7 +1460,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         )
 
         with self.patch_address_derivation():
-            schedule = VaultSlot.schedule_collect_for_invoice(invoice.pk)
+            schedule = InvoiceService.schedule_collect_for_invoice(invoice.pk)
 
         self.assertEqual(schedule.chain, self.chain)
         self.assertEqual(schedule.vault_slot, slot)
@@ -1492,7 +1494,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         )
 
         with self.patch_address_derivation():
-            schedule = VaultSlot.schedule_collect_for_invoice(invoice.pk)
+            schedule = InvoiceService.schedule_collect_for_invoice(invoice.pk)
 
         self.assertEqual(schedule.chain, self.chain)
         self.assertEqual(schedule.vault_slot, slot)
@@ -1505,10 +1507,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            existing = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            existing = DepositService.schedule_collect_for_deposit(deposit.pk)
 
         with address_patch, patch.object(EvmTxTask, "schedule") as schedule:
-            task = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            task = DepositService.schedule_collect_for_deposit(deposit.pk)
 
         self.assertEqual(task.pk, existing.pk)
         schedule.assert_not_called()
@@ -1520,10 +1522,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
         first_deposit = self._create_deposit(slot=slot, tx_hash_suffix="1")
         second_deposit = self._create_deposit(slot=slot, tx_hash_suffix="2")
         with address_patch:
-            existing = VaultSlot.schedule_collect_for_deposit(first_deposit.pk)
+            existing = DepositService.schedule_collect_for_deposit(first_deposit.pk)
 
         with address_patch, patch.object(EvmTxTask, "schedule") as schedule:
-            task = VaultSlot.schedule_collect_for_deposit(second_deposit.pk)
+            task = DepositService.schedule_collect_for_deposit(second_deposit.pk)
 
         self.assertEqual(task.pk, existing.pk)
         schedule.assert_not_called()
@@ -1544,7 +1546,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
@@ -1580,7 +1582,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
@@ -1614,7 +1616,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
         schedule.due_at = timezone.now() + timedelta(minutes=10)
         schedule.save(update_fields=["due_at", "updated_at"])
 
@@ -1688,7 +1690,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
@@ -1718,7 +1720,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
@@ -1748,7 +1750,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            schedule = VaultSlot.schedule_collect_for_deposit(first_deposit.pk)
+            schedule = DepositService.schedule_collect_for_deposit(first_deposit.pk)
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
@@ -1760,7 +1762,9 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ),
         ):
             VaultSlotCollectSchedule.execute_due()
-            new_schedule = VaultSlot.schedule_collect_for_deposit(second_deposit.pk)
+            new_schedule = DepositService.schedule_collect_for_deposit(
+                second_deposit.pk
+            )
 
         self.assertNotEqual(new_schedule.pk, schedule.pk)
         self.assertIsNone(new_schedule.tx_task)
@@ -1781,7 +1785,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            first = VaultSlot.schedule_collect_for_deposit(first_deposit.pk)
+            first = DepositService.schedule_collect_for_deposit(first_deposit.pk)
         first.due_at = timezone.now() - timedelta(seconds=1)
         first.save(update_fields=["due_at", "updated_at"])
 
@@ -1797,7 +1801,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             self.assertIsNotNone(first.tx_task_id)
             self.assertEqual(first.tx_task.status, TxTaskStatus.QUEUED)
 
-            second = VaultSlot.schedule_collect_for_deposit(second_deposit.pk)
+            second = DepositService.schedule_collect_for_deposit(second_deposit.pk)
         second.due_at = timezone.now() - timedelta(seconds=1)
         second.save(update_fields=["due_at", "updated_at"])
 
@@ -1841,8 +1845,8 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            first = VaultSlot.schedule_collect_for_deposit(first_deposit.pk)
-            second = VaultSlot.schedule_collect_for_deposit(second_deposit.pk)
+            first = DepositService.schedule_collect_for_deposit(first_deposit.pk)
+            second = DepositService.schedule_collect_for_deposit(second_deposit.pk)
         for schedule in (first, second):
             schedule.due_at = timezone.now() - timedelta(seconds=1)
             schedule.save(update_fields=["due_at", "updated_at"])
@@ -1884,7 +1888,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
@@ -1918,7 +1922,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
@@ -1943,7 +1947,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
@@ -1965,7 +1969,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         slot = self._create_vault_slot()
         deposit = self._create_deposit(slot=slot, crypto=self.chain.native_coin)
 
-        schedule = VaultSlot.schedule_collect_for_deposit(deposit.pk)
+        schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
 
         self.assertEqual(schedule.chain, self.chain)
         self.assertEqual(schedule.vault_slot, slot)

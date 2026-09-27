@@ -8,6 +8,7 @@ from django.core.cache import cache
 from chains.models import Chain
 from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
+from chains.registry import match_recipient_addresses
 from currencies.models import CryptoOnChain
 
 logger = structlog.get_logger()
@@ -105,15 +106,14 @@ def load_owned_addresses_for_candidates(
         chain=chain,
         candidates=candidates - vault_slot_addresses,
     )
-    from invoices.models import DifferRecipientAddress
-
-    differ_addresses: set[str] = set()
+    # VaultSlot 之外的业务收款地址（如钱包直收地址）由业务模块登记，见 chains.registry。
+    business_addresses: set[str] = set()
     for candidate_chunk in chunk_addresses(candidates):
-        differ_addresses |= DifferRecipientAddress.matched_addresses_for_candidates(
+        business_addresses |= match_recipient_addresses(
             chain=chain,
             candidates=candidate_chunk,
         )
-    return frozenset(vault_slot_addresses | differ_addresses)
+    return frozenset(vault_slot_addresses | business_addresses)
 
 
 def ensure_cross_chain_deposit_slots(

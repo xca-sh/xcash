@@ -221,12 +221,14 @@ class SystemWallet(models.Model):
         if system_wallet is not None:
             return system_wallet
 
-        from chains.models import Wallet
+        # 经外键元数据取 chains.Wallet：core.models 是依赖最底层的平台模型，
+        # 不能反向 import 链引擎；这条依赖本就由 wallet 外键在模型层声明。
+        wallet_model = cls._meta.get_field("wallet").related_model
 
         try:
             with transaction.atomic():
                 # Wallet.generate() 在主系统内部生成并加密助记词，密钥材料不出系统。
-                wallet = Wallet.generate()
+                wallet = wallet_model.generate()
                 return cls.objects.create(wallet=wallet)
         except IntegrityError:
             return cls.objects.select_related("wallet").get(singleton_key=1)

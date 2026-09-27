@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from tron.client import TronClientError
 from tron.client import TronHttpClient
-from tron.codec import TronAddressCodec
 from tron.intents import trc20_balance_of_parameter
 from tron.resources import decode_hex_text
 
 from chains.adapters import AdapterInterface
 from chains.adapters import TxCheckResult
 from chains.adapters import TxCheckStatus
+from common.tron_codec import TronAddressCodec
 
 
 class TronAdapter(AdapterInterface):

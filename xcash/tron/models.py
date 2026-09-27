@@ -12,7 +12,6 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from tron.client import TronClientError
 from tron.client import TronHttpClient
-from tron.codec import TronAddressCodec
 from tron.resources import TronResourceGuardError
 from tron.resources import TronSimulationRevertError
 from tron.resources import require_bandwidth_or_balance_for_signed_transaction
@@ -27,6 +26,7 @@ from chains.models import TxTaskType
 from common.fields import AddressField
 from common.fields import HashField
 from common.models import UndeletableModel
+from common.tron_codec import TronAddressCodec
 
 if TYPE_CHECKING:
     from tron.intents import TronTxIntent

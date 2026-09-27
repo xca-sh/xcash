@@ -3,6 +3,7 @@ from __future__ import annotations
 import structlog
 from web3 import Web3
 
+from chains.constants import VaultSlotContractAddresses
 from chains.models import AddressUsage
 from chains.models import Chain
 from chains.models import ChainType
@@ -13,6 +14,8 @@ from evm.adapter import EvmAdapter
 from evm.constants import DEFAULT_VAULT_SLOT_COLLECT_GAS
 from evm.constants import VAULT_SLOT_COLLECT_GAS_CEILING
 from evm.constants import VAULT_SLOT_COLLECT_GAS_ESTIMATE_BUFFER_BPS
+from evm.constants import XCASH_VAULT_SLOT_FACTORY_ADDRESS
+from evm.constants import XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS
 from evm.contracts_codec import predict_xcash_vault_slot_address
 from evm.intents import build_vault_slot_collect_intent
 from evm.intents import build_vault_slot_deploy_intent
@@ -33,6 +36,14 @@ def collect_token_address(*, crypto, chain: Chain) -> str:
     if getattr(crypto, "pk", None) == chain.native_coin.pk:
         return NATIVE_COLLECT_TOKEN_ADDRESS
     return crypto.address(chain)
+
+
+def contract_addresses(chain: Chain) -> VaultSlotContractAddresses:
+    """EVM 通过确定性 CREATE2 在所有 EVM 链上共享同一组 VaultSlot 基础合约地址。"""
+    return VaultSlotContractAddresses(
+        factory=XCASH_VAULT_SLOT_FACTORY_ADDRESS,
+        implementation=XCASH_VAULT_SLOT_IMPLEMENTATION_ADDRESS,
+    )
 
 
 def predict_address(*, chain: Chain, vault: str, salt: bytes) -> str:

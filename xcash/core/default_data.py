@@ -4,12 +4,12 @@ import environ
 import structlog
 from django.conf import settings
 from django.db import transaction
-from tron.codec import TronAddressCodec
 from web3 import Web3
 
 from chains.constants import ChainCode
 from chains.constants import ChainType
 from chains.models import Chain
+from common.tron_codec import TronAddressCodec
 from currencies.models import Crypto
 from currencies.models import CryptoOnChain
 from currencies.models import Fiat

@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   lint:
-    name: Lint (ruff + black)
+    name: Lint (ruff + black + import-linter)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -44,6 +44,11 @@ jobs:
       # black 是本项目唯一的格式化器（见 .pre-commit-config.yaml）。
       - name: black
         run: uv run black --check --diff .
+
+      - name: 模块分层（import-linter）
+        run: uv run lint-imports
+        env:
+          PYTHONPATH: xcash
 
   test:
     name: Test (pytest + 迁移检查)

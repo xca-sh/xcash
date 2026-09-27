@@ -14,6 +14,8 @@ from chains.models import TxTaskStatus
 from chains.models import VaultSlot
 from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
+from chains.registry import VaultSlotBackend
+from chains.registry import get_chain_family
 
 logger = structlog.get_logger()
 
@@ -374,67 +376,6 @@ def mark_deployed_if_on_chain_for_task(tx_task: TxTask) -> bool:
     return mark_deployed(slot)
 
 
-def schedule_collect_for_deposit(deposit_pk: int) -> VaultSlotCollectSchedule | None:
-    from deposits.models import Deposit
-
-    deposit = Deposit.objects.select_related(
-        "customer",
-        "transfer__chain",
-        "transfer__crypto",
-    ).get(pk=deposit_pk)
-    transfer = deposit.transfer
-    chain = transfer.chain
-    crypto = transfer.crypto
-
-    try:
-        slot = VaultSlot.objects.get(
-            chain=chain,
-            customer=deposit.customer,
-            usage=VaultSlotUsage.DEPOSIT,
-            address=transfer.to_address,
-        )
-    except VaultSlot.DoesNotExist as exc:
-        raise RuntimeError(
-            "VaultSlot 不存在："
-            f"deposit_id={deposit.pk} chain={chain.code} "
-            f"customer_id={deposit.customer_id} address={transfer.to_address}"
-        ) from exc
-
-    return schedule_collect_for_slot(chain=chain, crypto=crypto, slot=slot)
-
-
-def schedule_collect_for_invoice(invoice_pk: int) -> VaultSlotCollectSchedule | None:
-    from invoices.models import Invoice
-
-    invoice = Invoice.objects.select_related(
-        "project",
-        "chain",
-        "crypto",
-    ).get(pk=invoice_pk)
-
-    if invoice.chain_id is None or invoice.crypto_id is None or not invoice.pay_address:
-        return None
-
-    chain = invoice.chain
-    crypto = invoice.crypto
-
-    try:
-        slot = VaultSlot.objects.get(
-            chain=chain,
-            project=invoice.project,
-            usage=VaultSlotUsage.INVOICE,
-            address=invoice.pay_address,
-        )
-    except VaultSlot.DoesNotExist as exc:
-        raise RuntimeError(
-            "Invoice VaultSlot 不存在："
-            f"invoice_id={invoice.pk} chain={chain.code} "
-            f"project_id={invoice.project_id} address={invoice.pay_address}"
-        ) from exc
-
-    return schedule_collect_for_slot(chain=chain, crypto=crypto, slot=slot)
-
-
 def schedule_collect_for_slot(
     *,
     chain: Chain,
@@ -523,13 +464,9 @@ def validate_supported_chain(chain: Chain) -> None:
         raise ValueError("VaultSlot 仅支持 EVM / Tron 链")
 
 
-def get_backend(chain: Chain):
-    if chain.type == ChainType.EVM:
-        from evm import vault_slots
-
-        return vault_slots
-    if chain.type == ChainType.TRON:
-        from tron import vault_slots
-
-        return vault_slots
-    raise ValueError("VaultSlot 仅支持 EVM / Tron 链")
+def get_backend(chain: Chain) -> VaultSlotBackend:
+    # 各链族在 AppConfig.ready() 里登记自己的 VaultSlot 后端（见 chains.registry）。
+    try:
+        return get_chain_family(chain.type).vault_slot_backend
+    except ValueError:
+        raise ValueError("VaultSlot 仅支持 EVM / Tron 链") from None

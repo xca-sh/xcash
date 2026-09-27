@@ -7,8 +7,8 @@ EVM-style predict 视图，因为 Solidity 汇编里的常规 CREATE2 预测使�
 from __future__ import annotations
 
 from eth_utils import keccak
-from tron.codec import TronAddressCodec
 
+from common.tron_codec import TronAddressCodec
 from evm.contracts_codec import build_xcash_vault_slot_init_code
 
 
