@@ -440,14 +440,17 @@ CELERY_TASK_SEND_SENT_EVENT = get_bool_default(
 
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_TASK_STORE_ERRORS_EVEN_IF_IGNORED = True
+# 子进程跑满 256 个任务即重建，这是子进程内存的唯一回收手段（高频队列几分钟一轮）。
+# 有意不设 CELERY_WORKER_MAX_MEMORY_PER_CHILD：billiard 用 getrusage().ru_maxrss 判定，
+# 该值是峰值 RSS 且含 fork 时继承的主进程页，子进程一出生就≈主进程 RSS。主进程会随运行
+# 时长缓慢增长，一旦逼近上限，每个子进程跑一个任务就被回收，反复 fork 并重建 DB/Redis/
+# RPC 连接（生产曾因 256MB 上限导致子进程仅存活数秒、CPU 持续高抖）。
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 256
 CELERY_WORKER_CONCURRENCY = get_int(
     "CELERY_WORKER_CONCURRENCY",
     "celery_worker_concurrency",
 )
 
-# Worker 内存管理配置
-CELERY_WORKER_MAX_MEMORY_PER_CHILD = 256 * 1024  # 256MB
 CELERY_WORKER_DISABLE_RATE_LIMITS = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_POOL_RESTARTS = True  # 允许 Worker 池重启
