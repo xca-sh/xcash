@@ -1,8 +1,11 @@
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 from saas_api.authentication import SaasTokenAuthentication
+from saas_api.invoice_status import DISPLAY_STATUS_FILTERS
 from saas_api.serializers.invoices import SaasInvoiceDetailSerializer
 
+from common.error_codes import ErrorCode
+from common.exceptions import APIError
 from common.permissions import RejectAll
 from invoices.models import Invoice
 
@@ -16,7 +19,7 @@ class SaasInvoiceViewSet(ModelViewSet):
     http_method_names = ["get", "head", "options"]
 
     def get_queryset(self):
-        return Invoice.objects.filter(
+        queryset = Invoice.objects.filter(
             project__appid=self.kwargs["project_appid"]
         ).select_related(
             "crypto",
@@ -26,6 +29,22 @@ class SaasInvoiceViewSet(ModelViewSet):
             "transfer__chain",
             "transfer__crypto",
         )
+        if self.action == "list":
+            queryset = self.filter_by_display_status(queryset)
+        return queryset
+
+    def filter_by_display_status(self, queryset):
+        """按商户可见状态筛选，口径与 stats/invoice-status-counts 一致。"""
+        status = self.request.query_params.get("status")
+        if not status:
+            return queryset
+        condition = DISPLAY_STATUS_FILTERS.get(status)
+        if condition is None:
+            raise APIError(
+                ErrorCode.PARAMETER_ERROR,
+                f"status 只能是 {' / '.join(DISPLAY_STATUS_FILTERS)}",
+            )
+        return queryset.filter(condition)
 
     def get_serializer_class(self):
         return SaasInvoiceDetailSerializer

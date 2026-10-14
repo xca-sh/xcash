@@ -13,7 +13,6 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.db.models import Count
-from django.db.models import Q
 from django.db.models import Sum
 from django.db.models.functions import TruncDate
 from django.utils import timezone
@@ -23,8 +22,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from saas_api.authentication import SaasTokenAuthentication
+from saas_api.invoice_status import DISPLAY_STATUS_FILTERS
 
-from chains.models import TransferStatus
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from invoices.models import Invoice
@@ -159,34 +158,14 @@ class StatsViewSet(GenericViewSet):
 
     @action(detail=False, methods=["get"], url_path="invoice-status-counts")
     def invoice_status_counts(self, request, project_appid=None):
-        """按商户可见状态统计项目全部账单数量。
-
-        「确认中」不是 Invoice 状态：链上付款被识别后只绑定 Transfer，账单仍停在
-        WAITING/EXPIRED，直到 Transfer.confirm() 才翻成 COMPLETED。因此把已绑定且
-        转账仍在确认中的待支付/已超时账单单独计为 confirming，并从 waiting/expired
-        中扣除，保证 waiting + confirming + completed + expired == total。
-        """
+        """按商户可见状态统计项目全部账单数量，口径见 saas_api.invoice_status。"""
         project = self._project()
 
-        confirming = Q(transfer__status=TransferStatus.CONFIRMING)
-        waiting = Q(status=InvoiceStatus.WAITING)
-        expired = Q(status=InvoiceStatus.EXPIRED)
         counts = Invoice.objects.filter(project=project).aggregate(
             total=Count("pk"),
-            waiting=Count("pk", filter=waiting),
-            expired=Count("pk", filter=expired),
-            completed=Count("pk", filter=Q(status=InvoiceStatus.COMPLETED)),
-            confirming_waiting=Count("pk", filter=waiting & confirming),
-            confirming_expired=Count("pk", filter=expired & confirming),
+            **{
+                name: Count("pk", filter=condition)
+                for name, condition in DISPLAY_STATUS_FILTERS.items()
+            },
         )
-
-        return Response(
-            {
-                "total": counts["total"],
-                "waiting": counts["waiting"] - counts["confirming_waiting"],
-                "confirming": counts["confirming_waiting"]
-                + counts["confirming_expired"],
-                "completed": counts["completed"],
-                "expired": counts["expired"] - counts["confirming_expired"],
-            }
-        )
+        return Response(counts)
