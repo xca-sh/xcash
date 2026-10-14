@@ -2,6 +2,7 @@
 
 - summary: 当期 + 上期两个窗口的 GMV 与账单数聚合
 - daily:   最近 N 天的每日 GMV 时序
+- invoice-status-counts: 账单按商户可见状态的计数（列表页状态页签用）
 
 窗口边界由调用方（SaaS）传入；xcash 只负责数据库聚合，不自行决定"本月"语义。
 """
@@ -12,6 +13,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.db.models import Count
+from django.db.models import Q
 from django.db.models import Sum
 from django.db.models.functions import TruncDate
 from django.utils import timezone
@@ -22,6 +24,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from saas_api.authentication import SaasTokenAuthentication
 
+from chains.models import TransferStatus
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from invoices.models import Invoice
@@ -153,3 +156,37 @@ class StatsViewSet(GenericViewSet):
             )
 
         return Response({"metric": "gmv", "days": days, "series": series})
+
+    @action(detail=False, methods=["get"], url_path="invoice-status-counts")
+    def invoice_status_counts(self, request, project_appid=None):
+        """按商户可见状态统计项目全部账单数量。
+
+        「确认中」不是 Invoice 状态：链上付款被识别后只绑定 Transfer，账单仍停在
+        WAITING/EXPIRED，直到 Transfer.confirm() 才翻成 COMPLETED。因此把已绑定且
+        转账仍在确认中的待支付/已超时账单单独计为 confirming，并从 waiting/expired
+        中扣除，保证 waiting + confirming + completed + expired == total。
+        """
+        project = self._project()
+
+        confirming = Q(transfer__status=TransferStatus.CONFIRMING)
+        waiting = Q(status=InvoiceStatus.WAITING)
+        expired = Q(status=InvoiceStatus.EXPIRED)
+        counts = Invoice.objects.filter(project=project).aggregate(
+            total=Count("pk"),
+            waiting=Count("pk", filter=waiting),
+            expired=Count("pk", filter=expired),
+            completed=Count("pk", filter=Q(status=InvoiceStatus.COMPLETED)),
+            confirming_waiting=Count("pk", filter=waiting & confirming),
+            confirming_expired=Count("pk", filter=expired & confirming),
+        )
+
+        return Response(
+            {
+                "total": counts["total"],
+                "waiting": counts["waiting"] - counts["confirming_waiting"],
+                "confirming": counts["confirming_waiting"]
+                + counts["confirming_expired"],
+                "completed": counts["completed"],
+                "expired": counts["expired"] - counts["confirming_expired"],
+            }
+        )

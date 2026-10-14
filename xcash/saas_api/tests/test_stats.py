@@ -7,7 +7,13 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+from django.utils import timezone
 
+from chains.constants import ChainCode
+from chains.models import Transfer
+from chains.models import TransferStatus
+from chains.tests_fixtures import make_evm_chain
+from currencies.models import Crypto
 from currencies.models import Fiat
 from invoices.models import Invoice
 from invoices.models import InvoiceStatus
@@ -269,3 +275,109 @@ class TestStatsDaily:
         assert by_date.get(expected_dates[0]) == Decimal("100.00")
         assert by_date.get(expected_dates[1]) == Decimal("50.50")
         assert by_date.get(expected_dates[2]) == Decimal("25.00")
+
+
+# ─── 状态计数 ─────────────────────────────────────────────────────────────────
+
+_hash_counter = itertools.count(1)
+
+
+def _bind_transfer(invoice, *, chain, crypto, status):
+    """给账单挂一笔链上转账，模拟「付款已识别、等待确认」或「已确认」。"""
+    now = timezone.now()
+    transfer = Transfer.objects.create(
+        chain=chain,
+        block=1,
+        block_hash="0x" + "aa" * 32,
+        hash=f"0x{next(_hash_counter):064x}",
+        crypto=crypto,
+        from_address="0x00000000000000000000000000000000000000B1",
+        to_address="0x00000000000000000000000000000000000000C1",
+        value=Decimal("1"),
+        amount=Decimal("1"),
+        status=status,
+        timestamp=int(now.timestamp()),
+        datetime=now,
+    )
+    Invoice.objects.filter(pk=invoice.pk).update(transfer=transfer)
+    return transfer
+
+
+@pytest.mark.django_db
+class TestInvoiceStatusCounts:
+    def _url(self, project):
+        return f"/saas/v1/projects/{project.appid}/stats/invoice-status-counts"
+
+    @pytest.fixture
+    def chain(self, db):
+        return make_evm_chain(code=ChainCode.Ethereum)
+
+    @pytest.fixture
+    def crypto(self, db):
+        return Crypto.objects.create(
+            name="Tether",
+            symbol="USDT",
+            prices={"USD": "1"},
+            coingecko_id="tether-stats-test",
+        )
+
+    def _invoice(self, project, status):
+        at = datetime(2026, 4, 5, tzinfo=UTC)
+        return _make_invoice(
+            project, worth="10", status=status, started_at=at, updated_at=at
+        )
+
+    def test_requires_auth(self, client, project):
+        resp = client.get(self._url(project))
+        assert resp.status_code in (401, 403)
+
+    def test_unknown_project_returns_error(self, client):
+        resp = client.get(
+            "/saas/v1/projects/XC-NOT-EXIST/stats/invoice-status-counts",
+            HTTP_AUTHORIZATION=AUTH,
+        )
+        assert resp.status_code != 200
+
+    def test_confirming_is_derived_from_bound_confirming_transfer(
+        self, client, project, chain, crypto
+    ):
+        # 纯待支付 ×2：未绑定转账
+        self._invoice(project, InvoiceStatus.WAITING)
+        self._invoice(project, InvoiceStatus.WAITING)
+        # 待支付但链上付款确认中 → 计入 confirming
+        _bind_transfer(
+            self._invoice(project, InvoiceStatus.WAITING),
+            chain=chain,
+            crypto=crypto,
+            status=TransferStatus.CONFIRMING,
+        )
+        # 已超时但截止前付的款仍在确认中 → 同样计入 confirming
+        _bind_transfer(
+            self._invoice(project, InvoiceStatus.EXPIRED),
+            chain=chain,
+            crypto=crypto,
+            status=TransferStatus.CONFIRMING,
+        )
+        # 纯已超时
+        self._invoice(project, InvoiceStatus.EXPIRED)
+        # 已完成且转账已确认
+        _bind_transfer(
+            self._invoice(project, InvoiceStatus.COMPLETED),
+            chain=chain,
+            crypto=crypto,
+            status=TransferStatus.CONFIRMED,
+        )
+        # 其他项目的账单不得计入
+        other = Project.objects.create(name="stats-other")
+        self._invoice(other, InvoiceStatus.WAITING)
+
+        resp = client.get(self._url(project), HTTP_AUTHORIZATION=AUTH)
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "total": 6,
+            "waiting": 2,
+            "confirming": 2,
+            "completed": 1,
+            "expired": 1,
+        }

@@ -18,7 +18,14 @@ class SaasInvoiceViewSet(ModelViewSet):
     def get_queryset(self):
         return Invoice.objects.filter(
             project__appid=self.kwargs["project_appid"]
-        ).select_related("crypto", "chain", "transfer")
+        ).select_related(
+            "crypto",
+            "chain",
+            # TransferSerializer 读 tx.chain / tx.crypto，confirm_progress 也要读
+            # transfer.chain；不预加载时列表每行各多两次查询。
+            "transfer__chain",
+            "transfer__crypto",
+        )
 
     def get_serializer_class(self):
         return SaasInvoiceDetailSerializer
