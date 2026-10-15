@@ -2031,6 +2031,10 @@ msgstr "Tron 钱包直收地址必须是 Base58 地址"
 msgid "钱包直收地址已被收款归集地址占用"
 msgstr "钱包直收地址已被收款归集地址占用"
 
+#: xcash/invoices/models.py:70
+msgid "该地址已被添加为钱包直收地址，不能重复添加"
+msgstr "该地址已被添加为钱包直收地址，不能重复添加"
+
 #: xcash/invoices/models.py:128 xcash/stress/models.py:102
 msgid "商户单号"
 msgstr "商户单号"

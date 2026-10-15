@@ -2092,6 +2092,10 @@ msgstr "Tron direct wallet address must be a Base58 address"
 msgid "钱包直收地址已被收款归集地址占用"
 msgstr "Direct wallet address is already used as a collection address"
 
+#: xcash/invoices/models.py:70
+msgid "该地址已被添加为钱包直收地址，不能重复添加"
+msgstr "This address has already been added as a direct wallet address"
+
 #: xcash/invoices/models.py:128 xcash/stress/models.py:102
 msgid "商户单号"
 msgstr "Merchant order number"

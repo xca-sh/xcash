@@ -63,7 +63,12 @@ class DifferRecipientAddress(models.Model):
         max_length=16,
         db_index=True,
     )
-    address = AddressField(_("地址"), unique=True)
+    address = AddressField(
+        _("地址"),
+        unique=True,
+        # 地址全局唯一（跨项目），默认文案“具有 地址 的 钱包直收地址 已存在”不可读，改为面向商户的提示。
+        error_messages={"unique": _("该地址已被添加为钱包直收地址，不能重复添加")},
+    )
     active = models.BooleanField(_("启用"), default=True)
     sort_order = models.PositiveIntegerField(_("排序序号"), default=0)
     created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
