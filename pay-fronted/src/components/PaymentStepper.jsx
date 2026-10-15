@@ -1,6 +1,6 @@
 // src/components/PaymentStepper.jsx
 import { useState, useEffect, useMemo, useRef, useCallback } from "react"
-import { AlertCircle, Loader2, TimerOff } from "lucide-react"
+import { AlertCircle, Loader2, RotateCw, TimerOff } from "lucide-react"
 import OrderSummaryPanel from "@/components/OrderSummaryPanel"
 import StepIndicator from "@/components/StepIndicator"
 import StepCompleted from "@/components/StepCompleted"
@@ -16,34 +16,21 @@ function ExpiredOrderCard() {
   const { t } = useI18n()
 
   return (
-    <div className="animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
-      <div className="glow-card overflow-hidden rounded-2xl border bg-card shadow-md">
-        {/* 头部：与收款卡同语言 —— 红色着色横幅 + 图标方块 + 状态胶囊 */}
-        <div className="flex items-center gap-3.5 border-b bg-gradient-to-br from-[#e5484d17] via-transparent to-transparent px-6 py-5 dark:from-[#ff5f5712]">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-destructive/10 ring-1 ring-destructive/30">
-            <TimerOff className="size-5 text-destructive" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold tracking-tight">{t("expired.orderExpired")}</h2>
-            <p className="mt-0.5 text-sm text-muted-foreground">{t("expired.contactMerchant")}</p>
-          </div>
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-destructive/30 bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
-            <span className="size-1.5 rounded-full bg-current" />
-            {t("invoice.status.expired")}
-          </span>
-        </div>
-
-        <div className="px-6 py-6">
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={() => window.location.reload()}
-          >
-            {t("expired.refreshPage")}
-          </Button>
-        </div>
+    <section className="overflow-hidden rounded-xl border bg-card shadow-xs animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
+      <div className="flex flex-col items-center px-6 pb-8 pt-10 text-center">
+        <span className="flex size-11 items-center justify-center rounded-full border bg-muted/60">
+          <TimerOff className="size-5 text-muted-foreground" />
+        </span>
+        <h2 className="mt-4 text-base font-medium tracking-tight">{t("expired.orderExpired")}</h2>
+        <p className="mt-1 text-[13px] text-muted-foreground">{t("expired.contactMerchant")}</p>
       </div>
-    </div>
+      <div className="border-t px-5 py-4 sm:px-6">
+        <Button variant="outline" className="w-full" onClick={() => window.location.reload()}>
+          <RotateCw className="size-3.5" />
+          {t("expired.refreshPage")}
+        </Button>
+      </div>
+    </section>
   )
 }
 
@@ -145,7 +132,7 @@ function PaymentStepper({
   const completedStep = isSingleMethod ? 2 : 3
 
   return (
-    <div className="checkout-backdrop min-h-svh bg-background">
+    <div className="min-h-svh bg-background">
       <div className="mx-auto flex min-h-svh max-w-6xl flex-col lg:flex-row">
         <OrderSummaryPanel invoice={invoice} isDark={isDark} toggleTheme={toggleTheme} />
 
@@ -161,7 +148,7 @@ function PaymentStepper({
             />
           )}
 
-          <main className="flex-1 px-4 pb-16 pt-6 sm:px-8 lg:pt-10">
+          <main className="flex-1 px-4 pb-16 pt-6 sm:px-8 lg:pt-8">
             <div className="mx-auto w-full max-w-xl">
 
               {isExpired && (
@@ -186,7 +173,7 @@ function PaymentStepper({
               )}
 
               {!isExpired && activeStep === sendStep && (
-                <div className="space-y-4 animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
+                <div className="space-y-5 animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
                   {paymentError && !hasPaymentMethod ? (
                     <Alert variant="destructive">
                       <AlertCircle />
@@ -194,8 +181,8 @@ function PaymentStepper({
                       <AlertDescription>{paymentError}</AlertDescription>
                     </Alert>
                   ) : isSelecting || (isSingleMethod && isWaiting && !hasPaymentMethod) ? (
-                    <div className="flex flex-col items-center gap-4 py-16">
-                      <Loader2 className="size-8 animate-spin text-primary" />
+                    <div className="flex flex-col items-center gap-3 py-20">
+                      <Loader2 className="size-5 animate-spin text-muted-foreground" />
                       <p className="text-sm text-muted-foreground">{t("payment.gettingPaymentInfo")}</p>
                     </div>
                   ) : (
@@ -224,16 +211,16 @@ function PaymentStepper({
             </div>
           </main>
 
-          {/* Footer */}
-          <footer className="px-4 pb-6 pt-2">
-            <div className="mx-auto flex max-w-xl items-center justify-center gap-2 text-xs text-muted-foreground">
-              <span>Powered by</span>
-              <a href="https://xca.sh" className="font-semibold text-brand-gradient hover:opacity-80">
+          <footer className="px-4 pb-8 pt-2">
+            <p className="text-center text-xs text-muted-foreground">
+              Powered by{" "}
+              <a
+                href="https://xca.sh"
+                className="font-medium text-foreground underline-offset-4 hover:underline"
+              >
                 Xcash
               </a>
-              <span className="text-border">|</span>
-              <span>Secure Crypto Payments</span>
-            </div>
+            </p>
           </footer>
         </div>
       </div>

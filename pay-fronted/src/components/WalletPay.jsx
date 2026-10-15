@@ -50,7 +50,7 @@ function WalletPay({ invoice, onBroadcast }) {
   // 已提交：只提示等待确认，绝不显示「已支付」；此时已不是备选项，独立展示。
   if (status === "submitted") {
     return (
-      <div className="flex items-center justify-center gap-2 rounded-lg bg-success-soft p-3 text-sm text-success">
+      <div className="flex items-center justify-center gap-2 rounded-lg border border-success-border bg-success-soft px-3 py-2.5 text-[13px] font-medium text-success">
         <CheckCircle2 className="size-4 shrink-0" />
         <span>{t("wallet.submitted")}</span>
       </div>
@@ -74,16 +74,9 @@ function WalletPay({ invoice, onBroadcast }) {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* 「或」分隔线：与上方手动转账区隔开，标明这是另一种支付方式。 */}
-      <div className="flex items-center gap-3">
-        <span className="h-px flex-1 bg-border" />
-        <span className="text-xs text-muted-foreground">{t("wallet.or")}</span>
-        <span className="h-px flex-1 bg-border" />
-      </div>
-
+    <div className="flex flex-col gap-2.5">
       {isBusy ? (
-        <Button className="w-full" disabled>
+        <Button size="lg" className="w-full" disabled>
           <Loader2 className="size-4 animate-spin" />
           {t(`wallet.${status}`)}
         </Button>
@@ -97,7 +90,7 @@ function WalletPay({ invoice, onBroadcast }) {
             <Button
               key={wallet.info.rdns}
               variant="outline"
-              className="w-full justify-start"
+              className="h-11 w-full justify-start"
               onClick={() => handlePick(wallet)}
             >
               {wallet.info.icon ? (
@@ -118,7 +111,7 @@ function WalletPay({ invoice, onBroadcast }) {
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          <Button className="w-full" onClick={handlePrimary}>
+          <Button size="lg" className="w-full" onClick={handlePrimary}>
             <Wallet className="size-4" />
             {t("wallet.payWithWallet")}
           </Button>

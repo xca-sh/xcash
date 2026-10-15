@@ -13,7 +13,7 @@ const STATUS_DOT = {
   waiting: "bg-[#7cb8ff]",
   confirming: "bg-[#7cb8ff]",
   finalizing: "bg-[#7cb8ff]",
-  completed: "bg-[#72e857]",
+  completed: "bg-[#adff85]",
   expired: "bg-[#ff5f57]",
 }
 

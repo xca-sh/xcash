@@ -1,4 +1,4 @@
-import { Check, Loader2, AlertCircle } from "lucide-react"
+import { Loader2, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { cn } from "@/lib/utils"
@@ -6,25 +6,13 @@ import TokenSelector from "@/components/TokenSelector"
 import ChainSelector from "@/components/ChainSelector"
 import { useI18n } from "@/hooks/useI18n"
 
-// 小节标题：序号圆点（已选 → 品牌色 + 勾，未选 → 描边数字）
-function SectionHeading({ done, number, title, desc, trailing, dimmed }) {
+// 小节标题：序号 + 标题 + 说明；未轮到的小节整体弱化
+function SectionHeading({ number, title, desc, dimmed }) {
   return (
-    <div className={cn("flex items-start gap-3", dimmed && "opacity-50")}>
-      <div
-        className={cn(
-          "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full transition-colors",
-          done
-            ? "bg-primary text-primary-foreground"
-            : "border bg-card text-[11px] font-bold text-muted-foreground"
-        )}
-      >
-        {done ? <Check className="size-3.5" /> : number}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-semibold tracking-tight">{title}</span>
-          {trailing}
-        </div>
+    <div className={cn("mb-3 flex items-baseline gap-2.5 transition-opacity", dimmed && "opacity-50")}>
+      <span className="font-mono text-xs tabular-nums text-muted-foreground">0{number}</span>
+      <div className="min-w-0">
+        <h3 className="text-sm font-medium">{title}</h3>
         <p className="mt-0.5 text-xs text-muted-foreground">{desc}</p>
       </div>
     </div>
@@ -45,51 +33,28 @@ function PaymentMethodSelector({
   const { t } = useI18n()
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* 页头 */}
-      <div className="space-y-1.5">
-        <h1 className="text-xl font-bold tracking-tight">{t("payment.selectMethod")}</h1>
-        <p className="text-sm text-muted-foreground">{t("payment.selectMethodDesc")}</p>
-      </div>
+    <section className="overflow-hidden rounded-xl border bg-card shadow-xs">
+      <header className="px-5 pt-5 sm:px-6 sm:pt-6">
+        <h2 className="text-[15px] font-medium leading-6 tracking-tight">{t("payment.selectMethod")}</h2>
+        <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">{t("payment.selectMethodDesc")}</p>
+      </header>
 
-      {/* Step 1: Token */}
-      <section className="flex flex-col gap-3.5">
-        <SectionHeading
-          done={Boolean(selectedCrypto)}
-          number={1}
-          title={t("payment.selectToken")}
-          desc={t("payment.selectTokenDesc")}
-          trailing={
-            selectedCrypto && (
-              <span className="rounded-full bg-brand-soft px-2.5 py-0.5 text-xs font-semibold text-brand">
-                {selectedCrypto}
-              </span>
-            )
-          }
-        />
+      <div className="px-5 py-6 sm:px-6">
+        <SectionHeading number={1} title={t("payment.selectToken")} desc={t("payment.selectTokenDesc")} />
         <TokenSelector
           availableMethods={availableMethods}
           selectedCrypto={selectedCrypto}
           onCryptoChange={onCryptoChange}
           disabled={isSelecting}
         />
-      </section>
+      </div>
 
-      {/* Step 2: Network */}
-      <section className="flex flex-col gap-3.5">
+      <div className="border-t px-5 py-6 sm:px-6">
         <SectionHeading
-          done={Boolean(selectedChain)}
           number={2}
           title={t("payment.selectNetwork")}
           desc={t("payment.selectNetworkDesc")}
-          dimmed={!selectedCrypto && !selectedChain}
-          trailing={
-            selectedChain && (
-              <span className="rounded-full bg-brand-soft px-2.5 py-0.5 text-xs font-semibold text-brand">
-                {selectedChain}
-              </span>
-            )
-          }
+          dimmed={!selectedCrypto}
         />
         <ChainSelector
           availableMethods={availableMethods}
@@ -98,33 +63,32 @@ function PaymentMethodSelector({
           onChainChange={onChainChange}
           disabled={isSelecting}
         />
-      </section>
+      </div>
 
-      {/* Loading */}
-      {isSelecting && (
-        <div className="flex items-center justify-center gap-2.5 rounded-xl border bg-card py-4">
-          <Loader2 className="size-4 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground">{t("payment.gettingPaymentInfo")}</p>
+      {(isSelecting || error || isEditing) && (
+        <div className="flex flex-col gap-3 border-t px-5 py-4 sm:px-6">
+          {isSelecting && (
+            <div className="flex items-center justify-center gap-2 py-1 text-[13px] text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              {t("payment.gettingPaymentInfo")}
+            </div>
+          )}
+
+          {error && !isSelecting && (
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {isEditing && !isSelecting && (
+            <Button variant="ghost" onClick={onCancelEdit} size="sm" className="w-full text-muted-foreground">
+              {t("common.cancel")}
+            </Button>
+          )}
         </div>
       )}
-
-      {/* Error */}
-      {error && !isSelecting && (
-        <Alert variant="destructive">
-          <AlertCircle />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {/* Cancel edit */}
-      {isEditing && !isSelecting && (
-        <div className="flex justify-end">
-          <Button variant="ghost" onClick={onCancelEdit} size="sm">
-            {t("common.cancel")}
-          </Button>
-        </div>
-      )}
-    </div>
+    </section>
   )
 }
 

@@ -1,9 +1,13 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --font-sans: "Geist Variable", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -16,6 +20,7 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-ink: var(--primary-ink);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
@@ -55,103 +60,106 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
+/* 与 xcash-saas 同一套主题：品牌黄绿 #ADFF85 只用于实心填充（按钮、选中项），上面配深色字；
+   文字、描边、细线一律用 primary-ink（浅色主题下压暗到可读亮度）；中性色为纯灰。 */
 :root {
-  /* 参考 waffo.ai：无彩色中性灰 + 高亮荧光绿，浅色主题保持干净纸面 */
   --radius: 0.5rem;
-  --background: #fafafa;
-  --foreground: #171717;
-  --card: #ffffff;
-  --card-foreground: #171717;
-  --popover: #ffffff;
-  --popover-foreground: #171717;
-  --primary: #0a934d;
-  --primary-foreground: #f2fdf5;
-  --secondary: #f5f5f5;
-  --secondary-foreground: #262626;
-  --muted: #f5f5f5;
-  --muted-foreground: #737373;
-  --accent: #e9f9ee;
-  --accent-foreground: #0a6a38;
-  --destructive: #e5484d;
-  --border: #e5e5e5;
-  --input: #e5e5e5;
-  --ring: #0a934d;
-  --chart-1: #fbbf24;
-  --chart-2: #7cb8ff;
-  --chart-3: var(--success);
-  --chart-4: var(--destructive);
-  --chart-5: var(--success);
-  --success: #16a34a;
-  --success-foreground: #f2fdf5;
-  --success-soft: #e8f9ee;
-  --success-border: #b7e6c6;
-  --info: #2578c8;
-  --info-soft: #e9f3fc;
-  --info-border: #bcd9f2;
-  --warning: #d97706;
-  --warning-soft: #fdf3e0;
-  --warning-border: #f3dcaa;
-  --brand: #0a934d;
-  --brand-foreground: #f2fdf5;
-  --brand-soft: #e8f9ee;
-  --brand-border: #b7e6c6;
-  --sidebar: #fafafa;
-  --sidebar-foreground: #171717;
-  --sidebar-primary: #171717;
-  --sidebar-primary-foreground: #fafafa;
-  --sidebar-accent: #f5f5f5;
-  --sidebar-accent-foreground: #171717;
-  --sidebar-border: #e5e5e5;
-  --sidebar-ring: #a3a3a3;
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.18 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0 0);
+  --primary: oklch(0.921 0.175 136.2);
+  --primary-foreground: oklch(0.18 0.03 136);
+  --primary-ink: oklch(0.5 0.15 136);
+  --secondary: oklch(0.95 0 0);
+  --secondary-foreground: oklch(0.18 0 0);
+  --muted: oklch(0.965 0 0);
+  --muted-foreground: oklch(0.48 0 0);
+  --accent: oklch(0.95 0 0);
+  --accent-foreground: oklch(0.18 0 0);
+  --destructive: oklch(0.55 0.19 25);
+  --border: oklch(0.915 0 0);
+  --input: oklch(0.9 0 0);
+  --ring: oklch(0.5 0.15 136);
+  --chart-1: oklch(0.6 0.17 136);
+  --chart-2: oklch(0.6 0.15 250);
+  --chart-3: oklch(0.72 0.14 75);
+  --chart-4: oklch(0.7 0 0);
+  --chart-5: oklch(0.86 0 0);
+  /* 成功色与主色文字色同值：品牌与成功只用一个绿，靠形态（实心 vs 浅底）区分 */
+  --success: oklch(0.5 0.15 136);
+  --success-foreground: oklch(1 0 0);
+  --success-soft: oklch(0.965 0.04 136);
+  --success-border: oklch(0.88 0.08 136);
+  --info: oklch(0.52 0.16 250);
+  --info-soft: oklch(0.965 0.015 250);
+  --info-border: oklch(0.88 0.04 250);
+  --warning: oklch(0.55 0.13 65);
+  --warning-soft: oklch(0.97 0.025 80);
+  --warning-border: oklch(0.88 0.06 80);
+  --brand: var(--primary);
+  --brand-foreground: var(--primary-foreground);
+  --brand-soft: var(--success-soft);
+  --brand-border: var(--success-border);
+  --sidebar: oklch(0 0 0);
+  --sidebar-foreground: oklch(0.9 0 0);
+  --sidebar-primary: oklch(0.921 0.175 136.2);
+  --sidebar-primary-foreground: oklch(0.18 0.03 136);
+  --sidebar-accent: oklch(0.22 0 0);
+  --sidebar-accent-foreground: oklch(0.98 0 0);
+  --sidebar-border: oklch(0.22 0 0);
+  --sidebar-ring: oklch(0.921 0.175 136.2);
 }
 
 .dark {
-  /* waffo 招牌深色：近纯黑底 + #72e857 荧光绿主行动色 */
-  --background: #0a0a0a;
-  --foreground: #fafafa;
-  --card: #141414;
-  --card-foreground: #fafafa;
-  --popover: #171717;
-  --popover-foreground: #fafafa;
-  --primary: #72e857;
-  --primary-foreground: #06310f;
-  --secondary: #1f1f1f;
-  --secondary-foreground: #e5e5e5;
-  --muted: #1f1f1f;
-  --muted-foreground: #a3a3a3;
-  --accent: #1a3a1d;
-  --accent-foreground: #adff85;
-  --destructive: #ff5f57;
-  --border: #262626;
-  --input: #333333;
-  --ring: #72e857;
-  --chart-1: #fbbf24;
-  --chart-2: #7cb8ff;
-  --chart-3: var(--success);
-  --chart-4: var(--destructive);
-  --chart-5: var(--success);
-  --success: #3dcf40;
-  --success-foreground: #06310f;
-  --success-soft: #14290f;
-  --success-border: #2b5423;
-  --info: #7cb8ff;
-  --info-soft: #16222e;
-  --info-border: #2c4257;
-  --warning: #fbbf24;
-  --warning-soft: #2b2110;
-  --warning-border: #57431f;
-  --brand: #72e857;
-  --brand-foreground: #06310f;
-  --brand-soft: #14290f;
-  --brand-border: #2b5423;
-  --sidebar: #0a0a0a;
-  --sidebar-foreground: #fafafa;
-  --sidebar-primary: #72e857;
-  --sidebar-primary-foreground: #06310f;
-  --sidebar-accent: #1f1f1f;
-  --sidebar-accent-foreground: #fafafa;
-  --sidebar-border: #262626;
-  --sidebar-ring: #737373;
+  --background: oklch(0.155 0 0);
+  --foreground: oklch(0.95 0 0);
+  --card: oklch(0.195 0 0);
+  --card-foreground: oklch(0.95 0 0);
+  --popover: oklch(0.215 0 0);
+  --popover-foreground: oklch(0.95 0 0);
+  --primary: oklch(0.921 0.175 136.2);
+  --primary-foreground: oklch(0.18 0.03 136);
+  --primary-ink: oklch(0.921 0.175 136.2);
+  --secondary: oklch(0.26 0 0);
+  --secondary-foreground: oklch(0.95 0 0);
+  --muted: oklch(0.235 0 0);
+  --muted-foreground: oklch(0.7 0 0);
+  --accent: oklch(0.28 0 0);
+  --accent-foreground: oklch(0.95 0 0);
+  --destructive: oklch(0.76 0.16 22);
+  --border: oklch(0.28 0 0);
+  --input: oklch(0.32 0 0);
+  --ring: oklch(0.921 0.175 136.2);
+  --chart-1: oklch(0.921 0.175 136.2);
+  --chart-2: oklch(0.84 0.12 235);
+  --chart-3: oklch(0.88 0.15 90);
+  --chart-4: oklch(0.55 0 0);
+  --chart-5: oklch(0.38 0 0);
+  --success: oklch(0.921 0.175 136.2);
+  --success-foreground: oklch(0.18 0.03 136);
+  --success-soft: oklch(0.24 0.04 136);
+  --success-border: oklch(0.36 0.07 136);
+  --info: oklch(0.84 0.12 235);
+  --info-soft: oklch(0.23 0.025 240);
+  --info-border: oklch(0.35 0.05 240);
+  --warning: oklch(0.88 0.15 90);
+  --warning-soft: oklch(0.24 0.035 85);
+  --warning-border: oklch(0.37 0.06 85);
+  --brand: var(--primary);
+  --brand-foreground: var(--primary-foreground);
+  --brand-soft: var(--success-soft);
+  --brand-border: var(--success-border);
+  --sidebar: oklch(0 0 0);
+  --sidebar-foreground: oklch(0.9 0 0);
+  --sidebar-primary: oklch(0.921 0.175 136.2);
+  --sidebar-primary-foreground: oklch(0.18 0.03 136);
+  --sidebar-accent: oklch(0.2 0 0);
+  --sidebar-accent-foreground: oklch(0.98 0 0);
+  --sidebar-border: oklch(0.2 0 0);
+  --sidebar-ring: oklch(0.921 0.175 136.2);
 }
 
 @layer base {
@@ -159,29 +167,15 @@
     @apply border-border outline-ring/50;
   }
   html {
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    @apply font-sans;
   }
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: "Radio Canada Big", "Inter", "MiSans VF", "PingFang SC",
-      "Hiragino Sans GB", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
   }
 }
 
 @layer utilities {
-  /* 环境背景：waffo 式荧光绿光斑，浅色主题压得更淡 */
-  .checkout-backdrop {
-    background-image:
-      radial-gradient(circle at 85% -5%, #0a934d14, transparent 55%),
-      radial-gradient(circle at -5% 105%, #7cb8ff10, transparent 55%);
-  }
-  .dark .checkout-backdrop {
-    background-image:
-      radial-gradient(circle at 80% -10%, #adff8512, transparent 55%),
-      radial-gradient(circle at -10% 110%, #72e8570d, transparent 55%);
-  }
-
-  /* 品牌面板：两个主题下都保持近黑底 + 细点阵 + 绿色辉光（waffo 招牌观感） */
+  /* 品牌面板：两个主题下都保持近黑底 + 细点阵 + 品牌黄绿微光 */
   .brand-panel {
     background-color: #0a0a0a;
     background-image:
@@ -190,48 +184,5 @@
       radial-gradient(circle at 35% 40%, #0a934d1a, transparent 60%),
       radial-gradient(rgba(255, 255, 255, 0.13) 1px, transparent 1.5px);
     background-size: auto, auto, auto, 22px 22px;
-  }
-
-  /* 品牌渐变文字 */
-  .text-brand-gradient {
-    background-image: linear-gradient(120deg, #3dcf40, #adff85);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-
-  /* waffo 式绿色辉光阴影（活跃步骤点、主按钮、选中态） */
-  .shadow-glow-green {
-    box-shadow: 0 0 14px #72e85740, 0 0 4px #72e85726;
-  }
-  .shadow-glow-green-lg {
-    box-shadow: 0 0 30px #72e85740, 0 0 10px #72e8572e;
-  }
-
-  /* waffo 招牌深色卡：顶部绿色微光 + 内嵌高光描边（浅色主题下退化为极淡绿晕） */
-  .glow-card {
-    background-image: radial-gradient(circle at 30% 0%, #0a934d0d, transparent 55%);
-  }
-  .dark .glow-card {
-    background-image: radial-gradient(circle at 30% 0%, #adff8512, transparent 55%);
-    box-shadow: inset 0 1px 0 #ffffff0d;
-  }
-
-  /* 确认进度条呼吸光效 */
-  @keyframes shimmer {
-    from { transform: translateX(-100%); }
-    to { transform: translateX(250%); }
-  }
-  .animate-shimmer {
-    animation: shimmer 1.8s ease-in-out infinite;
-  }
-
-  /* 成功图标的波纹扩散 */
-  @keyframes pulse-ring {
-    0% { transform: scale(0.9); opacity: 0.6; }
-    100% { transform: scale(1.8); opacity: 0; }
-  }
-  .animate-pulse-ring {
-    animation: pulse-ring 1.6s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
   }
 }

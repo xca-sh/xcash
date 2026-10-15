@@ -8,7 +8,7 @@ function ErrorState({ error, onRetry }) {
   const { t } = useI18n()
 
   return (
-    <div className="checkout-backdrop flex min-h-svh flex-col items-center justify-center bg-background p-4">
+    <div className="flex min-h-svh flex-col items-center justify-center bg-background p-4">
       <div className="flex w-full max-w-md flex-col gap-6">
         <div className="flex justify-center">
           <BrandHeading size={36} />

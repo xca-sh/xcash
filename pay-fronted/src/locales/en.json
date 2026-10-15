@@ -51,9 +51,13 @@
     "contractAddress": "Contract Address",
     "transactionHash": "Transaction Hash",
     "scanQRCode": "Scan QR code with wallet",
-    "transferInstruction": "Please transfer {{amount}} {{crypto}} to the following address",
     "reselectMethod": "Reselect Payment Method",
-    "returnToMerchant": "Return to Merchant"
+    "returnToMerchant": "Return to Merchant",
+    "transferHint": "Scan with your wallet, or copy the address and amount",
+    "networkNotice": "Send {{crypto}} on the {{chain}} network only, for exactly the amount above, or the payment may not be credited",
+    "tokenContract": "Token contract",
+    "paidAmount": "Amount paid",
+    "orderAmount": "Order amount"
   },
   "wallet": {
     "payWithWallet": "Pay with Wallet",
@@ -62,7 +66,6 @@
     "switching": "Switching network...",
     "sending": "Please confirm the transaction in your wallet...",
     "submitted": "Transaction submitted, awaiting block confirmation",
-    "or": "OR",
     "chooseWallet": "Choose Wallet",
     "userRejected": "You cancelled the payment",
     "switchFailed": "Please switch to the correct network in your wallet and retry, or pay via QR code",
@@ -80,7 +83,7 @@
   },
   "waiting": {
     "title": "Waiting for Payment",
-    "description": "Please complete the payment as soon as possible",
+    "description": "This page updates automatically once received",
     "broadcastTitle": "Awaiting Block Confirmation",
     "broadcastDescription": "Transaction broadcast. It will complete automatically once confirmed — please don't pay again.",
     "timeRemaining": "Time Remaining",
