@@ -53,8 +53,7 @@ function TokenIcon({ src, className }) {
   )
 }
 
-// 剩余支付时间：最后 5 分钟转为警示色，最后 1 分钟转为危险色
-const WARN_MS = 5 * 60_000
+// 剩余支付时间：琥珀色胶囊与左侧面板倒计时同色，最后 1 分钟转为危险色
 const DANGER_MS = 60_000
 
 function CardCountdown({ expiresAt }) {
@@ -63,19 +62,34 @@ function CardCountdown({ expiresAt }) {
   if (remainingMs === null) return null
 
   return (
-    <div className="shrink-0 text-right">
-      <div className="text-[11px] leading-4 text-muted-foreground">{t("payment.timeLeft")}</div>
-      <div
+    <div className="flex shrink-0 flex-col items-end gap-1.5">
+      <span className="text-[11px] leading-none text-muted-foreground">{t("payment.timeLeft")}</span>
+      <span
         className={cn(
-          "mt-1 flex items-center justify-end gap-1.5 font-mono text-[15px] font-semibold leading-5 tabular-nums",
-          remainingMs <= DANGER_MS ? "text-destructive" : remainingMs <= WARN_MS ? "text-warning" : "text-foreground"
+          "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-sm font-semibold leading-5 tabular-nums",
+          remainingMs <= DANGER_MS
+            ? "border-destructive/40 bg-destructive/10 text-destructive"
+            : "border-warning-border bg-warning-soft text-warning"
         )}
       >
         <Clock className="size-3.5 shrink-0" />
         {remainingMs === 0 ? t("waiting.expired") : formatRemainingTime(remainingMs, t)}
-      </div>
+      </span>
     </div>
   )
+}
+
+// 把含 {{name}} 占位符的文案渲染成节点，占位符替换为强调样式的值
+function RichText({ template, values }) {
+  return template.split(/(\{\{\w+\}\})/).map((part, i) => {
+    const name = part.match(/^\{\{(\w+)\}\}$/)?.[1]
+    if (!name || values[name] === undefined) return part
+    return (
+      <span key={i} className="whitespace-nowrap font-medium text-foreground">
+        {values[name]}
+      </span>
+    )
+  })
 }
 
 function PaymentAddress({ invoice, onReset, onBroadcast }) {
@@ -143,18 +157,7 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
 
   const amountField = (
     <Field
-      label={
-        hasPayment ? (
-          t("payment.paymentAmount")
-        ) : (
-          <span className="flex items-center gap-2">
-            {t("payment.paymentAmount")}
-            <span className="rounded bg-warning-soft px-1.5 py-px text-[11px] font-medium text-warning">
-              {t("payment.exactTag")}
-            </span>
-          </span>
-        )
-      }
+      label={t("payment.paymentAmount")}
       action={!hasPayment && <CopyButton value={invoice.pay_amount} />}
     >
       <div className="flex min-w-0 items-baseline gap-2">
@@ -249,18 +252,29 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
             </dl>
           </div>
 
-          {/* 转账警示：金额必须精确一致（系统按金额匹配账单）+ 网络/币种不可转错 */}
-          <div role="note" className="mt-6 flex gap-3 rounded-lg border border-warning-border bg-warning-soft px-4 py-3.5">
-            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
-            <div className="min-w-0 space-y-1 text-[13px] leading-5">
-              <p className="font-semibold text-warning">{t("payment.exactAmountTitle")}</p>
-              <p className="text-foreground/80">
-                {t("payment.exactAmountDesc", { amount: invoice.pay_amount, crypto: invoice.crypto })}
-              </p>
-              <p className="text-foreground/80">
-                {t("payment.wrongNetworkDesc", { chain: chainMeta.name, crypto: invoice.crypto })}
-              </p>
-            </div>
+          {/* 转账警示：标题一句话点明「金额必须完全一致」（系统按金额匹配账单），
+              下方按「金额 / 网络」两项对齐列出细则，关键值高亮 */}
+          <div role="note" className="mt-6 overflow-hidden rounded-lg border border-warning-border bg-warning-soft">
+            <p className="flex items-center gap-2 px-4 py-2.5 text-[13px] font-semibold text-warning">
+              <TriangleAlert className="size-4 shrink-0" />
+              {t("payment.exactAmountTitle")}
+            </p>
+            <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-warning-border px-4 py-3 text-[13px] leading-5">
+              <dt className="font-medium text-warning">{t("payment.warnAmountLabel")}</dt>
+              <dd className="text-muted-foreground">
+                <RichText
+                  template={t("payment.exactAmountDesc")}
+                  values={{ amount: `${invoice.pay_amount} ${invoice.crypto}` }}
+                />
+              </dd>
+              <dt className="font-medium text-warning">{t("payment.warnNetworkLabel")}</dt>
+              <dd className="text-muted-foreground">
+                <RichText
+                  template={t("payment.wrongNetworkDesc")}
+                  values={{ chain: chainMeta.name, crypto: invoice.crypto }}
+                />
+              </dd>
+            </dl>
           </div>
 
           {invoice.crypto_address && (

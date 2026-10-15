@@ -59,10 +59,11 @@
     "sendCrypto": "发送 {{crypto}}",
     "onlyNetwork": "仅限此网络",
     "exactAmountTitle": "转账金额必须与上方完全一致",
-    "exactAmountDesc": "多付、少付都无法自动到账。从交易所提币时，请确保扣除手续费后的到账金额仍为 {{amount}} {{crypto}}。",
-    "wrongNetworkDesc": "仅支持 {{chain}} 网络上的 {{crypto}}，转错网络或币种可能无法到账且难以找回。",
+    "exactAmountDesc": "多付或少付都无法自动到账；从交易所提币时，请确保扣除手续费后实际到账 {{amount}}",
+    "wrongNetworkDesc": "仅支持 {{chain}} 网络上的 {{crypto}}，转错网络或币种可能无法找回",
     "timeLeft": "剩余支付时间",
-    "exactTag": "须完全一致"
+    "warnAmountLabel": "金额",
+    "warnNetworkLabel": "网络"
   },
   "wallet": {
     "payWithWallet": "使用钱包支付",
