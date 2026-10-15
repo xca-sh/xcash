@@ -177,18 +177,18 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      # 构建 caddy-run-stage 会连带构建它依赖的 python-build-stage 与
-      # python-run-stage，一次覆盖 Dockerfile 全部阶段（含镜像内 collectstatic
-      # 与 compilemessages）。只构建、不推送。
+      # 构建 python-run-stage 会连带构建 python-build-stage，一次覆盖 Dockerfile
+      # 全部阶段（含镜像内 collectstatic 与 compilemessages）。只构建、不推送。
+      # 缓存与 publish 的 amd64 共用 scope：main 推送时发布构建可直接命中本 job 的缓存。
       - name: 构建生产镜像
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./compose/production/django/Dockerfile
-          target: caddy-run-stage
+          target: python-run-stage
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=image-amd64
+          cache-to: type=gha,scope=image-amd64,mode=max
 
   # 发布生产镜像到 GHCR：服务器只拉取、不构建（docker-compose.yml 引用 ${IMAGE}:latest）。
   # 只在 main 推送且全部检查通过后发布，没过 CI 的提交不会成为用户升级拿到的版本。

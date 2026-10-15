@@ -23,6 +23,8 @@ BACKUP_DIR="${BACKUP_DIR:-./backups}"
 # postgres 就绪等待上限（秒）：避免 DB 起不来时在持有升级锁的情况下无限 hang。
 POSTGRES_WAIT_TIMEOUT="${POSTGRES_WAIT_TIMEOUT:-120}"
 APP_READY_TIMEOUT="${APP_READY_TIMEOUT:-360}"
+# 拉取镜像的超时上限（秒）：避免 registry 网络卡住时在持有升级锁的情况下无限 hang。
+IMAGE_PULL_TIMEOUT="${IMAGE_PULL_TIMEOUT:-1800}"
 
 # cleanup 需要区分失败发生在哪个阶段：
 # - production migrate 前：production 库未被触碰，只恢复本脚本停过的旧容器
@@ -289,6 +291,23 @@ start_application_services() {
     "${COMPOSE[@]}" stop beat || true
     return 1
   fi
+  # Caddy 不监视配置文件；caddy 容器未被重建时，git pull 带来的 Caddyfile 变更不会
+  # 自动生效，这里显式 reload。reload 平滑切换、不断开连接；新配置有误时 reload
+  # 失败、旧配置继续服务。放在最后执行：此时刚（重）建的 caddy 管理端口早已就绪，
+  # 且配置错误不会拖住 Beat 等业务进程的启动。
+  run_stage "reload Caddy config" "${COMPOSE[@]}" exec -T caddy \
+    caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+}
+
+remove_unused_images() {
+  local project="${COMPOSE_PROJECT_NAME:-xcash}"
+
+  # 旧版本在服务器本地构建镜像，切换到 GHCR 后这两个镜像不再被任何服务引用。
+  docker image rm "${project}-app:local" "${project}-caddy" >/dev/null 2>&1 || true
+  # 删除被本次拉取顶掉的旧版本（悬空镜像），避免每次升级都让磁盘只增不减。
+  # 只删悬空镜像，不动正在使用或带标签的镜像；清理失败不影响升级结果。
+  run_stage "prune dangling images" docker image prune -f \
+    || log "WARNING: failed to prune dangling images"
 }
 
 restore_pre_migration_services() {
@@ -341,13 +360,15 @@ print_rehearsal_failure_help() {
 
 trap cleanup EXIT
 
-# 版本由用户在运行前选择并拉取；脚本只部署当前工作区，不切分支或更新代码。
+# 用户运行前先 git pull 更新 compose 与脚本；脚本按当前工作区的 compose 拉取 GHCR
+# 镜像并部署，不切分支或更新代码。
 # 拒绝版本参数，避免用户误以为脚本会自动切换到指定版本。
 [[ $# -eq 0 ]] || die "unexpected argument: $1 — this script deploys the current working tree; update code manually before running it"
 
 require_command docker
 require_command git
 require_command flock
+require_command timeout
 
 [[ -f "${ENV_FILE}" ]] || die "env file not found: ${ENV_FILE}"
 [[ -f "${COMPOSE_FILE}" ]] || die "compose file not found: ${COMPOSE_FILE}"
@@ -359,6 +380,7 @@ set +a
 
 [[ -n "${POSTGRES_PASSWORD:-}" ]] || die "POSTGRES_PASSWORD is required"
 [[ "${APP_READY_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] || die "APP_READY_TIMEOUT must be a positive integer"
+[[ "${IMAGE_PULL_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] || die "IMAGE_PULL_TIMEOUT must be a positive integer"
 ensure_git_clean
 log "deploy current working tree; update code manually with git pull before running this script"
 
@@ -380,7 +402,9 @@ mkdir -p "${BACKUP_DIR}"
 BACKUP_DIR="$(cd "${BACKUP_DIR}" && pwd)"
 MAIN_DUMP="${BACKUP_DIR}/xcash-pre-upgrade-$(date +%Y%m%d-%H%M%S).dump"
 
-run_stage "build production images" "${COMPOSE[@]}" build
+# 镜像由 CI 构建并发布到 GHCR，服务器只拉取不构建。拉取在停任何服务之前：网络失败
+# 直接中止，线上服务不受影响，重跑即可；运行中的容器绑定镜像 ID，不受拉取影响。
+run_stage "pull production images" timeout "${IMAGE_PULL_TIMEOUT}" "${COMPOSE[@]}" pull
 
 log "ensure database and cache dependencies are running"
 # --no-recreate：在演练 dump 落盘之前，绝不因 compose 配置/镜像变更重建生产 DB
@@ -474,5 +498,7 @@ esac
 
 log "start application services"
 start_application_services
+
+remove_unused_images
 
 log "upgrade completed"

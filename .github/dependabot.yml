@@ -57,8 +57,8 @@ updates:
       github-actions:
         patterns: ["*"]
 
-  # 容器基础镜像（Dockerfile 里的 uv / python / caddy）。
-  # 注意 docker-compose.yml 里的 postgres / redis 镜像 tag 不在此生态覆盖范围内，
+  # 容器基础镜像（Dockerfile 里的 uv / python）。
+  # 注意 docker-compose.yml 里的 postgres / redis / caddy 镜像 tag 不在此生态覆盖范围内，
   # 仍需人工跟进。
   - package-ecosystem: "docker"
     directory: "/compose/production/django"

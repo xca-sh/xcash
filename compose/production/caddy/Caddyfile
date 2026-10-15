@@ -22,12 +22,9 @@
 	}
 }
 
+# 静态文件随应用镜像发布，由 Django 端的 WhiteNoise 返回（见 config/settings/production.py），
+# 本 Caddy 只做反代，使用官方镜像，不再单独构建。
 :80 {
-	handle_path /static/* {
-		root * /srv/staticfiles
-		file_server
-	}
-
 	reverse_proxy django:8000 {
 		# X-Real-IP 是 IP 白名单与全部 IP 维度限流的取值来源（见 xcash/common/utils/security.py
 		# 的 client_ip）。必须用 {client_ip} 而非 {remote_host}：后者是本容器看到的 TCP

@@ -29,10 +29,10 @@ x-logging: &default-logging
 #
 # django / worker / worker-scan / beat 共享配置，容器名由各服务单独声明。
 x-django-base: &django-base
-  # 同一发布只构建一份应用镜像，四个进程角色共享。镜像由 django 的 build 产生，
-  # 禁止从公共仓库拉取同名镜像；首次完整 up 会先构建，再创建各服务。
-  image: ${COMPOSE_PROJECT_NAME:-xcash}-app:local
-  pull_policy: never
+  # 应用镜像由 GitHub Actions 构建并发布到 GHCR（.github/workflows/ci.yml 的 publish），
+  # 服务器只拉取、不构建；四个进程角色共享同一份镜像。首次 up 本地没有镜像时自动拉取，
+  # 之后只有 scripts/upgrade.sh 会显式拉取新版，普通 up / 重启沿用本地已有的镜像。
+  image: ghcr.io/xca-sh/xcash:latest
   restart: unless-stopped
   logging: *default-logging
   # 依赖就绪后才启动，避免首次部署时 migrate 撞上尚未初始化完成的 Postgres。
@@ -131,10 +131,6 @@ services:
 
   django:
     <<: *django-base
-    build:
-      context: .
-      dockerfile: ./compose/production/django/Dockerfile
-      target: python-run-stage
     container_name: xcash_django
     # 普通部署自动迁移并初始化；upgrade.sh 准备成功后用临时 override 跳过重复初始化。
     command: /start
@@ -177,13 +173,15 @@ services:
     command: /start-beat
 
   caddy:
-    build:
-      context: .
-      dockerfile: ./compose/production/django/Dockerfile
-      target: caddy-run-stage
+    image: caddy:2.11.4-alpine
     container_name: xcash_caddy
     restart: unless-stopped
     logging: *default-logging
+    # 挂载【整个目录】而非单个 Caddyfile：git pull 更新文件时会换成新文件（新 inode），
+    # 单文件挂载的容器会一直读到旧内容。Caddy 不监视配置文件，变更由 upgrade.sh 末尾
+    # 的 caddy reload 平滑生效。
+    volumes:
+      - ./compose/production/caddy:/etc/caddy:ro
     # 用 service_started 而非 service_healthy：django 起不来时让 caddy 照常提供
     # 502，比整个入口拒连更容易定位问题。
     depends_on:
