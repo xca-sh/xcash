@@ -24,6 +24,8 @@ dependencies = [
     "django-redis==7.0.0",
     "django-cors-headers==4.9.0",
     "django-smart-ratelimit[redis]==4.12.1",
+    # 生产静态文件由 Django 直接从镜像内 STATIC_ROOT 返回，Caddy 只做反代
+    "whitenoise==6.12.0",
     # Celery
     "celery==5.6.3",
     "django-celery-results==2.6.0",

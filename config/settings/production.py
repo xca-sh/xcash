@@ -43,6 +43,15 @@ STORAGES = {
     },
 }
 
+# 静态文件随应用镜像一起发布，由 WhiteNoise 从 STATIC_ROOT 直接返回，Caddy 只做反代。
+# 静态文件与引用它们的 manifest 同在一个镜像里，不会出现代码与静态资源版本错位。
+# 必须紧跟 SecurityMiddleware：静态请求在这里就返回，不再经过 session、鉴权、HMAC 等
+# 后续中间件；同时仍由 SecurityMiddleware 补上 nosniff、HSTS 等安全响应头。
+MIDDLEWARE.insert(
+    MIDDLEWARE.index("django.middleware.security.SecurityMiddleware") + 1,
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+)
+
 # 基础 URL 设置
 USE_X_FORWARDED_HOST = True
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
