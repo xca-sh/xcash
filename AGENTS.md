@@ -11,6 +11,7 @@
 - 本地通过 docker-compose.dev.yml 拉起数据库、redis、测试链的服务。
 - 生成的 docs 文件统统不纳入 git。
 - commit 信息用中文写，同时在尾部标注本次代码开发使用的模型信息
+- 每完成一轮开发（改动已通过测试 / lint 等验证）后自动 commit，无需再询问；只提交本轮改动的文件，不 push
 - 尽量在 main 分支进行开发
 - 项目兼容易支付 V1 接口，文档地址：https://pay.v8jisu.cn/doc_old.html
 - `xcash-saas` 是 xcash 加密货币支付网关的 SaaS 商业化层；xcash 是区块链引擎。
