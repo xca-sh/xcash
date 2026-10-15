@@ -1,9 +1,11 @@
+import gc
 import os
 
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import before_task_publish
 from celery.signals import celeryd_after_setup
+from celery.signals import worker_init
 
 from config.performance import get_int_default
 from config.periodic_tasks import PERIODIC_TASK_GROUPS
@@ -26,6 +28,23 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks()
 before_task_publish.connect(stamp_worker_health_probe)
+
+
+@worker_init.connect
+def freeze_startup_objects(sender, **kwargs):  # noqa: ARG001
+    """把启动期常驻对象移出 GC 追踪，让 prefork 子进程持续与主进程共享这部分内存。
+
+    子进程 fork 时与主进程写时复制共享启动期加载的 ~110MB（Django、web3、全部任务模块）。
+    但 CPython 每次 GC 都会改写被追踪对象的头部，子进程一次全量回收就会把这些页全部
+    复制成私有；生产 smaps_rollup 实测子进程与主进程只剩 12~27MB 共享。gc.freeze()
+    把当前对象移入永久代、此后 GC 不再遍历它们，从而保住共享。
+
+    worker_init 在主进程中发送：此时 loader.init_worker 已完成 django.setup 与任务模块
+    导入，进程池尚未 fork，是唯一合适的时机。只冻结这一次；MAX_TASKS_PER_CHILD 回收后
+    新 fork 的子进程同样继承冻结状态。不在每次 fork 前重复冻结，以免把主进程运行期间
+    的循环垃圾也永久冻结、造成主进程缓慢增长。
+    """
+    gc.freeze()
 
 
 @celeryd_after_setup.connect
