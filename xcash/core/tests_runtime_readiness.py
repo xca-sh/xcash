@@ -96,13 +96,26 @@ def test_http_recovery_is_reported_even_while_consumers_are_missing(runtime):
     assert "runtime consumers ready" not in output.getvalue()
 
 
-def test_scheduler_requires_new_publications_and_recovers(runtime):
+@pytest.mark.parametrize(("published_after", "expected"), [(None, 1234), (1200, 1200)])
+def test_scheduler_requires_new_publications_and_recovers(
+    runtime, published_after, expected
+):
+    """未给下限时只认本命令开始后的探针；升级脚本传入 Beat 启动时刻时以其为准。"""
     _, consumers, scheduled = runtime
     scheduled.side_effect = [["celery", "scan"], []]
-    assert "ready" in run("scheduler")
+    output = StringIO()
+    call_command(
+        "wait_for_runtime",
+        phase="scheduler",
+        timeout=3,
+        published_after=published_after,
+        stdout=output,
+    )
+    assert "ready" in output.getvalue()
     consumers.assert_not_called()
     assert all(
-        call.kwargs == {"published_after": 1234} for call in scheduled.call_args_list
+        call.kwargs == {"published_after": expected}
+        for call in scheduled.call_args_list
     )
 
 

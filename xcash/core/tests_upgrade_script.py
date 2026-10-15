@@ -62,21 +62,19 @@ elif command == "up" and "worker" in args and failure == "start_runtime":
 elif command in ("run", "exec") and "manage.py" in args:
     operation = args[args.index("manage.py") + 1:]
     rehearsal = "POSTGRES_HOST=migration-rehearsal-db" in args
+    logged = Path(os.environ["COMMAND_LOG"]).read_text().splitlines()
     if operation == ["migrate", "--plan"]:
         if os.environ["PENDING_MIGRATIONS"] == "true":
             print("chains.0001_initial")
         else:
             print("Planned operations:")
             print("  No planned migration operations.")
-        if not rehearsal:
-            stopped = any(
-                '"stop", "beat"' in line
-                for line in Path(os.environ["COMMAND_LOG"]).read_text().splitlines()
-            )
-            if failure == ("production_plan" if stopped else "pending_plan"):
-                sys.exit(23)
-    elif operation == ["migrate", "--noinput"]:
-        if failure == ("rehearsal" if rehearsal else "production_migrate"):
+        # 第一次查询是升级开头的 pending plan，之后是迁移前的复核。
+        plans = sum('"migrate", "--plan"' in line for line in logged)
+        if failure == ("pending_plan" if plans == 1 else "production_plan"):
+            sys.exit(23)
+    elif rehearsal and operation == ["bootstrap_runtime"]:
+        if failure == "rehearsal":
             sys.exit(23)
     elif not rehearsal and operation[:1] == ["bootstrap_runtime"]:
         if "--skip-migrations" not in operation and failure == "production_migrate":
@@ -84,8 +82,8 @@ elif command in ("run", "exec") and "manage.py" in args:
         if failure == "bootstrap_interrupted":
             sys.exit(137)
         attempts = sum(
-            '"bootstrap_runtime"' in line
-            for line in Path(os.environ["COMMAND_LOG"]).read_text().splitlines()
+            '"bootstrap_runtime"' in line and "migration-rehearsal-db" not in line
+            for line in logged
         )
         if failure == "bootstrap" or (failure == "bootstrap_once" and attempts == 1):
             sys.exit(20)
@@ -165,6 +163,14 @@ def command_index(commands, prefix, *, contains=None):
     )
 
 
+def production_bootstraps(commands):
+    return [
+        index
+        for index, command in enumerate(commands)
+        if "bootstrap_runtime" in command and "POSTGRES_HOST=db" in command
+    ]
+
+
 @pytest.mark.parametrize(
     ("migrations", "quiesced"), [(False, False), (True, False), (True, True)]
 )
@@ -184,7 +190,7 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
     consumers_ready = command_index(commands, ["exec"], contains="consumers")
     scheduler_ready = command_index(commands, ["exec"], contains="scheduler")
     reload_caddy = command_index(commands, ["exec"], contains="reload")
-    bootstrap = command_index(commands, ["run"], contains="bootstrap_runtime")
+    [bootstrap] = production_bootstraps(commands)
     assert (
         pull
         < stop_beat
@@ -195,26 +201,36 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
         < start_beat
     )
     assert start_runtime < consumers_ready < start_beat < scheduler_ready
+    # 新 Beat 启动即投递探针，等待命令必须拿到启动前的发布下限，不能用自身开始时刻。
+    assert "--published-after" in commands[scheduler_ready]
     # Caddyfile 有误时 reload 会失败，放在最后才不会拖住 Beat 等业务进程的启动。
     assert scheduler_ready < reload_caddy
     assert commands.count(["stop", "beat"]) == 1
     assert commands.count(["stop", "worker", "worker-scan"]) == 1
     assert commands.count(["stop", "django"]) == 1
-    assert sum("bootstrap_runtime" in c for c in commands) == 1
     assert commands[bootstrap][-1] == "bootstrap_runtime"
     assert not any(
         "POSTGRES_HOST=db" in c and c[-2:] == ["migrate", "--noinput"] for c in commands
     )
     assert not any(c[0] == "run" and "wait_for_runtime" in c for c in commands)
     rehearsal = [c for c in commands if "POSTGRES_HOST=migration-rehearsal-db" in c]
-    assert bool(rehearsal) is migrations
     if migrations:
+        # 演练与生产执行同一个 bootstrap_runtime。
+        assert [c[-1] for c in rehearsal] == ["bootstrap_runtime"]
         rehearsal_index = command_index(
             commands,
             ["run"],
             contains="POSTGRES_HOST=migration-rehearsal-db",
         )
         assert (stop_beat < rehearsal_index) is quiesced
+        plans = [i for i, c in enumerate(commands) if c[-2:] == ["migrate", "--plan"]]
+        verify_plan = plans[-1]
+        assert len(plans) == 2
+        assert rehearsal_index < verify_plan < bootstrap
+        # 在线演练时 plan 复核在停 Django 之前，不占 HTTP 停机窗口。
+        assert (verify_plan < stop_django) is not quiesced
+    else:
+        assert rehearsal == []
 
 
 def test_pull_failure_leaves_existing_services_running(run_upgrade):
@@ -223,12 +239,13 @@ def test_pull_failure_leaves_existing_services_running(run_upgrade):
     assert not any(c[0] in ("stop", "start") for c in commands)
 
 
-def test_pending_plan_failure_aborts_before_stopping_services(run_upgrade):
-    result, commands = run_upgrade(failure="pending_plan")
+@pytest.mark.parametrize("failure", ["pending_plan", "production_plan", "rehearsal"])
+def test_pre_stop_failure_aborts_before_touching_production(run_upgrade, failure):
+    result, commands = run_upgrade(migrations=True, failure=failure)
     assert result.returncode != 0
     assert not any(c[0] in ("stop", "start") for c in commands)
-    assert not any("bootstrap_runtime" in c for c in commands)
-    assert not any(c[-2:] == ["migrate", "--noinput"] for c in commands)
+    assert production_bootstraps(commands) == []
+    assert ("迁移演练失败" in result.stderr) is (failure == "rehearsal")
 
 
 def test_dirty_worktree_aborts_before_docker_commands(run_upgrade):
@@ -245,12 +262,16 @@ def test_invalid_readiness_timeout_aborts_before_touching_services(run_upgrade, 
     assert commands == []
 
 
-@pytest.mark.parametrize("failure", ["production_plan", "stop_workers", "stop_django"])
+@pytest.mark.parametrize(
+    ("failure", "quiesced"),
+    [("production_plan", True), ("stop_workers", False), ("stop_django", False)],
+)
 def test_pre_migration_failure_restores_only_previously_running_containers(
-    run_upgrade, failure
+    run_upgrade, failure, quiesced
 ):
     result, commands = run_upgrade(
         migrations=True,
+        quiesced=quiesced,
         failure=failure,
         running="worker\nbeat",
     )

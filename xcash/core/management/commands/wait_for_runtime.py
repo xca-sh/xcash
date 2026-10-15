@@ -60,12 +60,17 @@ class Command(BaseCommand):
         parser.add_argument("--timeout", type=int, default=360)
         parser.add_argument("--url", default="http://xcash-caddy/health")
         parser.add_argument("--http-stopped-at", type=float)
+        # 新 Beat 启动即投递健康探针，可能早于本命令开始；调用方传入发起 Beat 启动的
+        # 时刻作为探针发布下限，未传时取本命令开始时刻。
+        parser.add_argument("--published-after", type=float)
 
     def handle(self, *args, **options):
         timeout = options["timeout"]
         if timeout <= 0:
             raise CommandError("timeout must be positive")
-        published_after = time.time()
+        published_after = options["published_after"]
+        if published_after is None:
+            published_after = time.time()
         started = time.monotonic()
         deadline = started + timeout
         last_error = "runtime has not responded"
@@ -95,7 +100,7 @@ class Command(BaseCommand):
                     if options["phase"] == "consumers":
                         missing = missing_consumer_groups(min(2, remaining))
                     else:
-                        # 必须是命令开始后发布的探针。旧缓存、旧积压即使刚被消费，
+                        # 必须是发布下限之后的探针。旧缓存、旧积压即使刚被消费，
                         # 也不能让一个尚未恢复调度的 Beat 获得成功判定。
                         missing = stale_worker_groups(published_after=published_after)
                     if not missing:

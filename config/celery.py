@@ -2,6 +2,7 @@ import gc
 import os
 
 from celery import Celery
+from celery.beat import PersistentScheduler
 from celery.schedules import crontab
 from celery.signals import before_task_publish
 from celery.signals import celeryd_after_setup
@@ -245,3 +246,22 @@ app.conf.beat_schedule = {
     **invoices_tasks,
     **core_tasks,
 }
+
+
+class WorkerHealthFirstScheduler(PersistentScheduler):
+    """Beat 一启动就投递 worker 健康探针，其余周期任务保持 Celery 原有语义。
+
+    Celery 以启动时刻作为调度文件里没有记录的条目的上次执行时间，首次投递要等满一个
+    周期；beat 容器每次随新镜像重建都会丢失调度文件，升级脚本等调度回执因此固定多等
+    一个探针周期。把探针的上次执行时间回拨一个周期，让它在首个 tick 即到期：新 Beat
+    的调度循环一跑起来就产生回执，且该回执仍出自真实调度，不是启动钩子代发。
+    """
+
+    def setup_schedule(self):
+        super().setup_schedule()
+        for name in WORKER_HEALTH_TASK_GROUPS:
+            entry = self.schedule[name]
+            entry.last_run_at = entry.default_now() - entry.schedule.run_every
+
+
+app.conf.beat_scheduler = "config.celery:WorkerHealthFirstScheduler"

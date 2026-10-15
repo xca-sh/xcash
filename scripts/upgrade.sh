@@ -284,9 +284,14 @@ start_application_services() {
   "${COMPOSE[@]}" exec -T django python -u manage.py wait_for_runtime \
     --phase consumers --timeout "${APP_READY_TIMEOUT}" "${readiness_args[@]}" \
     || return 1
+  # 新 Beat 启动即投递健康探针，可能早于等待命令自身完成启动；以发起 Beat 启动的
+  # 时刻作为探针发布下限。旧 Beat 早已停止，此后发布的探针只可能来自新 Beat。
+  local beat_start_requested_at
+  beat_start_requested_at="$(date +%s)"
   run_stage "start Beat" "${COMPOSE[@]}" up -d --no-deps beat || return 1
   if ! "${COMPOSE[@]}" exec -T django python -u manage.py wait_for_runtime \
-    --phase scheduler --timeout "${APP_READY_TIMEOUT}"; then
+    --phase scheduler --timeout "${APP_READY_TIMEOUT}" \
+    --published-after "${beat_start_requested_at}"; then
     # 消费回执不完整时暂停投递源，保留应用进程供排查；不能打印升级成功。
     "${COMPOSE[@]}" stop beat || true
     return 1
@@ -329,17 +334,17 @@ extract_plan() {
 }
 
 compare_plans() {
-  local rehearsal_plan="$1"
+  local rehearsed_plan="$1"
   local production_plan="$2"
   local label="$3"
-  local rehearsal_norm="${rehearsal_plan}.norm"
+  local rehearsed_norm="${rehearsed_plan}.norm"
   local production_norm="${production_plan}.norm"
 
-  extract_plan "${rehearsal_plan}" >"${rehearsal_norm}"
+  extract_plan "${rehearsed_plan}" >"${rehearsed_norm}"
   extract_plan "${production_plan}" >"${production_norm}"
 
-  if ! diff -u "${rehearsal_norm}" "${production_norm}"; then
-    die "${label} migrate --plan differs between rehearsal and production"
+  if ! diff -u "${rehearsed_norm}" "${production_norm}"; then
+    die "${label} migrate --plan changed since the rehearsed plan"
   fi
 }
 
@@ -391,7 +396,7 @@ flock -n 9 || die "another upgrade is in progress (lock: ${UPGRADE_LOCK_FILE})"
 LOCK_ACQUIRED=true
 
 TMP_DIR="$(mktemp -d)"
-MAIN_REHEARSAL_PLAN="${TMP_DIR}/main-rehearsal.plan"
+MAIN_PENDING_PLAN="${TMP_DIR}/main-pending.plan"
 MAIN_PRODUCTION_PLAN="${TMP_DIR}/main-production.plan"
 
 # 演练 dump 落在 TMP_DIR 之外的持久目录，失败时不随 cleanup 删除，便于排查失败演练。
@@ -419,8 +424,8 @@ wait_for_postgres db
 # 用新镜像只读查询生产库的待执行计划；查询失败必须中止，不能当作无需迁移。
 log "check pending production migrations"
 run_main_manage db migrate --plan 2>&1 \
-  | tee "${TMP_DIR}/main-pending-plan.log" >"${TMP_DIR}/main-pending.plan"
-if [[ -z "$(extract_plan "${TMP_DIR}/main-pending.plan")" ]]; then
+  | tee "${TMP_DIR}/main-pending-plan.log" >"${MAIN_PENDING_PLAN}"
+if [[ -z "$(extract_plan "${MAIN_PENDING_PLAN}")" ]]; then
   RUN_MIGRATION_REHEARSAL=false
   log "no pending migrations; skip migration rehearsal"
 fi
@@ -445,34 +450,33 @@ wait_for_postgres migration-rehearsal-db
 restore_main_database migration-rehearsal-db "${MAIN_DUMP}"
 
 log "run main database migration rehearsal"
-# 演练在 production 数据副本上真实 apply 迁移：失败即代表本实例存量数据迁不过，
+# 演练在 production 数据副本上执行与生产完全相同的 bootstrap_runtime（系统检查 +
+# migrate + 基础数据 + 默认管理员）：失败即代表本实例存量数据迁不过，
 # REHEARSAL_IN_PROGRESS 让 cleanup 给出面向运维的诊断。此刻 production 尚未被触碰。
+# 全部步骤放在一个一次性容器里，每多一个容器就多一次数秒的 Django 冷启动。
+# 被演练的迁移计划就是上方的 pending plan：dump 取自同一生产库，升级锁又排除了
+# 并发 migrate，演练副本的迁移状态与其一致；生产迁移前还会再复核一次。
+# 不在此跑 check --deploy：部署检查只产出 warning、拦不住升级，CI 已对生产配置执行。
 REHEARSAL_IN_PROGRESS=true
-# plan 阶段输出短：tee 同时写 plan 文件（用于比对）+ log 文件（用于失败回放），stdout 静默。
-run_main_manage migration-rehearsal-db migrate --plan 2>&1 \
-  | tee "${TMP_DIR}/main-rehearsal-plan.log" >"${MAIN_REHEARSAL_PLAN}"
-# migrate / check 阶段输出长且重要：tee 写 log 文件 + terminal 实时显示。
-run_main_manage migration-rehearsal-db migrate --noinput 2>&1 \
-  | tee "${TMP_DIR}/main-rehearsal-migrate.log"
-run_main_manage migration-rehearsal-db ensure_default_reference_data 2>&1 \
-  | tee "${TMP_DIR}/main-rehearsal-reference-data.log"
-run_main_manage migration-rehearsal-db check --deploy 2>&1 \
-  | tee "${TMP_DIR}/main-rehearsal-check.log"
+run_main_manage migration-rehearsal-db bootstrap_runtime 2>&1 \
+  | tee "${TMP_DIR}/main-rehearsal-bootstrap.log"
 REHEARSAL_IN_PROGRESS=false
 delete_rehearsal_dump
 fi
 
-if [[ "${APP_SERVICES_STOP_REQUESTED}" != "true" ]]; then
-  # 没有待执行迁移只跳过演练，不能跳过版本切换屏障；队列路由等纯代码变更也
-  # 需要先停止旧进程。构建和在线演练完成后才停服务，保持停机窗口尽可能短。
-  stop_app_services "before production migration"
-fi
-
 if [[ "${RUN_MIGRATION_REHEARSAL}" == "true" ]]; then
-  log "verify production migration plans"
+  # 迁移计划只由 django_migrations 决定，停服务只结束进程、不执行迁移，复核结论
+  # 在停服务前后一致；放在停服务之前，这次一次性容器就不占 HTTP 停机窗口。
+  log "verify production migration plan"
   run_main_manage db migrate --plan 2>&1 \
     | tee "${TMP_DIR}/main-production-plan.log" >"${MAIN_PRODUCTION_PLAN}"
-  compare_plans "${MAIN_REHEARSAL_PLAN}" "${MAIN_PRODUCTION_PLAN}" "main database"
+  compare_plans "${MAIN_PENDING_PLAN}" "${MAIN_PRODUCTION_PLAN}" "main database"
+fi
+
+if [[ "${APP_SERVICES_STOP_REQUESTED}" != "true" ]]; then
+  # 没有待执行迁移只跳过演练，不能跳过版本切换屏障；队列路由等纯代码变更也
+  # 需要先停止旧进程。拉取、在线演练和 plan 复核完成后才停服务，保持停机窗口尽可能短。
+  stop_app_services "before production migration"
 fi
 
 # 跨过此线后 production 主库可能进入（部分）迁移后状态；迁移完成后

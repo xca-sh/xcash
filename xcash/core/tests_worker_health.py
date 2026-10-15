@@ -8,6 +8,8 @@ import pytest
 from django.core.cache import cache
 from django.urls import reverse
 
+from config.celery import WorkerHealthFirstScheduler
+from config.celery import app
 from config.periodic_tasks import WORKER_HEALTH_TASK_GROUPS
 from config.worker_health import WORKER_HEALTH_MAX_AGE_SECONDS
 from config.worker_health import WORKER_HEALTH_PUBLISHED_HEADER
@@ -95,3 +97,16 @@ def test_publication_hook_does_not_change_business_messages():
     headers = {"id": "business-id"}
     stamp_worker_health_probe(sender="webhooks.tasks.deliver", headers=headers)
     assert WORKER_HEALTH_PUBLISHED_HEADER not in headers
+
+
+def test_fresh_beat_dispatches_health_probes_on_first_tick(tmp_path):
+    """调度文件随 beat 容器重建丢失后，探针立即到期，其余周期任务仍等满一个周期。"""
+    scheduler = WorkerHealthFirstScheduler(
+        app=app, schedule_filename=str(tmp_path / "celerybeat-schedule")
+    )
+    try:
+        entries = scheduler.schedule
+        assert all(entries[name].is_due().is_due for name in WORKER_HEALTH_TASK_GROUPS)
+        assert not entries["reap_stalled_webhook_events"].is_due().is_due
+    finally:
+        scheduler.close()
