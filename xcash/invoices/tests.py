@@ -222,11 +222,15 @@ class InvoicePaymentSelectionTests(TestCase):
         self.project.save(
             update_fields=["evm_invoice_receiving_mode", "tron_invoice_receiving_mode"]
         )
+        return self.add_differ_address(address_suffix=address_suffix)
+
+    def add_differ_address(self, *, address_suffix: str, **kwargs) -> str:
         address = Web3.to_checksum_address(f"0x{int(address_suffix, 16):040x}")
         DifferRecipientAddress.objects.create(
             project=self.project,
             chain_type=ChainType.EVM,
             address=address,
+            **kwargs,
         )
         return address
 
@@ -488,6 +492,125 @@ class InvoicePaymentSelectionTests(TestCase):
         self.assertEqual(second.pay_address, differ_address)
         self.assertEqual(first.pay_amount, Decimal("10.00"))
         self.assertEqual(second.pay_amount, Decimal("10.01"))
+
+    def test_differ_payment_spreads_across_addresses_before_adding_cents(self):
+        # 先偏移后地址：同金额并发账单先按 sort_order 铺满所有启用地址且都按原价，
+        # 地址全被占用后才回到第一个地址加 0.01 尾差。
+        # 第三个地址最先创建（pk 最小），用于确认排序依据是 sort_order 而非 pk。
+        third_address = self.enable_differ_mode(address_suffix="d03")
+        DifferRecipientAddress.objects.filter(address=third_address).update(
+            sort_order=3
+        )
+        first_address = self.add_differ_address(address_suffix="d01", sort_order=1)
+        second_address = self.add_differ_address(address_suffix="d02", sort_order=2)
+        invoices = [
+            self.create_invoice(out_no=f"payment-differ-spread-{index}")
+            for index in range(5)
+        ]
+
+        for invoice in invoices:
+            invoice.select_method(self.crypto, self.chain_a)
+            invoice.refresh_from_db()
+
+        self.assertEqual(
+            [(invoice.pay_address, invoice.pay_amount) for invoice in invoices],
+            [
+                (first_address, Decimal("10.00")),
+                (second_address, Decimal("10.00")),
+                (third_address, Decimal("10.00")),
+                (first_address, Decimal("10.01")),
+                (second_address, Decimal("10.01")),
+            ],
+        )
+
+    def test_differ_payment_reuses_released_base_amount_before_cents(self):
+        # 原价组合释放后，新账单优先回到原价，而不是沿用更高的尾差。
+        first_address = self.enable_differ_mode(address_suffix="d01")
+        second_address = self.add_differ_address(address_suffix="d02", sort_order=1)
+        first = self.create_invoice(out_no="payment-differ-release-first")
+        second = self.create_invoice(out_no="payment-differ-release-second")
+        third = self.create_invoice(out_no="payment-differ-release-third")
+        first.select_method(self.crypto, self.chain_a)
+        second.select_method(self.crypto, self.chain_a)
+        Invoice.objects.filter(pk=first.pk).update(status=InvoiceStatus.EXPIRED)
+
+        third.select_method(self.crypto, self.chain_a)
+
+        second.refresh_from_db()
+        third.refresh_from_db()
+        self.assertEqual(
+            (second.pay_address, second.pay_amount), (second_address, Decimal("10.00"))
+        )
+        self.assertEqual(
+            (third.pay_address, third.pay_amount), (first_address, Decimal("10.00"))
+        )
+
+    def test_differ_payment_skips_inactive_address(self):
+        self.enable_differ_mode(address_suffix="d01")
+        DifferRecipientAddress.objects.update(active=False)
+        active_address = self.add_differ_address(address_suffix="d02", sort_order=1)
+        first = self.create_invoice(out_no="payment-differ-inactive-first")
+        second = self.create_invoice(out_no="payment-differ-inactive-second")
+
+        first.select_method(self.crypto, self.chain_a)
+        second.select_method(self.crypto, self.chain_a)
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(
+            (first.pay_address, first.pay_amount), (active_address, Decimal("10.00"))
+        )
+        self.assertEqual(
+            (second.pay_address, second.pay_amount), (active_address, Decimal("10.01"))
+        )
+
+    def test_differ_payment_raises_when_all_combos_occupied(self):
+        self.enable_differ_mode(address_suffix="d01")
+        self.add_differ_address(address_suffix="d02", sort_order=1)
+        invoices = [
+            self.create_invoice(out_no=f"payment-differ-full-{index}")
+            for index in range(5)
+        ]
+
+        with patch.object(Invoice, "DIFFER_MAX_OFFSET_STEPS", 2):
+            for invoice in invoices[:4]:
+                invoice.select_method(self.crypto, self.chain_a)
+            with self.assertRaisesMessage(
+                Invoice.InvoiceAllocationError, "钱包直收地址不足"
+            ):
+                invoices[4].select_method(self.crypto, self.chain_a)
+
+    def test_differ_payment_raises_without_active_address(self):
+        self.enable_differ_mode(address_suffix="d01")
+        DifferRecipientAddress.objects.update(active=False)
+        invoice = self.create_invoice(out_no="payment-differ-no-address")
+
+        with self.assertRaisesMessage(
+            Invoice.InvoiceAllocationError, "钱包直收地址不足"
+        ):
+            invoice._allocate_differ_payment(self.crypto, self.chain_a, Decimal("10"))
+
+    def test_differ_payment_query_count_independent_of_address_pool(self):
+        # 占用组合一次查出、内存挑选：地址数 × 偏移档数不能放大成同等数量的查询。
+        self.enable_differ_mode(address_suffix="d01")
+        for index in range(2, 6):
+            self.add_differ_address(address_suffix=f"d0{index}", sort_order=index)
+        for index in range(5):
+            self.create_invoice(out_no=f"payment-differ-queries-{index}").select_method(
+                self.crypto, self.chain_a
+            )
+        invoice = self.create_invoice(out_no="payment-differ-queries-next")
+
+        # 1 次查启用地址 + 1 次查已占用组合。
+        with self.assertNumQueries(2):
+            pay_address, pay_amount = invoice._allocate_differ_payment(
+                self.crypto, self.chain_a, Decimal("10")
+            )
+
+        self.assertEqual(
+            pay_address, Web3.to_checksum_address(f"0x{int('d01', 16):040x}")
+        )
+        self.assertEqual(pay_amount, Decimal("10.01"))
 
     @patch("invoices.service.send_saas_callback")
     @patch("invoices.service.WebhookService.create_event")

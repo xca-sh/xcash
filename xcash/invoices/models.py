@@ -261,6 +261,18 @@ class Invoice(models.Model):
         allowed = ProjectService.invoice_receivable_methods(project)
         return {symbol: sorted(chain_codes) for symbol, chain_codes in allowed.items()}
 
+    @staticmethod
+    def _occupying_invoices(*, crypto: "Crypto", chain: "Chain") -> models.QuerySet:
+        # 占用判据与 uniq_invoice_active_payment 约束保持一致——只看 status=WAITING，
+        # 不叠加 expires_at 过滤：过期账单要等状态翻成 EXPIRED 才真正释放槽位，否则约束
+        # 仍锁着该 (pay_address, pay_amount) 组合，而这里若漏判就会让分配陷入
+        # IntegrityError 重试死循环。
+        return Invoice.objects.filter(
+            crypto=crypto,
+            chain=chain,
+            status=InvoiceStatus.WAITING,
+        )
+
     def _current_payment_combo_is_occupied(
         self,
         *,
@@ -269,17 +281,11 @@ class Invoice(models.Model):
         chain: "Chain",
         crypto_amount: Decimal,
     ) -> bool:
-        # 占用判据与 uniq_invoice_active_payment 约束保持一致——只看 status=WAITING，
-        # 不叠加 expires_at 过滤：过期账单要等状态翻成 EXPIRED 才真正释放槽位，否则约束
-        # 仍锁着该 (pay_address, pay_amount) 组合，而这里若漏判就会让分配陷入
-        # IntegrityError 重试死循环。
-        return Invoice.objects.filter(
-            crypto=crypto,
-            chain=chain,
-            pay_address=pay_address,
-            pay_amount=crypto_amount,
-            status=InvoiceStatus.WAITING,
-        ).exists()
+        return (
+            self._occupying_invoices(crypto=crypto, chain=chain)
+            .filter(pay_address=pay_address, pay_amount=crypto_amount)
+            .exists()
+        )
 
     def _allocate_contract_slot(
         self,
@@ -444,21 +450,34 @@ class Invoice(models.Model):
             )
 
         base_amount = crypto_amount.quantize(self.DIFFER_AMOUNT_STEP, rounding=ROUND_UP)
-        recipients = DifferRecipientAddress.objects.filter(
-            project=self.project,
-            chain_type=chain.type,
-            active=True,
-        ).order_by("sort_order", "pk")
-        for recipient in recipients:
+        recipient_addresses = list(
+            DifferRecipientAddress.objects.filter(
+                project=self.project,
+                chain_type=chain.type,
+                active=True,
+            )
+            .order_by("sort_order", "pk")
+            .values_list("address", flat=True)
+        )
+        if recipient_addresses:
+            # 一次查出候选区间内已被占用的组合，在内存里挑选，避免地址数 × 偏移档数次查询。
+            occupied = set(
+                self._occupying_invoices(crypto=crypto, chain=chain)
+                .filter(
+                    pay_address__in=recipient_addresses,
+                    pay_amount__gte=base_amount,
+                    pay_amount__lt=base_amount
+                    + self.DIFFER_AMOUNT_STEP * self.DIFFER_MAX_OFFSET_STEPS,
+                )
+                .values_list("pay_address", "pay_amount")
+            )
+            # 先偏移后地址：同一档金额先铺满所有启用地址，地址都被占用才加尾差，
+            # 地址越多买家越能按原价付款。
             for offset_index in range(self.DIFFER_MAX_OFFSET_STEPS):
                 pay_amount = base_amount + self.DIFFER_AMOUNT_STEP * offset_index
-                if not self._current_payment_combo_is_occupied(
-                    pay_address=recipient.address,
-                    crypto=crypto,
-                    chain=chain,
-                    crypto_amount=pay_amount,
-                ):
-                    return recipient.address, pay_amount
+                for address in recipient_addresses:
+                    if (address, pay_amount) not in occupied:
+                        return address, pay_amount
 
         raise self.InvoiceAllocationError(
             f"project={self.project_id}, chain_type={chain.type} 钱包直收地址不足"
