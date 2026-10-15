@@ -288,8 +288,9 @@ jobs:
       - name: 查看发布结果
         run: docker buildx imagetools inspect "${IMAGE}:latest"
 
-  # 镜像包首次发布时默认是私有的，需在 GitHub 包设置里手动改为 Public（改后不可撤回）。
-  # 本 job 不登录任何 registry：这里读不到，部署方服务器同样拉不到，CI 直接标红提醒。
+  # 镜像包必须公开，部署方服务器才能匿名拉取。包关联到本公开仓库，实测首次发布即为
+  # Public（公开后不可再改回私有）。本 job 不登录任何 registry：这里读不到，部署方
+  # 服务器同样拉不到，CI 直接标红提醒。
   verify-public:
     name: 校验镜像可匿名拉取
     needs: publish-manifest
