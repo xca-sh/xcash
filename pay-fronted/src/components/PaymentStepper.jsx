@@ -212,15 +212,14 @@ function PaymentStepper({
           </main>
 
           <footer className="px-4 pb-8 pt-2">
-            <p className="text-center text-xs text-muted-foreground">
-              Powered by{" "}
-              <a
-                href="https://xca.sh"
-                className="font-medium text-foreground underline-offset-4 hover:underline"
-              >
+            <div className="mx-auto flex max-w-xl items-center justify-center gap-2 text-xs text-muted-foreground">
+              <span>Powered by</span>
+              <a href="https://xca.sh" className="font-semibold text-brand-gradient hover:opacity-80">
                 Xcash
               </a>
-            </p>
+              <span className="text-border">|</span>
+              <span>Secure Crypto Payments</span>
+            </div>
           </footer>
         </div>
       </div>

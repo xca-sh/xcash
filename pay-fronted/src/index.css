@@ -113,25 +113,27 @@
   --sidebar-ring: oklch(0.921 0.175 136.2);
 }
 
+/* 深色主题参考 waffo 文档站：#0c0d0c 带绿调的近黑底，中性灰同样微偏绿，
+   卡片只比底色略亮一档、主要靠细描边分层 */
 .dark {
-  --background: oklch(0.155 0 0);
-  --foreground: oklch(0.95 0 0);
-  --card: oklch(0.195 0 0);
-  --card-foreground: oklch(0.95 0 0);
-  --popover: oklch(0.215 0 0);
-  --popover-foreground: oklch(0.95 0 0);
+  --background: #0c0d0c;
+  --foreground: #f2f3f0;
+  --card: #121411;
+  --card-foreground: #f2f3f0;
+  --popover: #161814;
+  --popover-foreground: #f2f3f0;
   --primary: oklch(0.921 0.175 136.2);
   --primary-foreground: oklch(0.18 0.03 136);
   --primary-ink: oklch(0.921 0.175 136.2);
-  --secondary: oklch(0.26 0 0);
-  --secondary-foreground: oklch(0.95 0 0);
-  --muted: oklch(0.235 0 0);
-  --muted-foreground: oklch(0.7 0 0);
-  --accent: oklch(0.28 0 0);
-  --accent-foreground: oklch(0.95 0 0);
+  --secondary: #1a1d16;
+  --secondary-foreground: #f2f3f0;
+  --muted: #1a1d16;
+  --muted-foreground: #9c9f97;
+  --accent: #1f221b;
+  --accent-foreground: #f2f3f0;
   --destructive: oklch(0.76 0.16 22);
-  --border: oklch(0.28 0 0);
-  --input: oklch(0.32 0 0);
+  --border: #23261f;
+  --input: #292b25;
   --ring: oklch(0.921 0.175 136.2);
   --chart-1: oklch(0.921 0.175 136.2);
   --chart-2: oklch(0.84 0.12 235);
@@ -140,8 +142,8 @@
   --chart-5: oklch(0.38 0 0);
   --success: oklch(0.921 0.175 136.2);
   --success-foreground: oklch(0.18 0.03 136);
-  --success-soft: oklch(0.24 0.04 136);
-  --success-border: oklch(0.36 0.07 136);
+  --success-soft: #172412;
+  --success-border: #2f4a22;
   --info: oklch(0.84 0.12 235);
   --info-soft: oklch(0.23 0.025 240);
   --info-border: oklch(0.35 0.05 240);
@@ -175,14 +177,25 @@
 }
 
 @layer utilities {
-  /* 品牌面板：两个主题下都保持近黑底 + 细点阵 + 品牌黄绿微光 */
+  /* 品牌面板：两个主题下都保持近黑底 + 细点阵；点阵与光晕都取品牌黄绿 #ADFF85，与主题色呼应 */
   .brand-panel {
-    background-color: #0a0a0a;
+    background-color: #0c0d0c;
     background-image:
-      radial-gradient(circle at 88% -5%, #adff8538, transparent 52%),
-      radial-gradient(circle at -5% 105%, #72e85724, transparent 55%),
-      radial-gradient(circle at 35% 40%, #0a934d1a, transparent 60%),
-      radial-gradient(rgba(255, 255, 255, 0.13) 1px, transparent 1.5px);
+      radial-gradient(circle at 92% -8%, #adff8540, transparent 50%),
+      radial-gradient(circle at -10% 108%, #7ccb0230, transparent 55%),
+      radial-gradient(circle at 40% 45%, #adff850d, transparent 60%),
+      radial-gradient(#adff853d 1px, transparent 1.5px);
     background-size: auto, auto, auto, 22px 22px;
+  }
+
+  /* 品牌渐变文字（页脚 Xcash）：深色下取 waffo 绿 → 品牌黄绿；浅色下压暗保证可读 */
+  .text-brand-gradient {
+    background-image: linear-gradient(120deg, #3f8a00, #6cb800);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .dark .text-brand-gradient {
+    background-image: linear-gradient(120deg, #7ccb02, #adff85);
   }
 }
