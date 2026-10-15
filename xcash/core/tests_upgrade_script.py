@@ -30,6 +30,9 @@ if tool == "git":
     sys.exit(0)
 if tool == "flock":
     sys.exit(0)
+if tool == "timeout":
+    # 去掉超时秒数，原样执行被包裹的命令（仍会走到这里的 docker 替身）。
+    os.execvp(args[1], args[1:])
 
 args = args[1:]  # docker compose
 compose_files = []
@@ -47,7 +50,7 @@ if command == "up" and "worker" in args:
 
 if command == "ps":
     print(os.environ["RUNNING_SERVICES"])
-elif command == "build" and failure == "build":
+elif command == "pull" and failure == "pull":
     sys.exit(23)
 elif command == "stop":
     if failure == "stop_workers" and args[1:] == ["worker", "worker-scan"]:
@@ -96,7 +99,7 @@ elif command in ("run", "exec") and "manage.py" in args:
 def run_upgrade(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for tool in ("git", "docker", "flock"):
+    for tool in ("git", "docker", "flock", "timeout"):
         executable = bin_dir / tool
         executable.write_text(f"#!{sys.executable}\n{FAKE_CLI}")
         executable.chmod(0o755)
@@ -172,7 +175,7 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
 ):
     result, commands = run_upgrade(migrations=migrations, quiesced=quiesced)
     assert result.returncode == 0, result.stdout + result.stderr
-    build = command_index(commands, ["build"])
+    pull = command_index(commands, ["pull"])
     stop_beat = commands.index(["stop", "beat"])
     stop_workers = commands.index(["stop", "worker", "worker-scan"])
     stop_django = commands.index(["stop", "django"])
@@ -180,9 +183,10 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
     start_beat = commands.index(["up", "-d", "--no-deps", "beat"])
     consumers_ready = command_index(commands, ["exec"], contains="consumers")
     scheduler_ready = command_index(commands, ["exec"], contains="scheduler")
+    reload_caddy = command_index(commands, ["exec"], contains="reload")
     bootstrap = command_index(commands, ["run"], contains="bootstrap_runtime")
     assert (
-        build
+        pull
         < stop_beat
         < stop_workers
         < stop_django
@@ -191,6 +195,8 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
         < start_beat
     )
     assert start_runtime < consumers_ready < start_beat < scheduler_ready
+    # Caddyfile 有误时 reload 会失败，放在最后才不会拖住 Beat 等业务进程的启动。
+    assert scheduler_ready < reload_caddy
     assert commands.count(["stop", "beat"]) == 1
     assert commands.count(["stop", "worker", "worker-scan"]) == 1
     assert commands.count(["stop", "django"]) == 1
@@ -211,8 +217,8 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
         assert (stop_beat < rehearsal_index) is quiesced
 
 
-def test_build_failure_leaves_existing_services_running(run_upgrade):
-    result, commands = run_upgrade(failure="build")
+def test_pull_failure_leaves_existing_services_running(run_upgrade):
+    result, commands = run_upgrade(failure="pull")
     assert result.returncode != 0
     assert not any(c[0] in ("stop", "start") for c in commands)
 
