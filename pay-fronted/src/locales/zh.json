@@ -53,11 +53,16 @@
     "scanQRCode": "使用钱包扫码完成支付",
     "reselectMethod": "重新选择支付方式",
     "returnToMerchant": "返回商户",
-    "transferHint": "使用钱包扫码，或复制地址与金额手动转账",
-    "networkNotice": "请仅通过 {{chain}} 网络发送 {{crypto}}，且金额与上方完全一致，否则可能无法到账",
     "tokenContract": "代币合约",
     "paidAmount": "实付金额",
-    "orderAmount": "订单金额"
+    "orderAmount": "订单金额",
+    "sendCrypto": "发送 {{crypto}}",
+    "onlyNetwork": "仅限此网络",
+    "exactAmountTitle": "转账金额必须与上方完全一致",
+    "exactAmountDesc": "多付、少付都无法自动到账。从交易所提币时，请确保扣除手续费后的到账金额仍为 {{amount}} {{crypto}}。",
+    "wrongNetworkDesc": "仅支持 {{chain}} 网络上的 {{crypto}}，转错网络或币种可能无法到账且难以找回。",
+    "timeLeft": "剩余支付时间",
+    "exactTag": "须完全一致"
   },
   "wallet": {
     "payWithWallet": "使用钱包支付",

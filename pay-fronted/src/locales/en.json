@@ -53,11 +53,16 @@
     "scanQRCode": "Scan QR code with wallet",
     "reselectMethod": "Reselect Payment Method",
     "returnToMerchant": "Return to Merchant",
-    "transferHint": "Scan with your wallet, or copy the address and amount",
-    "networkNotice": "Send {{crypto}} on the {{chain}} network only, for exactly the amount above, or the payment may not be credited",
     "tokenContract": "Token contract",
     "paidAmount": "Amount paid",
-    "orderAmount": "Order amount"
+    "orderAmount": "Order amount",
+    "sendCrypto": "Send {{crypto}}",
+    "onlyNetwork": "This network only",
+    "exactAmountTitle": "Send the exact amount shown above",
+    "exactAmountDesc": "Overpaying or underpaying will not be credited automatically. When withdrawing from an exchange, make sure {{amount}} {{crypto}} arrives after fees.",
+    "wrongNetworkDesc": "Only {{crypto}} on {{chain}} is accepted. Funds sent on another network or token may be lost.",
+    "timeLeft": "Time left to pay",
+    "exactTag": "Exact"
   },
   "wallet": {
     "payWithWallet": "Pay with Wallet",

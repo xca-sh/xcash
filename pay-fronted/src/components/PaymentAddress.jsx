@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react"
 import QRCode from "qrcode"
-import { ArrowLeft, Info, Loader2 } from "lucide-react"
+import { ArrowLeft, Clock, Loader2, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import CopyButton from "@/components/CopyButton"
 import ConfirmationProgress from "@/components/ConfirmationProgress"
 import { useMetadataContext } from "@/context/MetadataContext"
 import { getConfirmationProgress, isPaymentConfirming } from "@/lib/invoiceStatus"
 import { useI18n } from "@/hooks/useI18n"
+import { useCountdown, formatRemainingTime } from "@/hooks/useCountdown"
 import { cn } from "@/lib/utils"
 import WalletPay from "@/components/WalletPay"
 import TronWalletPay from "@/components/TronWalletPay"
@@ -49,6 +50,31 @@ function TokenIcon({ src, className }) {
       className={cn("shrink-0 rounded-full", className)}
       onError={(e) => { e.target.style.visibility = "hidden" }}
     />
+  )
+}
+
+// 剩余支付时间：最后 5 分钟转为警示色，最后 1 分钟转为危险色
+const WARN_MS = 5 * 60_000
+const DANGER_MS = 60_000
+
+function CardCountdown({ expiresAt }) {
+  const { t } = useI18n()
+  const remainingMs = useCountdown(expiresAt)
+  if (remainingMs === null) return null
+
+  return (
+    <div className="shrink-0 text-right">
+      <div className="text-[11px] leading-4 text-muted-foreground">{t("payment.timeLeft")}</div>
+      <div
+        className={cn(
+          "mt-1 flex items-center justify-end gap-1.5 font-mono text-[15px] font-semibold leading-5 tabular-nums",
+          remainingMs <= DANGER_MS ? "text-destructive" : remainingMs <= WARN_MS ? "text-warning" : "text-foreground"
+        )}
+      >
+        <Clock className="size-3.5 shrink-0" />
+        {remainingMs === 0 ? t("waiting.expired") : formatRemainingTime(remainingMs, t)}
+      </div>
+    </div>
   )
 }
 
@@ -103,19 +129,32 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
       ? t("payment.paymentFinalizing")
       : isConfirming
         ? t("payment.paymentConfirming")
-        : t("payment.paymentInfo")
+        : t("payment.sendCrypto", { crypto: invoice.crypto })
 
+  // 已观测到付款后才需要说明当前在等什么；待支付时标题 + 网络已足够
   const headerDescription = isCompleted
     ? t("confirmation.transactionConfirmed")
     : isFinalizing
       ? t("confirmation.awaitingFinalization")
       : isConfirming
         ? t("confirmation.waitingConfirmation")
-        : t("payment.transferHint")
+        : null
+  const showCountdown = invoice.status === "waiting" && !hasPayment && Boolean(invoice.expires_at)
 
   const amountField = (
     <Field
-      label={t("payment.paymentAmount")}
+      label={
+        hasPayment ? (
+          t("payment.paymentAmount")
+        ) : (
+          <span className="flex items-center gap-2">
+            {t("payment.paymentAmount")}
+            <span className="rounded bg-warning-soft px-1.5 py-px text-[11px] font-medium text-warning">
+              {t("payment.exactTag")}
+            </span>
+          </span>
+        )
+      }
       action={!hasPayment && <CopyButton value={invoice.pay_amount} />}
     >
       <div className="flex min-w-0 items-baseline gap-2">
@@ -129,23 +168,35 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
 
   return (
     <section className="overflow-hidden rounded-xl border bg-card shadow-xs">
-      {/* 头部：加密货币图标 + 标题/说明 + 网络标识 */}
+      {/* 头部：币种图标（右下角叠网络角标）+「发送 USDT」+ 网络标识 + 剩余时间。
+          币种与网络是转错最常见的两项，放在卡片最显眼的位置 */}
       <header className="flex items-start gap-3.5 px-5 pt-5 sm:px-6 sm:pt-6">
-        <TokenIcon src={cryptoMeta.icon} className="mt-0.5 size-9 ring-1 ring-border" />
-        <div className="min-w-0 flex-1">
-          <h2 className="text-[15px] font-medium leading-6 tracking-tight">{headerTitle}</h2>
-          <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">{headerDescription}</p>
-        </div>
-        <span
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium",
-            chainMeta.isTestnet && "border-warning-border bg-warning-soft text-warning"
-          )}
-        >
-          <TokenIcon src={chainMeta.icon} className="size-3.5" />
-          {chainMeta.name}
-          {chainMeta.isTestnet && ` · ${t("selector.testNetwork")}`}
+        <span className="relative mt-0.5 shrink-0">
+          <TokenIcon src={cryptoMeta.icon} className="size-10" />
+          <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full bg-card">
+            <TokenIcon src={chainMeta.icon} className="size-4" />
+          </span>
         </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-lg font-semibold leading-6 tracking-tight">{headerTitle}</h2>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border bg-muted px-2 py-0.5 text-[13px] font-medium",
+                chainMeta.isTestnet && "border-warning-border bg-warning-soft text-warning"
+              )}
+            >
+              <TokenIcon src={chainMeta.icon} className="size-3.5" />
+              {chainMeta.name}
+              {chainMeta.isTestnet && ` · ${t("selector.testNetwork")}`}
+            </span>
+            {!hasPayment && <span className="text-xs text-muted-foreground">{t("payment.onlyNetwork")}</span>}
+          </div>
+          {headerDescription && (
+            <p className="mt-2 text-[13px] leading-5 text-muted-foreground">{headerDescription}</p>
+          )}
+        </div>
+        {showCountdown && <CardCountdown expiresAt={invoice.expires_at} />}
       </header>
 
       {hasPayment ? (
@@ -172,49 +223,54 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
           </dl>
         </div>
       ) : (
-        // 待支付：二维码 + 金额 / 地址
-        <div className="grid gap-6 px-5 py-6 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center sm:gap-7 sm:px-6">
-          <div className="justify-self-center rounded-lg bg-white p-2.5 ring-1 ring-black/[0.06]">
-            {qrCodeUrl ? (
-              <img src={qrCodeUrl} alt={t("payment.scanQRCode")} className="size-40" />
-            ) : (
-              <div className="flex size-40 items-center justify-center">
-                <Loader2 className="size-5 animate-spin text-neutral-400" />
-              </div>
-            )}
+        // 待支付：二维码 + 金额 / 地址，下方紧跟转账警示
+        <div className="px-5 py-6 sm:px-6">
+          <div className="grid gap-6 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center sm:gap-7">
+            <div className="justify-self-center rounded-lg bg-white p-2.5 ring-1 ring-black/[0.06]">
+              {qrCodeUrl ? (
+                <img src={qrCodeUrl} alt={t("payment.scanQRCode")} className="size-40" />
+              ) : (
+                <div className="flex size-40 items-center justify-center">
+                  <Loader2 className="size-5 animate-spin text-neutral-400" />
+                </div>
+              )}
+            </div>
+
+            <dl className="min-w-0 divide-y">
+              {amountField}
+              <Field
+                label={t("payment.paymentAddress")}
+                action={<CopyButton value={invoice.pay_address} />}
+              >
+                <code className="block break-all font-mono text-[13px] leading-5">
+                  <HighlightedAddress address={invoice.pay_address} />
+                </code>
+              </Field>
+            </dl>
           </div>
 
-          <dl className="min-w-0 divide-y">
-            {amountField}
-            <Field
-              label={t("payment.paymentAddress")}
-              action={<CopyButton value={invoice.pay_address} />}
-            >
-              <code className="block break-all font-mono text-[13px] leading-5">
-                <HighlightedAddress address={invoice.pay_address} />
-              </code>
-            </Field>
-          </dl>
-        </div>
-      )}
+          {/* 转账警示：金额必须精确一致（系统按金额匹配账单）+ 网络/币种不可转错 */}
+          <div role="note" className="mt-6 flex gap-3 rounded-lg border border-warning-border bg-warning-soft px-4 py-3.5">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+            <div className="min-w-0 space-y-1 text-[13px] leading-5">
+              <p className="font-semibold text-warning">{t("payment.exactAmountTitle")}</p>
+              <p className="text-foreground/80">
+                {t("payment.exactAmountDesc", { amount: invoice.pay_amount, crypto: invoice.crypto })}
+              </p>
+              <p className="text-foreground/80">
+                {t("payment.wrongNetworkDesc", { chain: chainMeta.name, crypto: invoice.crypto })}
+              </p>
+            </div>
+          </div>
 
-      {/* 转账须知：网络 / 合约 / 金额一致性，转错网络是最常见的丢币原因 */}
-      {!hasPayment && (
-        <div className="space-y-2.5 border-t bg-muted/40 px-5 py-4 text-xs sm:px-6">
           {invoice.crypto_address && (
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-muted-foreground">{t("payment.tokenContract")}</span>
-              <code className="select-none font-mono text-muted-foreground">
+            <div className="mt-4 flex items-center justify-between gap-4 px-1 text-xs text-muted-foreground">
+              <span>{t("payment.tokenContract")}</span>
+              <code className="select-none font-mono">
                 {invoice.crypto_address.slice(0, 6)}…{invoice.crypto_address.slice(-8)}
               </code>
             </div>
           )}
-          <p className="flex gap-2 leading-5 text-muted-foreground">
-            <Info className="mt-0.5 size-3.5 shrink-0" />
-            <span>
-              {t("payment.networkNotice", { chain: chainMeta.name, crypto: invoice.crypto })}
-            </span>
-          </p>
         </div>
       )}
 

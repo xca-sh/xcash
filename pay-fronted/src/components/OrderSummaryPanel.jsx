@@ -1,11 +1,10 @@
 // src/components/OrderSummaryPanel.jsx
 // 订单摘要面板：移动端是顶部品牌横幅，桌面端是左侧固定的深色品牌侧栏。
-import { useEffect, useMemo, useState } from "react"
 import { Clock, Moon, Sun, ShieldCheck } from "lucide-react"
 import LogoMark from "@/components/LogoMark"
 import { useI18n } from "@/hooks/useI18n"
 import { getInvoiceDisplayStatus } from "@/lib/invoiceStatus"
-import { getRemainingMs } from "@/lib/dateTime"
+import { useCountdown, formatRemainingTime } from "@/hooks/useCountdown"
 import { cn } from "@/lib/utils"
 
 // 状态 → 深色面板上的状态点颜色（面板始终是近黑底，浅色圆点保证可读性）
@@ -19,47 +18,10 @@ const STATUS_DOT = {
 
 const PULSING = new Set(["waiting", "confirming", "finalizing"])
 
-function formatRemainingTime(remainingMs, t) {
-  if (remainingMs === null || typeof remainingMs === "undefined") {
-    return "--:--:--"
-  }
-
-  const totalSeconds = Math.floor(remainingMs / 1000)
-  const days = Math.floor(totalSeconds / 86400)
-  const hours = Math.floor((totalSeconds % 86400) / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  const seconds = totalSeconds % 60
-  const pad = (value) => value.toString().padStart(2, "0")
-
-  if (days > 0) {
-    return `${days}${t("waiting.days")} ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`
-  }
-
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`
-}
-
 function InvoiceCountdown({ invoice, t }) {
   const shouldShow = invoice?.status === "waiting" && Boolean(invoice?.expires_at)
-  const [remainingMs, setRemainingMs] = useState(() =>
-    shouldShow ? getRemainingMs(invoice.expires_at) : null
-  )
-
-  useEffect(() => {
-    if (!shouldShow) {
-      setRemainingMs(null)
-      return
-    }
-
-    const updateRemaining = () => {
-      setRemainingMs(getRemainingMs(invoice.expires_at))
-    }
-
-    updateRemaining()
-    const timer = setInterval(updateRemaining, 1000)
-    return () => clearInterval(timer)
-  }, [invoice?.expires_at, shouldShow])
-
-  const countdownText = useMemo(() => formatRemainingTime(remainingMs, t), [remainingMs, t])
+  const remainingMs = useCountdown(invoice?.expires_at, shouldShow)
+  const countdownText = formatRemainingTime(remainingMs, t)
 
   if (!shouldShow) return null
 
