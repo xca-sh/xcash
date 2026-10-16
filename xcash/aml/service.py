@@ -54,9 +54,8 @@ class AmlScreeningService:
 
     @staticmethod
     def should_screen(*, project: Project, worth: Decimal, transfer: Transfer) -> bool:
-        """匹配时判定这笔收款是否需要 AML 查询。
+        """匹配时判定这笔收款是否需要 AML 查询（走快速确认的账单由调用方先行排除）。
 
-        同时决定账单能否走快速确认：需要查询的账单必须走完整确认，给查询留出时间。
         以下情况不查询、不写记录：项目未开启、价值不超过项目阈值（小额收款占绝大多数）、
         链不在 MistTrack 覆盖范围（测试网等）、付款地址未知、未配置查询 endpoint。
         """

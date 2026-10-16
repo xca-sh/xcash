@@ -594,14 +594,12 @@ class InvoiceService:
 
     @staticmethod
     def bind_transfer_to_invoice(*, invoice: Invoice, transfer: Transfer) -> bool:
-        needs_aml = AmlScreeningService.should_screen(
+        quick_confirm = invoice.project.fast_confirm_threshold > invoice.worth
+        confirm_mode = ConfirmMode.QUICK if quick_confirm else ConfirmMode.FULL
+        # 走快速确认的账单不查 AML：快速确认是商户为小额收款选择的速度优先，
+        # AML 不改变确认行为；两个阈值如何搭配由商户自己负责。
+        needs_aml = not quick_confirm and AmlScreeningService.should_screen(
             project=invoice.project, worth=invoice.worth, transfer=transfer
-        )
-        # 需要 AML 的账单不走快速确认：快速确认一匹配就完成，查询结果来不及写进确认 webhook。
-        confirm_mode = (
-            ConfirmMode.QUICK
-            if invoice.project.fast_confirm_threshold > invoice.worth and not needs_aml
-            else ConfirmMode.FULL
         )
         transfer = TransferService.assign_type_and_mode(
             transfer, TransferType.Invoice, confirm_mode

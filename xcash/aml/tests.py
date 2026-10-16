@@ -447,10 +447,7 @@ class AmlPaymentFlowTests(AmlTestMixin, TestCase):
         return invoice
 
     @patch("invoices.service.screen_transfer_aml.delay")
-    def test_invoice_match_starts_screening_and_skips_quick_confirm(self, delay):
-        # 快速确认阈值高于账单价值，本应快速确认；但需要 AML，必须走完整确认
-        self.project.fast_confirm_threshold = Decimal("1000")
-        self.project.save(update_fields=["fast_confirm_threshold"])
+    def test_invoice_match_starts_screening(self, delay):
         self.make_waiting_invoice()
 
         with self.captureOnCommitCallbacks(execute=True):
@@ -461,12 +458,10 @@ class AmlPaymentFlowTests(AmlTestMixin, TestCase):
         self.assertEqual(self.transfer.confirm_mode, ConfirmMode.FULL)
 
     @patch("invoices.service.screen_transfer_aml.delay")
-    def test_invoice_match_without_aml_keeps_quick_confirm(self, delay):
+    def test_quick_confirm_invoice_is_not_screened(self, delay):
+        """快速确认优先：价值高于 AML 阈值但低于快速确认阈值的账单照常快速确认、不查 AML。"""
         self.project.fast_confirm_threshold = Decimal("1000")
-        self.project.aml_screening_enabled = False
-        self.project.save(
-            update_fields=["fast_confirm_threshold", "aml_screening_enabled"]
-        )
+        self.project.save(update_fields=["fast_confirm_threshold"])
         self.make_waiting_invoice()
 
         with self.captureOnCommitCallbacks(execute=True):
