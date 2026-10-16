@@ -43,7 +43,7 @@
 
 ## 认证
 
-所有 `/v1/*` 接口都需要 HMAC 签名，**以下公开端点除外**：`GET /v1/invoice/{sys_no}`、`POST /v1/invoice/{sys_no}/select-method`、`GET /v1/metadata`。
+所有 `/v1/*` 接口都需要 HMAC 签名，**以下公开端点除外**：`GET /v1/invoice/{sys_no}`、`GET /v1/metadata`。
 
 ### 凭证
 
@@ -131,7 +131,6 @@ const signature = crypto.createHmac("sha256", hmacKey).update(`${nonce}${timesta
 |------|------|------|------|------|
 | `POST` | `/v1/invoice` | 创建账单 | 需要 | 256/分钟，按 IP |
 | `GET` | `/v1/invoice/{sys_no}` | 查询账单 | 不需要 | 120/分钟，按 sys_no + IP |
-| `POST` | `/v1/invoice/{sys_no}/select-method` | 选择/切换支付方式 | 不需要 | 10/分钟，按 sys_no + IP |
 | `GET` | `/v1/deposit/address` | 获取充值地址 | 需要 | 60/分钟，按 appid + IP |
 | `GET` | `/v1/metadata` | 链/币元数据 | 不需要 | 256/分钟，按 IP |
 | `GET` / `POST` | `/epay/submit.php` | 易支付 V1 下单 | EPay MD5 | 60/分钟，按 IP |
@@ -205,23 +204,7 @@ const signature = crypto.createHmac("sha256", hmacKey).update(`${nonce}${timesta
 - **methods**：必须是项目可用组合的子集，否则返回 `5008`；未知币种返回 `2001`，未知链返回 `2000`。响应中的 `methods` 是最终生效的组合。
 - **自动选择**：最终只剩一个「币 × 链」组合时，创建时即自动分配，响应中 `chain`、`crypto`、`pay_address`、`pay_amount` 已有值。
 - **待支付上限**：项目 `waiting` 状态账单达到 100 笔时，拒绝新建（`5009`）。
-
-### 收款模式与付款金额
-
-每个项目按链类型（EVM / Tron）分别设置账单收款模式，默认「钱包直收」：
-
-| 模式 | 收款地址 | `pay_amount` | 限制 |
-|------|------|------|------|
-| 钱包直收 | 项目配置的钱包地址（多账单共用） | 按汇率换算后**向上取整到 0.01**；该金额在所有钱包地址上都被待支付账单占用时，再加 0.01 的整数倍（最多 +0.99）以区分账单 | EVM 链不支持原生币 |
-| 智能合约 | 系统分配的合约地址，确认后自动归集到项目归集地址 | 按汇率换算，向上取整到币种精度 | 需配置对应链类型的归集地址 |
-
-账单入账的匹配条件（全部满足才算支付成功）：
-
-1. 转入当前的 `pay_address`，链与币种与当前 `chain`、`crypto` 一致；
-2. **到账金额与 `pay_amount` 完全相等**，多付、少付均不匹配；
-3. 交易时间在 `started_at` ~ `expires_at` 之间。
-
-买家切换支付方式后，旧的地址/金额立即失效。请始终以接口返回的 `chain`、`crypto`、`pay_address`、`pay_amount` 为准，不要自行按 `amount` 推算。
+- **付款金额**：买家应付以 `pay_amount` 为准，它由汇率换算得出，并可能带有区分账单的尾差，不要自行按 `amount` 推算；链上到账金额须与 `pay_amount` 完全相等才会入账。
 
 ## 查询账单
 
@@ -242,7 +225,7 @@ const signature = crypto.createHmac("sha256", hmacKey).update(`${nonce}${timesta
 | `pay_address` | string \| null | 收款地址 |
 | `pay_amount` | string \| null | 买家应付的加密货币数量 |
 | `pay_url` | string | 支付页地址 |
-| `started_at` | string | 当前支付指引的生效时间；切换支付方式时更新 |
+| `started_at` | string | 当前支付指引的生效时间；买家在支付页切换支付方式时更新 |
 | `created_at` | string | 创建时间 |
 | `expires_at` | string | 过期时间 |
 | `return_url` | string | 跳转地址，未设置为 `""`；EPay 订单完成后为带签名参数的跳转 URL |
@@ -275,20 +258,6 @@ const signature = crypto.createHmac("sha256", hmacKey).update(`${nonce}${timesta
 - `completed`：已确认，终态。
 - `expired`：已过期。**不是终态**：过期前已上链的付款在过期后确认，账单仍会转为 `completed` 并发送 Webhook。
 - 账单美元价值低于项目「快速确认阈值」（默认 10 USD）时，观察到付款即确认，不等待区块确认数。
-
-## 选择支付方式
-
-`POST /v1/invoice/{sys_no}/select-method`
-
-公开接口，无需签名。为账单分配或切换支付方式，内置支付页即调用此接口；自建收银台时可使用。
-
-```json
-{ "crypto": "USDT", "chain": "tron" }
-```
-
-- 成功返回 HTTP `200`，响应体同[查询账单](#查询账单)。
-- 选择与当前相同的方式时直接返回现有指引；切换时重新分配 `pay_address` / `pay_amount` 并刷新 `started_at`。
-- 错误：`5006` 账单非 `waiting` 或已匹配到付款；`5012` 已过期；`2001` / `2000` 币种或链不在该账单 `methods` 内；`2002` 该链不支持此币种；`5008` 收款地址分配失败；`1000` 参数错误或暂无报价。
 
 ## 获取充值地址
 
@@ -498,10 +467,8 @@ def epay_sign(params: dict, secret_key: str) -> str:
 | `4001` | 400 | 项目未配置该链类型的归集地址 |
 | `4002` | 403 | 充值用户数达到套餐上限（官方托管版） |
 | `5000` | 400 | 不支持的计价法币 |
-| `5006` | 400 | 账单状态不允许此操作 |
 | `5008` | 400 | 无可用支付方式 |
 | `5009` | 400 | 待支付账单过多 |
-| `5012` | 400 | 账单已过期 |
 | `6004` | 403 | 账户已冻结（官方托管版） |
 
 ## 对接流程
