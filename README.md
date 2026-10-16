@@ -83,6 +83,17 @@ docker compose up -d
 
 ![Xcash 账单收款支付页](xcash/static/xcash-pay-page-zh.png)
 
+## AML 链上风控（可选）
+
+Xcash 可接入 [MistTrack](https://misttrack.io/) 地址风险评分（通过 QuickNode 的 MistTrack Address Risk Scores add-on），对收款的**付款地址**做反洗钱筛查：
+
+- **按项目开关**：每个项目独立设置是否开启、以及「AML 查询阈值」（默认 100 USD），只有价值高于阈值的账单与充值才查询，控制查询成本。
+- **与确认并行**：转账一匹配到账单/充值就开始查询，不拖慢确认；结果随 Webhook 的 `risk_level`（`Low` / `Moderate` / `High` / `Severe`）和 `risk_score` 推送，也可在后台账单、充值列表中按风险等级筛选。
+- **每笔实时查询**：不缓存地址结论，防止先用干净资金"洗白"地址再付黑币。
+- **只评分、不拦截**：资金经合约直达商户钱包，系统无法也不会拒收。风险结果不改变确认、归集与通知流程，**是否发货、上账、冻结或退款由商户根据风险等级和分数自行判断**。
+
+未满足条件（未开启、低于阈值、走快速确认的小额账单、测试网等不支持的链、查询失败）的收款，风险字段为 `null`，`null` 不代表低风险。开启方法与字段细节见 [API.md · AML 风控](API.md#aml-风控)。
+
 ## 接入你现有的技术栈
 
 - **WooCommerce** —— 官方 **Xcash for WooCommerce** 插件，几步为你的 WordPress 商店加上 USDT、USDC 等加密货币结账。[下载插件](https://xca.sh/#integration)
@@ -192,7 +203,9 @@ docker compose up -d
 - **通知地址**：接收 Webhook 事件。
 - **收款地址**：账单默认使用钱包直收，在项目页添加你自己的「钱包直收地址」即可；若要使用充值收款或智能合约账单收款，需配置对应链类型（EVM / Tron）的「归集地址」，**一旦设置不可修改**，建议使用多签钱包。
 
-以上配置齐全后项目才就绪，否则 API 返回 `1004`。之后参考 [API 对接文档](https://xca.sh/docs/#api-base) 或 [API.md](API.md) 接入账单收款、充值收款和 Webhook。
+以上配置齐全后项目才就绪，否则 API 返回 `1004`。
+
+如需 [AML 链上风控](#aml-链上风控可选)：先在 **系统 → 运行参数 → AML 筛查** 填写开通了 MistTrack Address Risk Scores add-on 的 QuickNode endpoint，再在项目详情页的「AML 筛查」标签开启并设置查询阈值。之后参考 [API 对接文档](https://xca.sh/docs/#api-base) 或 [API.md](API.md) 接入账单收款、充值收款和 Webhook。
 
 ## 备份与恢复
 

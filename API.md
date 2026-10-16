@@ -234,8 +234,8 @@ const signature = crypto.createHmac("sha256", hmacKey).update(`${nonce}${timesta
 | `evm_payment` | object \| null | EVM 钱包一键支付参数 `{chain_id, to, value, data}`；不适用时为 `null` |
 | `tron_payment` | object \| null | TronLink 一键支付参数 `{is_native, to, contract, amount, fee_limit, is_testnet}`；不适用时为 `null` |
 | `status` | string | `waiting` / `completed` / `expired` |
-| `risk_level` | string \| null | AML 风险等级：`Low` / `Moderate` / `High` / `Severe` |
-| `risk_score` | string \| null | AML 风险分数 |
+| `risk_level` | string \| null | 付款地址 AML 风险等级：`Low` / `Moderate` / `High` / `Severe`；未筛查时为 `null`，见 [AML 风控](#aml-风控) |
+| `risk_score` | string \| null | 付款地址 AML 风险分数，分数越高风险越大；未筛查时为 `null` |
 
 `payment` 对象：
 
@@ -257,7 +257,7 @@ const signature = crypto.createHmac("sha256", hmacKey).update(`${nonce}${timesta
 - `waiting`：待支付。链上已出现匹配转账但未确认时，`payment` 有值、`status` 仍为 `waiting`。
 - `completed`：已确认，终态。
 - `expired`：已过期。**不是终态**：过期前已上链的付款在过期后确认，账单仍会转为 `completed` 并发送 Webhook。
-- 账单美元价值低于项目「快速确认阈值」（默认 10 USD）时，观察到付款即确认，不等待区块确认数。
+- 账单美元价值低于项目「快速确认阈值」（默认 10 USD）时，观察到付款即确认，不等待区块确认数，**也不做 AML 筛查**。
 
 ## 获取充值地址
 
@@ -369,7 +369,68 @@ ok = hmac.compare_digest(expected, signature)
 }
 ```
 
-> `risk_level` / `risk_score` 是发送时的快照。AML 筛查在确认后异步执行，因此 Webhook 中通常为 `null`，且筛查完成后**不会补发通知**。账单的最新风控结果可通过查询账单接口获取。
+> `risk_level` / `risk_score` 是确认时的 AML 结果快照，含义与取值见 [AML 风控](#aml-风控)。**Webhook 只代表到账已确认，不代表资金合规**，是否发货/上账须由商户结合风险结果自行判断。
+
+## AML 风控
+
+Xcash 可接入 [MistTrack](https://misttrack.io/) 地址风险评分，对每笔收款的**付款地址**做 AML（反洗钱）筛查，结果随 Webhook 与查询接口返回。该功能默认关闭。
+
+### 核心原则：系统只提供风险评分，处置由商户决定
+
+- Xcash 是非托管网关，付款上链即已进入商户自己的收款地址/合约，系统无法拒收或退回。
+- **风险结果不影响任何收款流程**：账单照常 `completed`、充值照常入账、资金照常归集、Webhook 照常发送，高风险也不会拦截或延迟。
+- 风险结果仅是第三方数据源对付款地址的评估，**商户必须根据 `risk_level` 与 `risk_score` 自行判断**是否发货、上账、冻结余额、人工审核或线下退款，并对处置结果负责。
+
+### 开启条件
+
+同时满足以下条件的收款才会筛查，否则 `risk_level` / `risk_score` 为 `null`：
+
+1. 系统已配置查询数据源：自托管需在后台 **系统 → 运行参数 → AML 筛查** 填写开通了 MistTrack Address Risk Scores add-on 的 QuickNode endpoint；官方托管版由平台统一配置。
+2. 项目开启「AML 筛查」（自托管在后台项目详情页「AML 筛查」标签，官方托管版在控制台设置页）。
+3. 收款美元价值**大于**项目「AML 查询阈值」（默认 `100` USD，可设为 `0` 表示全部筛查）。
+4. 账单没有走快速确认：账单价值低于「快速确认阈值」时以速度优先，不做筛查。若希望阈值以上的账单都筛查，请让快速确认阈值 ≤ AML 查询阈值。充值收款不受快速确认影响。
+5. 收款链在 MistTrack 覆盖范围内：`ethereum`、`bsc`、`polygon`、`arbitrum-one`、`optimism`、`base`、`avalanche`、`tron`。测试网、`linea`、`scroll` 不筛查。
+
+### 筛查时机
+
+1. 链上转账一匹配到账单或充值地址，即异步查询付款地址风险，与区块确认并行进行；
+2. 每笔收款都实时查询，不复用该地址的历史结果（地址风险会随资金来源变化）；
+3. 收款确认时，把已完成的查询结果写入账单/充值记录，并随 Webhook 推送；
+4. 若查询晚于确认才完成（如确认极快或数据源响应慢），结果会补写到记录上，但**不会补发 Webhook**。账单可通过[查询账单](#查询账单)接口获取最新结果；充值可在后台充值记录中查看。
+5. 数据源请求遇到网络错误、限流或 5xx 时最多尝试 3 次，仍失败则该笔收款不再查询，风险字段保持 `null`。
+
+### 字段含义
+
+| 字段 | 说明 |
+|------|------|
+| `risk_level` | MistTrack 风险等级，由低到高：`Low` → `Moderate` → `High` → `Severe` |
+| `risk_score` | MistTrack 风险分数，字符串，最多 2 位小数（如 `"35"`、`"87.5"`），分数越高风险越大；等级与分数的划分规则以 [MistTrack 文档](https://docs.misttrack.io/) 为准 |
+
+`null` 表示**没有可用的风险结果**，可能是：未满足上面的开启条件、查询失败、或 Webhook 发送时查询尚未完成。`null` 不等于低风险。
+
+### 商户处置建议
+
+以下仅为示例，具体策略请结合业务的合规要求与风险承受能力制定：
+
+| 结果 | 示例处置 |
+|------|------|
+| `Low` | 正常发货 / 上账 |
+| `Moderate` | 正常处理，可记录观察 |
+| `High` | 暂缓发货或冻结对应余额，转人工审核 |
+| `Severe` | 不发货、冻结对应余额，人工审核后决定是否退款 |
+| `null` 且金额高于 AML 查询阈值 | 按业务需要决定直接放行，或稍后查询账单 / 查看后台确认结果后再处理 |
+
+```python
+def handle_paid(data: dict) -> None:
+    level = data.get("risk_level")
+    if level in ("High", "Severe"):
+        hold_for_review(data["sys_no"], level, data.get("risk_score"))  # 商户自定义：暂缓发货/冻结余额，人工审核
+    else:
+        fulfill(data["sys_no"])
+```
+
+- 易支付（EPay）异步通知与同步跳转**不含风险字段**，EPay 接入的商户请通过[查询账单](#查询账单)接口或后台账单列表查看风险结果。
+- 官方托管版按套餐的 AML 查询单价对每次**成功**的查询扣费，仅在收款确认后计费；查询失败、确认前被链重组丢弃的收款不收费。自托管的查询费用由你与 QuickNode 结算，Xcash 不收取。
 
 ## 易支付 V1 兼容
 
