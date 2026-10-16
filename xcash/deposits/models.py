@@ -1,4 +1,3 @@
-from aml.models import RiskLevel
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
@@ -22,21 +21,6 @@ class Deposit(models.Model):
         max_digits=16,
         decimal_places=6,
         default=0,
-    )
-    risk_level = models.CharField(  # noqa: DJ001
-        _("风险等级"),
-        choices=RiskLevel,
-        max_length=16,
-        null=True,
-        blank=True,
-        db_index=True,
-    )
-    risk_score = models.DecimalField(
-        _("风险分数"),
-        max_digits=6,
-        decimal_places=2,
-        null=True,
-        blank=True,
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from aml.models import transfer_assessment
 from django.contrib import admin
 from django.urls import reverse
 from django.utils.html import format_html
@@ -129,7 +130,13 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
     inlines = (EpayOrderInline,)
     date_hierarchy = "created_at"
     ordering = ("-created_at",)
-    list_select_related = ("project", "crypto", "chain", "currency", "transfer")
+    list_select_related = (
+        "project",
+        "crypto",
+        "chain",
+        "currency",
+        "transfer__aml_assessment",
+    )
     list_filter_sheet = False
 
     # 列表页按「是谁的单 → 收多少 → 收什么 → 到哪一步 → 有无风险」的阅读顺序编排，
@@ -159,13 +166,14 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
         ("chain", RelatedDropdownFilter),
         ("crypto", RelatedDropdownFilter),
         ("project", RelatedDropdownFilter),
-        ("risk_level", ChoicesDropdownFilter),
+        ("transfer__aml_assessment__risk_level", ChoicesDropdownFilter),
         ("created_at", RangeDateTimeFilter),
     )
     readonly_fields = (
         "display_detail_crypto",
         "display_detail_chain",
         "display_detail_risk",
+        "display_detail_risk_score",
         "display_detail_pay_url",
         "display_detail_methods",
     )
@@ -216,7 +224,7 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
             _("风控"),
             {
                 "classes": ("tab",),
-                "fields": ("display_detail_risk", "risk_score"),
+                "fields": ("display_detail_risk", "display_detail_risk_score"),
             },
         ),
         (
@@ -261,7 +269,7 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
 
     @display(
         description=_("风险"),
-        ordering="risk_level",
+        ordering="transfer__aml_assessment__risk_level",
         label={
             "Low": "success",
             "Moderate": "warning",
@@ -270,9 +278,13 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
         },
     )
     def display_risk(self, instance: Invoice):
-        if not instance.risk_level:
+        assessment = transfer_assessment(instance.transfer)
+        if assessment is None or not assessment.risk_level:
             return None
-        return (instance.risk_level, f"{instance.risk_level} · {instance.risk_score}")
+        return (
+            assessment.risk_level,
+            f"{assessment.risk_level} · {assessment.risk_score}",
+        )
 
     @display(
         description=_("协议"),
@@ -330,7 +342,15 @@ class InvoiceAdmin(ReadOnlyModelAdmin):
 
     @display(description=_("风险等级"))
     def display_detail_risk(self, instance: Invoice):
-        return instance.risk_level or fmt.empty()
+        assessment = transfer_assessment(instance.transfer)
+        return (assessment and assessment.risk_level) or fmt.empty()
+
+    @display(description=_("风险分数"))
+    def display_detail_risk_score(self, instance: Invoice):
+        assessment = transfer_assessment(instance.transfer)
+        if assessment is None or assessment.risk_score is None:
+            return fmt.empty()
+        return assessment.risk_score
 
     @display(description=_("可选收款方式"))
     def display_detail_methods(self, instance: Invoice):

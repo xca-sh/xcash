@@ -10,6 +10,17 @@ class SaasInvoiceDetailSerializer(serializers.ModelSerializer):
     currency = serializers.CharField(source="currency_id", read_only=True)
     crypto = serializers.SlugRelatedField(slug_field="symbol", read_only=True)
     chain = serializers.SlugRelatedField(slug_field="code", read_only=True)
+    # 风险结果只存在收款转账的 AML 评估上；未绑定转账、未筛查时为 null。
+    risk_level = serializers.CharField(
+        source="transfer.aml_assessment.risk_level", read_only=True, allow_null=True
+    )
+    risk_score = serializers.DecimalField(
+        source="transfer.aml_assessment.risk_score",
+        max_digits=6,
+        decimal_places=2,
+        read_only=True,
+        allow_null=True,
+    )
 
     class Meta:
         model = Invoice

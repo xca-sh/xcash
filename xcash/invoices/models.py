@@ -18,7 +18,6 @@ from common.tron_codec import TronAddressCodec
 
 logger = structlog.get_logger()
 
-from aml.models import RiskLevel
 
 from chains.models import ChainType
 from chains.models import VaultSlot
@@ -203,21 +202,6 @@ class Invoice(models.Model):
         choices=InvoiceStatus,
         default=InvoiceStatus.WAITING,
         verbose_name=_("状态"),
-    )
-    risk_level = models.CharField(  # noqa: DJ001
-        _("风险等级"),
-        choices=RiskLevel,
-        max_length=16,
-        null=True,
-        blank=True,
-        db_index=True,
-    )
-    risk_score = models.DecimalField(
-        _("风险分数"),
-        max_digits=6,
-        decimal_places=2,
-        null=True,
-        blank=True,
     )
     protocol = models.CharField(
         choices=InvoiceProtocol,

@@ -1,4 +1,5 @@
 import structlog
+from aml.models import transfer_assessment
 from django.contrib import admin
 from django.contrib import messages
 from django.utils.translation import gettext_lazy as _
@@ -39,7 +40,7 @@ class DepositAdmin(ReadOnlyModelAdmin):
         ("transfer__chain", RelatedDropdownFilter),
         ("transfer__crypto", RelatedDropdownFilter),
         ("customer__project", RelatedDropdownFilter),
-        ("risk_level", ChoicesDropdownFilter),
+        ("transfer__aml_assessment__risk_level", ChoicesDropdownFilter),
         ("created_at", RangeDateTimeFilter),
     )
     readonly_fields = (
@@ -52,8 +53,8 @@ class DepositAdmin(ReadOnlyModelAdmin):
         "display_tx_hash",
         "worth",
         "display_status_text",
-        "risk_level",
-        "risk_score",
+        "display_risk_level",
+        "display_risk_score",
         "created_at",
         "updated_at",
     )
@@ -89,7 +90,7 @@ class DepositAdmin(ReadOnlyModelAdmin):
             _("风控"),
             {
                 "classes": ("tab",),
-                "fields": ("risk_level", "risk_score"),
+                "fields": ("display_risk_level", "display_risk_score"),
             },
         ),
     )
@@ -140,7 +141,7 @@ class DepositAdmin(ReadOnlyModelAdmin):
 
     @display(
         description=_("风险"),
-        ordering="risk_level",
+        ordering="transfer__aml_assessment__risk_level",
         label={
             "Low": "success",
             "Moderate": "warning",
@@ -149,9 +150,25 @@ class DepositAdmin(ReadOnlyModelAdmin):
         },
     )
     def display_risk(self, instance: Deposit):
-        if not instance.risk_level:
+        assessment = transfer_assessment(instance.transfer)
+        if assessment is None or not assessment.risk_level:
             return None
-        return (instance.risk_level, f"{instance.risk_level} · {instance.risk_score}")
+        return (
+            assessment.risk_level,
+            f"{assessment.risk_level} · {assessment.risk_score}",
+        )
+
+    @display(description=_("风险等级"))
+    def display_risk_level(self, instance: Deposit):
+        assessment = transfer_assessment(instance.transfer)
+        return (assessment and assessment.risk_level) or fmt.empty()
+
+    @display(description=_("风险分数"))
+    def display_risk_score(self, instance: Deposit):
+        assessment = transfer_assessment(instance.transfer)
+        if assessment is None or assessment.risk_score is None:
+            return fmt.empty()
+        return assessment.risk_score
 
     @display(description=_("交易哈希"))
     def display_tx_hash(self, instance: Deposit):
@@ -171,6 +188,7 @@ class DepositAdmin(ReadOnlyModelAdmin):
                 "customer__project",
                 "transfer__chain",
                 "transfer__crypto",
+                "transfer__aml_assessment",
             )
         )
 

@@ -80,3 +80,17 @@ class RiskAssessment(models.Model):
 
     def __str__(self) -> str:
         return self.address
+
+
+def transfer_assessment(transfer) -> RiskAssessment | None:
+    """读取收款转账的 AML 评估；转账为空或未筛查时返回 None。
+
+    走 transfer 的反向访问器，列表页配合 select_related("transfer__aml_assessment")
+    不会逐行补查。
+    """
+    if transfer is None:
+        return None
+    try:
+        return transfer.aml_assessment
+    except RiskAssessment.DoesNotExist:
+        return None

@@ -207,8 +207,6 @@ class InvoicePublicSerializer(serializers.ModelSerializer):
             "evm_payment",
             "tron_payment",
             "status",
-            "risk_level",
-            "risk_score",
         )
 
 
@@ -229,6 +227,17 @@ class InvoiceDisplaySerializer(serializers.ModelSerializer):
 
     pay_url = serializers.SerializerMethodField()
     payment = TransferSerializer(source="transfer", read_only=True)
+    # 风险结果只存在收款转账的 AML 评估上；未绑定转账、未筛查时为 null。
+    risk_level = serializers.CharField(
+        source="transfer.aml_assessment.risk_level", read_only=True, allow_null=True
+    )
+    risk_score = serializers.DecimalField(
+        source="transfer.aml_assessment.risk_score",
+        max_digits=6,
+        decimal_places=2,
+        read_only=True,
+        allow_null=True,
+    )
 
     def get_pay_url(self, obj: Invoice) -> str:
         pay_path = reverse("payment-invoice", kwargs={"sys_no": obj.sys_no})

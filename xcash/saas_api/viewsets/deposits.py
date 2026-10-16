@@ -34,7 +34,12 @@ class SaasDepositViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
             Deposit.objects.filter(
                 customer__project__appid=self.kwargs["project_appid"]
             )
-            .select_related("customer", "transfer__crypto", "transfer__chain")
+            .select_related(
+                "customer",
+                "transfer__crypto",
+                "transfer__chain",
+                "transfer__aml_assessment",
+            )
             .order_by("-created_at", "-pk")
         )
 

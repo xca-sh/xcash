@@ -48,12 +48,7 @@ class DepositService:
                 "crypto": deposit.transfer.crypto.symbol,
                 "amount": format_decimal_stripped(deposit.transfer.amount),
                 "confirmed": confirmed,
-                "risk_level": deposit.risk_level,
-                "risk_score": (
-                    format_decimal_stripped(deposit.risk_score)
-                    if deposit.risk_score is not None
-                    else None
-                ),
+                **AmlScreeningService.webhook_risk_fields(deposit.transfer_id),
             },
         }
 
@@ -173,8 +168,7 @@ class DepositService:
             cls.schedule_collect_for_completed_deposit(deposit)
         except Exception:  # noqa
             logger.exception("调度 VaultSlot 归集任务失败", deposit_id=deposit.pk)
-        # 必须在通知之前：把匹配时已开始的 AML 结果写进充值快照与 webhook 内容。
-        AmlScreeningService.apply_to_business(deposit)
+        AmlScreeningService.bill_screening(deposit)
         if deposit.transfer.crypto.active:
             cls.notify_completed(deposit)
         else:

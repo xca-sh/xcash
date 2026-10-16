@@ -18,6 +18,7 @@ from chains.models import TransferType
 from common.saas_callback import CallbackEvent
 from common.saas_callback import SaasCallback
 from common.saas_callback import send_saas_callback
+from common.utils.math import format_decimal_stripped
 from core.runtime_settings import get_quicknode_misttrack_endpoint_url
 from deposits.models import Deposit
 from invoices.models import Invoice
@@ -47,9 +48,9 @@ QUICKNODE_MISTTRACK_CHAIN: dict[str, str] = {
 class AmlScreeningService:
     """付款地址 AML 筛查。
 
-    时序：转账一匹配为账单/充值收款就异步查询（与区块确认并行），结果挂在 Transfer 上；
-    收款确认时由确认流程把结果写入账单/充值快照与 webhook，并上报 SaaS 计费。
-    查询若晚于确认才完成，结果补写到已确认的收款上（webhook 不重发）。
+    时序：转账一匹配为账单/充值收款就异步查询（与区块确认并行），结果只存在 Transfer 的
+    评估记录上，账单/充值经 transfer 读取；收款确认时把当时已有的结果写进 webhook，
+    并上报 SaaS 计费。查询若晚于确认才完成，只补报计费（webhook 不重发）。
     """
 
     @staticmethod
@@ -126,16 +127,16 @@ class AmlScreeningService:
             logger.info("aml_screening.transfer_dropped", transfer_id=transfer.pk)
             return
 
-        cls._apply_if_confirmed(transfer.pk)
+        cls.bill_if_confirmed(transfer.pk)
 
     @classmethod
     @transaction.atomic
-    def _apply_if_confirmed(cls, transfer_id: int) -> None:
-        """查询晚于确认完成时，把结果补写到已确认的账单/充值上。
+    def bill_if_confirmed(cls, transfer_id: int) -> None:
+        """查询晚于确认完成时，为已确认的账单/充值补报计费。
 
         加 Transfer 行锁与 Transfer.confirm() 互斥：评估记录已先于本事务提交，
-        确认事务要么已经提交（这里能查到已确认的收款，补写一次），要么尚未读取评估
-        （它会自己读到这条记录），两条路径不会同时漏掉。重复补写与重复上报都是幂等的。
+        确认事务要么已经提交（这里能查到已确认的收款，补报一次），要么尚未读取评估
+        （它会自己读到这条记录），两条路径不会同时漏掉。重复上报由幂等键去重。
         """
         transfer = Transfer.objects.select_for_update().filter(pk=transfer_id).first()
         if transfer is None or transfer.status != TransferStatus.CONFIRMED:
@@ -155,32 +156,22 @@ class AmlScreeningService:
                 .first()
             )
         if target is not None:
-            cls.apply_to_business(target)
+            cls.bill_screening(target)
 
     @staticmethod
-    def apply_to_business(target: Invoice | Deposit) -> None:
-        """把收款 Transfer 上的 AML 结果写入账单/充值快照，成功的查询在此上报计费。
+    def bill_screening(target: Invoice | Deposit) -> None:
+        """收款确认后，为该收款上成功的 AML 查询上报 SaaS 计费。
 
-        收款确认流程在构建 webhook 之前调用（确认事务内，持有 Transfer 行锁），
-        查询晚到时由 _apply_if_confirmed 补调。计费只发生在收款确认之后：转账若在确认
-        前因重组被丢弃，查询费不向商户收取。幂等键按收款单号构造，两条路径重复上报时
-        SaaS 只扣一次；失败的查询不收费。
+        收款确认流程在确认事务内调用（持有 Transfer 行锁），查询晚到时由
+        bill_if_confirmed 补调。计费只发生在收款确认之后：转账若在确认前因重组被丢弃，
+        查询费不向商户收取。幂等键按收款单号构造，两条路径重复上报时 SaaS 只扣一次；
+        失败的查询不收费。
         """
-        assessment = RiskAssessment.objects.filter(
-            transfer_id=target.transfer_id
-        ).first()
-        if assessment is None:
-            return
-
-        target.risk_level = assessment.risk_level
-        target.risk_score = assessment.risk_score
-        type(target).objects.filter(pk=target.pk).update(
-            risk_level=assessment.risk_level,
-            risk_score=assessment.risk_score,
-            updated_at=timezone.now(),
-        )
-
-        if assessment.status != RiskAssessment.Status.SUCCESS:
+        succeeded = RiskAssessment.objects.filter(
+            transfer_id=target.transfer_id,
+            status=RiskAssessment.Status.SUCCESS,
+        ).exists()
+        if not succeeded:
             return
         project = (
             target.project if isinstance(target, Invoice) else target.customer.project
@@ -192,3 +183,26 @@ class AmlScreeningService:
                 sys_no=f"aml-screening:{target.sys_no}",
             )
         )
+
+    @staticmethod
+    def webhook_risk_fields(transfer_id: int | None) -> dict[str, str | None]:
+        """webhook 中的 AML 字段，取收款转账评估的当前结果。
+
+        未筛查、查询失败或查询尚未完成时两项均为 null。显式查库而不走 transfer 反向
+        访问器，避免读到确认流程更早时缓存的"无评估"。
+        """
+        assessment = (
+            RiskAssessment.objects.filter(transfer_id=transfer_id).first()
+            if transfer_id is not None
+            else None
+        )
+        if assessment is None:
+            return {"risk_level": None, "risk_score": None}
+        return {
+            "risk_level": assessment.risk_level,
+            "risk_score": (
+                format_decimal_stripped(assessment.risk_score)
+                if assessment.risk_score is not None
+                else None
+            ),
+        }

@@ -270,12 +270,7 @@ class InvoiceService:
                 "hash": invoice.transfer.hash if invoice.transfer_id else None,
                 "block": invoice.transfer.block if invoice.transfer_id else None,
                 "confirmed": invoice.status == InvoiceStatus.COMPLETED,
-                "risk_level": invoice.risk_level,
-                "risk_score": (
-                    format_decimal_stripped(invoice.risk_score)
-                    if invoice.risk_score is not None
-                    else None
-                ),
+                **AmlScreeningService.webhook_risk_fields(invoice.transfer_id),
             },
         }
 
@@ -706,8 +701,7 @@ class InvoiceService:
         expire_invoice_public_cache_on_commit(invoice.sys_no)
 
         cls.schedule_collection_if_needed(invoice)
-        # 必须在构建 webhook 之前：把匹配时已开始的 AML 结果写进账单快照与通知内容。
-        AmlScreeningService.apply_to_business(invoice)
+        AmlScreeningService.bill_screening(invoice)
 
         if invoice.protocol == InvoiceProtocol.EPAY_V1:
             from .epay.service import EpaySubmitService

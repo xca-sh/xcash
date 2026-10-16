@@ -56,9 +56,8 @@ class DepositServiceCoreTests(TestCase):
             sys_no="DXC-test",
             customer=None,
             transfer=transfer,
+            transfer_id=None,
             confirmed=False,
-            risk_level=None,
-            risk_score=None,
         )
 
         content = Deposit.content.fget(fake_deposit)

@@ -34,6 +34,8 @@ from deposits.models import Deposit
 from deposits.service import DepositService
 from invoices.models import Invoice
 from invoices.models import InvoiceStatus
+from invoices.serializers import InvoiceDisplaySerializer
+from invoices.serializers import InvoicePublicSerializer
 from invoices.service import InvoiceService
 from projects.models import Customer
 from projects.models import Project
@@ -301,9 +303,7 @@ class AmlScreenTransferTests(AmlTestMixin, TestCase):
         self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
         self.assertEqual(assessment.risk_level, RiskLevel.HIGH)
         self.assertEqual(assessment.risk_score, Decimal("88"))
-        # 收款尚未确认：不写业务快照、不计费
-        invoice.refresh_from_db()
-        self.assertIsNone(invoice.risk_level)
+        # 收款尚未确认：不计费
         report.assert_not_called()
 
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
@@ -367,9 +367,7 @@ class AmlScreenTransferTests(AmlTestMixin, TestCase):
 
     @patch("aml.service.send_saas_callback")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_late_result_is_applied_to_confirmed_invoice_and_billed(
-        self, score, report
-    ):
+    def test_late_result_is_billed_for_confirmed_invoice(self, score, report):
         score.return_value = high_risk()
         invoice = self.make_invoice(worth=Decimal("500"))
         Transfer.objects.filter(pk=self.transfer.pk).update(
@@ -378,9 +376,6 @@ class AmlScreenTransferTests(AmlTestMixin, TestCase):
 
         AmlScreeningService.screen_transfer(self.transfer.pk)
 
-        invoice.refresh_from_db()
-        self.assertEqual(invoice.risk_level, RiskLevel.HIGH)
-        self.assertEqual(invoice.risk_score, Decimal("88"))
         callback = report.call_args.args[0]
         self.assertEqual(
             (callback.event, callback.appid, callback.sys_no),
@@ -393,7 +388,7 @@ class AmlScreenTransferTests(AmlTestMixin, TestCase):
 
     @patch("aml.service.send_saas_callback")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_late_result_is_applied_to_confirmed_deposit(self, score, report):
+    def test_late_result_is_billed_for_confirmed_deposit(self, score, report):
         score.return_value = high_risk()
         deposit = self.make_deposit(worth=Decimal("500"))
         Transfer.objects.filter(pk=self.transfer.pk).update(
@@ -402,8 +397,6 @@ class AmlScreenTransferTests(AmlTestMixin, TestCase):
 
         AmlScreeningService.screen_transfer(self.transfer.pk)
 
-        deposit.refresh_from_db()
-        self.assertEqual(deposit.risk_level, RiskLevel.HIGH)
         self.assertEqual(
             report.call_args.args[0].sys_no, f"aml-screening:{deposit.sys_no}"
         )
@@ -420,6 +413,26 @@ class AmlScreenTransferTests(AmlTestMixin, TestCase):
         AmlScreeningService.screen_transfer(self.transfer.pk)
 
         report.assert_not_called()
+
+    def test_risk_is_visible_to_merchant_but_not_to_payer(self):
+        """风险结果只给商户：公开收款页接口不暴露，否则付款人可借此试探地址是否被标记。"""
+        invoice = self.make_invoice(worth=Decimal("500"))
+        RiskAssessment.objects.create(
+            transfer=self.transfer,
+            status=RiskAssessment.Status.SUCCESS,
+            address=self.transfer.from_address,
+            risk_level=RiskLevel.HIGH,
+            risk_score=Decimal("88"),
+        )
+        invoice.refresh_from_db()
+
+        public = InvoicePublicSerializer(invoice).data
+        merchant = InvoiceDisplaySerializer(invoice).data
+
+        self.assertNotIn("risk_level", public)
+        self.assertNotIn("risk_score", public)
+        self.assertEqual(merchant["risk_level"], RiskLevel.HIGH)
+        self.assertEqual(merchant["risk_score"], "88.00")
 
 
 @override_settings(IS_SAAS=False)
@@ -492,9 +505,7 @@ class AmlPaymentFlowTests(AmlTestMixin, TestCase):
         delay.assert_called_once_with(self.transfer.pk)
 
     @patch("aml.service.send_saas_callback")
-    def test_invoice_confirm_writes_risk_into_snapshot_webhook_and_billing(
-        self, report
-    ):
+    def test_invoice_confirm_writes_risk_into_webhook_and_bills(self, report):
         invoice = self.make_waiting_invoice()
         Invoice.objects.filter(pk=invoice.pk).update(transfer=self.transfer)
         RiskAssessment.objects.create(
@@ -510,8 +521,6 @@ class AmlPaymentFlowTests(AmlTestMixin, TestCase):
 
         InvoiceService.confirm_invoice(invoice)
 
-        invoice.refresh_from_db()
-        self.assertEqual(invoice.risk_level, RiskLevel.HIGH)
         event = WebhookEvent.objects.get(project=self.project)
         self.assertEqual(event.payload["data"]["risk_level"], RiskLevel.HIGH)
         self.assertEqual(event.payload["data"]["risk_score"], "88")
@@ -520,7 +529,7 @@ class AmlPaymentFlowTests(AmlTestMixin, TestCase):
         )
 
     @patch("aml.service.send_saas_callback")
-    def test_deposit_confirm_writes_risk_into_snapshot_and_webhook(self, report):
+    def test_deposit_confirm_writes_risk_into_webhook(self, report):
         deposit = self.make_deposit(worth=Decimal("500"))
         RiskAssessment.objects.create(
             transfer=self.transfer,
@@ -537,8 +546,6 @@ class AmlPaymentFlowTests(AmlTestMixin, TestCase):
 
         DepositService.confirm_deposit(deposit)
 
-        deposit.refresh_from_db()
-        self.assertEqual(deposit.risk_level, RiskLevel.SEVERE)
         event = WebhookEvent.objects.get(project=self.project)
         self.assertEqual(event.payload["data"]["risk_level"], RiskLevel.SEVERE)
         report.assert_called_once()

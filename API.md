@@ -196,7 +196,7 @@ const signature = crypto.createHmac("sha256", hmacKey).update(`${nonce}${timesta
 }
 ```
 
-字段含义同[查询账单](#查询账单)；未传的 `notify_url` / `return_url` 返回空字符串 `""`。
+字段含义同[查询账单](#查询账单)；未传的 `notify_url` / `return_url` 返回空字符串 `""`；`risk_level` / `risk_score` 见 [AML 风控](#aml-风控)，新建账单尚未付款，二者为 `null`。
 
 ### 规则
 
@@ -210,7 +210,7 @@ const signature = crypto.createHmac("sha256", hmacKey).update(`${nonce}${timesta
 
 `GET /v1/invoice/{sys_no}`
 
-公开接口，无需签名，供支付页或买家侧轮询。不返回 `appid`、`out_no`、`notify_url`。不存在时返回 `404`。
+公开接口，无需签名，供支付页或买家侧轮询。不返回 `appid`、`out_no`、`notify_url`，也不返回 AML 风险结果（避免付款人借此试探地址是否被标记，风险结果见 [AML 风控](#aml-风控)）。不存在时返回 `404`。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -234,8 +234,6 @@ const signature = crypto.createHmac("sha256", hmacKey).update(`${nonce}${timesta
 | `evm_payment` | object \| null | EVM 钱包一键支付参数 `{chain_id, to, value, data}`；不适用时为 `null` |
 | `tron_payment` | object \| null | TronLink 一键支付参数 `{is_native, to, contract, amount, fee_limit, is_testnet}`；不适用时为 `null` |
 | `status` | string | `waiting` / `completed` / `expired` |
-| `risk_level` | string \| null | 付款地址 AML 风险等级：`Low` / `Moderate` / `High` / `Severe`；未筛查时为 `null`，见 [AML 风控](#aml-风控) |
-| `risk_score` | string \| null | 付款地址 AML 风险分数，分数越高风险越大；未筛查时为 `null` |
 
 `payment` 对象：
 
@@ -373,7 +371,7 @@ ok = hmac.compare_digest(expected, signature)
 
 ## AML 风控
 
-Xcash 可接入 [MistTrack](https://misttrack.io/) 地址风险评分，对每笔收款的**付款地址**做 AML（反洗钱）筛查，结果随 Webhook 与查询接口返回。该功能默认关闭。
+Xcash 可接入 [MistTrack](https://misttrack.io/) 地址风险评分，对每笔收款的**付款地址**做 AML（反洗钱）筛查，结果随 Webhook 推送给商户，也可在后台账单、充值记录中查看。该功能默认关闭。
 
 ### 核心原则：系统只提供风险评分，处置由商户决定
 
@@ -395,8 +393,8 @@ Xcash 可接入 [MistTrack](https://misttrack.io/) 地址风险评分，对每�
 
 1. 链上转账一匹配到账单或充值地址，即异步查询付款地址风险，与区块确认并行进行；
 2. 每笔收款都实时查询，不复用该地址的历史结果（地址风险会随资金来源变化）；
-3. 收款确认时，把已完成的查询结果写入账单/充值记录，并随 Webhook 推送；
-4. 若查询晚于确认才完成（如确认极快或数据源响应慢），结果会补写到记录上，但**不会补发 Webhook**。账单可通过[查询账单](#查询账单)接口获取最新结果；充值可在后台充值记录中查看。
+3. 收款确认时，把已完成的查询结果随 Webhook 推送；
+4. 若查询晚于确认才完成（如确认极快或数据源响应慢），结果照常记录，但**不会补发 Webhook**，可在后台账单、充值记录中查看（官方托管版在控制台查看）。
 5. 数据源请求遇到网络错误、限流或 5xx 时最多尝试 3 次，仍失败则该笔收款不再查询，风险字段保持 `null`。
 
 ### 字段含义

@@ -28,6 +28,7 @@ class SaasInvoiceViewSet(ModelViewSet):
             # transfer.chain；不预加载时列表每行各多两次查询。
             "transfer__chain",
             "transfer__crypto",
+            "transfer__aml_assessment",
         )
         if self.action == "list":
             queryset = self.filter_by_display_status(queryset)
