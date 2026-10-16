@@ -76,6 +76,7 @@ signature = hex( HMAC-SHA256(key = hmac_key, msg = message) )
 
 ```python
 import hashlib, hmac, json, time, uuid
+import requests
 
 appid, hmac_key = "XC-A3BK7NMG", "your_hmac_key"
 body = json.dumps({"out_no": "order-001", "title": "Premium", "currency": "USD", "amount": "29.99"},
@@ -85,7 +86,9 @@ nonce = uuid.uuid4().hex
 signature = hmac.new(hmac_key.encode(), f"{nonce}{timestamp}{body}".encode(), hashlib.sha256).hexdigest()
 headers = {"XC-Appid": appid, "XC-Timestamp": timestamp, "XC-Nonce": nonce,
            "XC-Signature": signature, "Content-Type": "application/json"}
-# requests.post(url, data=body.encode(), headers=headers)  # 发送的必须是同一个 body
+# 发送的就是上面签名用的 body 字符串，encode 只是转成 UTF-8 字节（含中文时 requests 无法直接发送 str）
+# 不要用 json=payload：requests 会重新序列化（空格、中文转义都不同），导致验签失败
+requests.post(url, data=body.encode("utf-8"), headers=headers)
 ```
 
 ```javascript
