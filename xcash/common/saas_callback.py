@@ -23,7 +23,7 @@ _RETRY_BACKOFF = (8, 60, 300, 600, 1800, 3600)
 class CallbackEvent(models.TextChoices):
     """xcash → SaaS 回调的事件枚举，限定 event 可选值。
 
-    命名空间即业务大类（invoice.* / deposit.* / gas_fee.*），SaaS 据此路由。
+    命名空间即业务大类（invoice.* / deposit.* / gas_fee.* / aml.*），SaaS 据此路由。
     """
 
     INVOICE_CONFIRMED = "invoice.confirmed", "Invoice 确认"
@@ -36,33 +36,40 @@ class CallbackEvent(models.TextChoices):
         "gas_fee.vault_slot_collect.confirmed",
         "Gas 费：VaultSlot 归集",
     )
+    # 一次成功的外部 AML 查询；引擎只报次数，单次价格由 SaaS 按套餐核算
+    AML_SCREENED = "aml.screened", "AML 查询成功"
 
 
 @dataclass(frozen=True, kw_only=True)
 class SaasCallback:
     """xcash → SaaS 回调的统一数据结构（契约的单一定义处）。
 
-    业务大类由 event 命名空间表达（invoice.* / deposit.* / gas_fee.*），SaaS 按 event 路由。
-    金额按 event 大类二选一、且必有其一（由 __post_init__ 强约束，杜绝
-    「两者都为 None / 都给 / 与 event 不匹配」）：
-    - invoice/deposit → worth（成交/充值等值金额）；
-    - gas_fee → tx_detail（链上成本明细，含 gas_cost）。
-    uid 仅在 VaultSlot 能关联 Customer 时携带，供 SaaS 共享充值项目定位实际用户。
+    业务大类由 event 命名空间表达（invoice.* / deposit.* / gas_fee.* / aml.*），SaaS 按 event 路由。
+    金额字段按 event 大类严格匹配（由 __post_init__ 强约束，杜绝缺失、多给或与 event 不匹配）：
+    - invoice/deposit → 只带 worth（成交/充值等值金额）；
+    - gas_fee → 只带 tx_detail（链上成本明细，含 gas_cost）；
+    - aml → 两者都不带：只报一次查询，单价由 SaaS 按套餐决定。
+    sys_no 是 SaaS 侧扣费的幂等键。uid 仅在 VaultSlot 能关联 Customer 时携带，
+    供 SaaS 共享充值项目定位实际用户。
     """
 
     event: CallbackEvent
     appid: str
     sys_no: str
-    currency: str
+    currency: str = ""
     worth: str | None = None
     tx_detail: dict | None = None
     uid: str | None = None
 
     def __post_init__(self) -> None:
         CallbackEvent(self.event)  # 限定 event 取值，非法值抛 ValueError
-        if str(self.event).startswith("gas_fee."):
+        family = str(self.event).split(".", 1)[0]
+        if family == "gas_fee":
             if self.tx_detail is None or self.worth is not None:
                 raise ValueError("gas_fee 回调必须且只能带 tx_detail")
+        elif family == "aml":
+            if self.tx_detail is not None or self.worth is not None:
+                raise ValueError("aml 回调不带 worth / tx_detail")
         elif self.worth is None or self.tx_detail is not None:
             raise ValueError(f"{self.event} 回调必须且只能带 worth")
 
@@ -72,9 +79,10 @@ class SaasCallback:
             "event": str(self.event),
             "appid": self.appid,
             "sys_no": self.sys_no,
-            "currency": self.currency,
             "timestamp": timezone.now().isoformat(),
         }
+        if self.currency:
+            payload["currency"] = self.currency
         if self.worth is not None:
             payload["worth"] = self.worth
         if self.tx_detail is not None:

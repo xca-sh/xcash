@@ -119,6 +119,16 @@ class SaasCallbackTest(TestCase):
         assert "worth" not in gas_payload
         assert "uid" not in worth_payload
 
+        # aml：只报一次查询，不带任何金额字段
+        aml_payload = SaasCallback(
+            event=CallbackEvent.AML_SCREENED,
+            appid="XC-test",
+            sys_no="aml-screening:INV-001",
+        ).to_payload()
+        assert aml_payload["event"] == "aml.screened"
+        assert aml_payload["sys_no"] == "aml-screening:INV-001"
+        assert not {"worth", "tx_detail", "currency"} & aml_payload.keys()
+
     def test_invalid_event_value_is_rejected(self):
         import pytest
 
@@ -155,6 +165,14 @@ class SaasCallbackTest(TestCase):
                 sys_no="vault-slot-deploy:1",
                 currency="USDT",
                 worth="0.042",
+            )
+        # aml 误带金额 → 报错（单价只由 SaaS 套餐决定）
+        with pytest.raises(ValueError, match="aml 回调不带 worth / tx_detail"):
+            SaasCallback(
+                event=CallbackEvent.AML_SCREENED,
+                appid="XC-test",
+                sys_no="aml-screening:INV-001",
+                worth="1",
             )
 
     def test_retry_countdown_is_monotonic_and_capped(self):

@@ -24,6 +24,7 @@ from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.tests_fixtures import make_evm_chain
+from common.saas_callback import CallbackEvent
 from core.models import SystemSettings
 from currencies.models import Crypto
 from currencies.models import Fiat
@@ -441,6 +442,46 @@ class AmlBusinessDispatchTests(AmlTestMixin, TestCase):
         self.assertEqual(invoice.risk_level, RiskLevel.LOW)
         self.assertEqual(deposit.risk_level, RiskLevel.SEVERE)
         self.assertEqual(deposit.risk_score, Decimal("99"))
+
+    @patch("aml.service.send_saas_callback")
+    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
+    def test_successful_query_is_reported_to_saas_for_billing(self, score, report):
+        score.return_value = MistTrackAmlResult(
+            risk_level=RiskLevel.LOW,
+            risk_score=Decimal("10"),
+            raw_response={},
+        )
+        invoice = self.make_invoice(worth=Decimal("500"))
+        AmlScreeningService.screen_invoice(invoice.pk)
+        deposit = self.make_deposit(worth=Decimal("500"))
+        AmlScreeningService.screen_deposit(deposit.pk)
+
+        callbacks = [call.args[0] for call in report.call_args_list]
+        self.assertEqual(
+            [(cb.event, cb.appid, cb.sys_no) for cb in callbacks],
+            [
+                (
+                    CallbackEvent.AML_SCREENED,
+                    self.project.appid,
+                    f"aml-screening:{invoice.sys_no}",
+                ),
+                (
+                    CallbackEvent.AML_SCREENED,
+                    self.project.appid,
+                    f"aml-screening:{deposit.sys_no}",
+                ),
+            ],
+        )
+
+    @patch("aml.service.send_saas_callback")
+    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
+    def test_failed_query_is_not_reported_to_saas(self, score, report):
+        score.side_effect = RuntimeError("quicknode down")
+        invoice = self.make_invoice(worth=Decimal("500"))
+
+        AmlScreeningService.screen_invoice(invoice.pk)
+
+        report.assert_not_called()
 
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_external_failure_records_failed_and_clears_snapshot(self, score):

@@ -12,6 +12,9 @@ from django.db import transaction
 from django.utils import timezone
 
 from chains.constants import ChainCode
+from common.saas_callback import CallbackEvent
+from common.saas_callback import SaasCallback
+from common.saas_callback import send_saas_callback
 from core.runtime_settings import get_quicknode_misttrack_endpoint_url
 from deposits.models import Deposit
 from invoices.models import Invoice
@@ -139,6 +142,7 @@ class AmlScreeningService:
         cls._record_success(target, target_type, result)
 
     @classmethod
+    @transaction.atomic
     def _record_success(
         cls,
         target: Invoice | Deposit,
@@ -159,6 +163,20 @@ class AmlScreeningService:
         }
         cls._upsert_assessment(target, target_type, defaults)
         cls._sync_snapshot(target, result.risk_level, result.risk_score)
+
+        # 只有成功的查询才上报 SaaS 计费；失败的查询不收费。
+        # 幂等键按收款单号构造：同一笔收款即便重复筛查，SaaS 也只扣一次。
+        # send_saas_callback 在本事务提交后才投递，记录写入失败时不会误报。
+        project = (
+            target.project if isinstance(target, Invoice) else target.customer.project
+        )
+        send_saas_callback(
+            SaasCallback(
+                event=CallbackEvent.AML_SCREENED,
+                appid=project.appid,
+                sys_no=f"aml-screening:{target.sys_no}",
+            )
+        )
 
     @classmethod
     def _record_failed(
