@@ -68,11 +68,13 @@ class InvoiceCreateSerializer(Serializer):
     out_no = serializers.CharField(required=True, max_length=32)
     title = serializers.CharField(required=True, max_length=32)
     currency = serializers.CharField(required=True, max_length=8)
+    # 计价货币恒为法币，金额最多两位小数、最小 0.01，与 EPay 入口口径一致；
+    # 更细的精度在法币语义下没有意义，只会制造近零的粉尘账单。
     amount = serializers.DecimalField(
         required=True,
         max_digits=32,
-        decimal_places=8,
-        min_value=Decimal("0.00000001"),
+        decimal_places=2,
+        min_value=Decimal("0.01"),
         max_value=Decimal(
             "1000000"
         ),  # 单笔上限 100 万，防止天文数字金额干扰汇率换算和支付分配

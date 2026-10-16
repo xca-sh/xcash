@@ -16,6 +16,7 @@ from django.test import TransactionTestCase
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIRequestFactory
 from web3 import Web3
 
@@ -776,6 +777,27 @@ class InvoicePaymentSelectionConcurrencyTests(TransactionTestCase):
         self.assertFalse(errors)
         self.assertEqual(len(results), 2)
         self.assertEqual(len({(address, amount) for _, address, amount in results}), 2)
+
+
+class InvoiceCreateAmountValidationTests(TestCase):
+    """建单金额按法币口径校验：最多两位小数、最小 0.01。"""
+
+    def validate_amount(self, value):
+        return InvoiceCreateSerializer().fields["amount"].run_validation(value)
+
+    def test_accepts_two_decimal_places_and_minimum(self):
+        self.assertEqual(self.validate_amount("29.99"), Decimal("29.99"))
+        self.assertEqual(self.validate_amount("0.01"), Decimal("0.01"))
+
+    def test_rejects_more_than_two_decimal_places(self):
+        # 法币金额超过两位小数没有意义，必须拒绝而不是静默四舍五入，
+        # 否则商户侧金额与账单金额不一致。
+        with self.assertRaises(ValidationError):
+            self.validate_amount("29.999")
+
+    def test_rejects_amount_below_minimum(self):
+        with self.assertRaises(ValidationError):
+            self.validate_amount("0.00")
 
 
 class InvoiceDuplicateOutNoTests(TestCase):

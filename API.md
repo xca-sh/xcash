@@ -149,7 +149,7 @@ const signature = crypto.createHmac("sha256", hmacKey).update(`${nonce}${timesta
 | `out_no` | string | 是 | 商户订单号，最长 32 位，项目内唯一（与 EPay 的 `out_trade_no` 共用命名空间） |
 | `title` | string | 是 | 标题，最长 32 位 |
 | `currency` | string | 是 | 计价法币，如 `USD`、`CNY` |
-| `amount` | string | 是 | 计价金额，`0.00000001` ~ `1000000`，最多 8 位小数 |
+| `amount` | string | 是 | 计价金额，`0.01` ~ `1000000`，最多 2 位小数（如 `"10.000"` 视为 3 位，会被拒绝） |
 | `duration` | integer | 否 | 有效期（分钟），`5` ~ `30`，默认 `10` |
 | `methods` | object | 否 | 限定支付方式，格式 `{"币种": ["链 code", ...]}`；不传则使用项目全部可用组合 |
 | `notify_url` | string | 否 | 本账单的 Webhook 地址，优先于项目通知地址 |
