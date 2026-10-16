@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
@@ -19,13 +18,15 @@ class RiskLevel(models.TextChoices):
 
 
 class RiskAssessment(models.Model):
+    """一笔入账转账的付款地址 AML 评估。
+
+    挂在 Transfer 上而不是账单/充值上：转账一匹配为业务收款就开始查询，与区块确认并行，
+    此时充值记录尚未创建；确认时账单/充值再从 Transfer 读取结果写入自身快照与 webhook。
+    """
+
     class Status(models.TextChoices):
         SUCCESS = "success", _("查询成功")
         FAILED = "failed", _("查询失败")
-
-    class TargetType(models.TextChoices):
-        INVOICE = "invoice", _("账单收款")
-        DEPOSIT = "deposit", _("充值收款")
 
     source = models.CharField(
         _("数据来源"),
@@ -40,27 +41,14 @@ class RiskAssessment(models.Model):
         max_length=16,
         db_index=True,
     )
-    target_type = models.CharField(
-        _("目标类型"),
-        choices=TargetType,
-        max_length=16,
-        db_index=True,
-    )
-    invoice = models.OneToOneField(
-        "invoices.Invoice",
+    transfer = models.OneToOneField(
+        "chains.Transfer",
         on_delete=models.CASCADE,
+        # 仅存量迁移中无法关联到 Transfer 的历史记录为空；新记录总是有值
         null=True,
         blank=True,
         related_name="aml_assessment",
-        verbose_name=_("账单收款"),
-    )
-    deposit = models.OneToOneField(
-        "deposits.Deposit",
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-        related_name="aml_assessment",
-        verbose_name=_("充值收款"),
+        verbose_name=_("转账"),
     )
     address = models.CharField(_("查询地址"), max_length=128, db_index=True)
     tx_hash = models.CharField(_("交易哈希"), max_length=128, blank=True, default="")
@@ -89,37 +77,6 @@ class RiskAssessment(models.Model):
         ordering = ("-created_at",)
         verbose_name = _("AML 评估")
         verbose_name_plural = _("AML 评估")
-        constraints = [
-            models.CheckConstraint(
-                name="aml_assessment_exactly_one_target",
-                condition=(
-                    (models.Q(invoice__isnull=False) & models.Q(deposit__isnull=True))
-                    | (models.Q(invoice__isnull=True) & models.Q(deposit__isnull=False))
-                ),
-            ),
-            models.CheckConstraint(
-                name="aml_assessment_target_type_matches_target",
-                condition=(
-                    (
-                        models.Q(target_type="invoice")
-                        & models.Q(invoice__isnull=False)
-                        & models.Q(deposit__isnull=True)
-                    )
-                    | (
-                        models.Q(target_type="deposit")
-                        & models.Q(invoice__isnull=True)
-                        & models.Q(deposit__isnull=False)
-                    )
-                ),
-            ),
-        ]
 
     def __str__(self) -> str:
-        return f"{self.get_target_type_display()} {self.address}"
-
-    def clean(self):
-        super().clean()
-        has_invoice = self.invoice_id is not None
-        has_deposit = self.deposit_id is not None
-        if has_invoice == has_deposit:
-            raise ValidationError(_("AML 评估必须且只能关联一个业务目标。"))
+        return self.address

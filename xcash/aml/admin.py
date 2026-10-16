@@ -5,6 +5,7 @@ from unfold.contrib.filters.admin import ChoicesDropdownFilter
 from unfold.contrib.filters.admin import RangeDateTimeFilter
 from unfold.decorators import display
 
+from chains.models import TransferType
 from common import admin_display as fmt
 from common.admin import ReadOnlyModelAdmin
 
@@ -13,11 +14,11 @@ from common.admin import ReadOnlyModelAdmin
 class RiskAssessmentAdmin(ReadOnlyModelAdmin):
     date_hierarchy = "created_at"
     ordering = ("-created_at",)
-    list_select_related = ("invoice", "deposit")
+    list_select_related = ("transfer", "transfer__chain")
     list_filter_sheet = False
     list_display = (
         "display_target",
-        "display_target_type",
+        "display_transfer_type",
         "display_risk",
         "display_status",
         "source",
@@ -28,23 +29,18 @@ class RiskAssessmentAdmin(ReadOnlyModelAdmin):
     list_filter = (
         ("risk_level", ChoicesDropdownFilter),
         ("status", ChoicesDropdownFilter),
-        ("target_type", ChoicesDropdownFilter),
         "source",
         ("created_at", RangeDateTimeFilter),
     )
     search_fields = (
         "address",
         "tx_hash",
-        "invoice__sys_no",
-        "deposit__sys_no",
     )
-    search_help_text = _("支持按地址、交易哈希、账单单号或充值单号搜索")
+    search_help_text = _("支持按付款地址或交易哈希搜索")
     readonly_fields = (
         "source",
         "status",
-        "target_type",
-        "invoice",
-        "deposit",
+        "transfer",
         "display_full_address",
         "display_full_tx_hash",
         "risk_level",
@@ -61,9 +57,7 @@ class RiskAssessmentAdmin(ReadOnlyModelAdmin):
             {
                 "classes": ("tab",),
                 "fields": (
-                    "target_type",
-                    "invoice",
-                    "deposit",
+                    "transfer",
                     "display_full_address",
                     "display_full_tx_hash",
                 ),
@@ -96,24 +90,21 @@ class RiskAssessmentAdmin(ReadOnlyModelAdmin):
 
     @display(description=_("筛查对象"), header=True)
     def display_target(self, instance: RiskAssessment):
-        # 风险评估既可能挂在账单也可能挂在充值上，列表页统一展示归属单号，
-        # 没有业务单号时退回自增 ID，避免出现整列空白。
-        if instance.invoice_id:
-            return (instance.invoice.sys_no, _("账单收款"))
-        if instance.deposit_id:
-            return (instance.deposit.sys_no, _("充值收款"))
-        return (f"#{instance.pk}", "")
+        # 评估挂在转账上：列表页展示付款地址与所在链；历史记录可能已无关联转账。
+        chain = instance.transfer.chain.code if instance.transfer_id else ""
+        return (fmt.truncated(instance.address), chain)
 
     @display(
         description=_("类型"),
-        ordering="target_type",
         label={
-            RiskAssessment.TargetType.INVOICE: "primary",
-            RiskAssessment.TargetType.DEPOSIT: "info",
+            TransferType.Invoice: "primary",
+            TransferType.Deposit: "info",
         },
     )
-    def display_target_type(self, instance: RiskAssessment):
-        return (instance.target_type, instance.get_target_type_display())
+    def display_transfer_type(self, instance: RiskAssessment):
+        if not instance.transfer_id:
+            return None
+        return (instance.transfer.type, instance.transfer.get_type_display())
 
     @display(
         description=_("风险"),

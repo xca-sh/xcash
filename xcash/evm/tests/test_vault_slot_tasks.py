@@ -758,7 +758,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch("chains.service.TransferService.enqueue_processing"),
             patch("chains.vault_slot_balances.refresh_vault_slot_balance_for_transfer"),
             patch("deposits.service.WebhookService.create_event"),
-            patch("deposits.service.screen_deposit_aml.delay"),
+            patch("deposits.service.screen_transfer_aml.delay"),
             patch("deposits.service.send_saas_callback"),
         ):
             w3_mock.return_value.eth.get_transaction.return_value = {
@@ -854,7 +854,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 "invoices.service.InvoiceService.schedule_collect_for_invoice"
             ) as schedule_collect,
             patch("invoices.service.WebhookService.create_event"),
-            patch("invoices.service.screen_invoice_aml.delay"),
+            patch("invoices.service.screen_transfer_aml.delay"),
             patch("invoices.service.send_saas_callback"),
         ):
             w3_mock.return_value.eth.get_transaction.return_value = {

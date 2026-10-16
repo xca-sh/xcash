@@ -7,7 +7,6 @@ from unittest.mock import patch
 import httpx
 from aml.clients import MistTrackAmlResult
 from aml.clients import QuicknodeMistTrackClient
-from aml.models import Provider
 from aml.models import RiskAssessment
 from aml.models import RiskLevel
 from aml.service import AmlScreeningService
@@ -20,20 +19,25 @@ from django.utils import timezone
 from chains.constants import EVM_UNKNOWN_SOURCE_ADDRESS
 from chains.constants import ChainCode
 from chains.models import Chain
+from chains.models import ConfirmMode
 from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
+from chains.models import VaultSlot
+from chains.models import VaultSlotUsage
 from chains.tests_fixtures import make_evm_chain
 from common.saas_callback import CallbackEvent
 from core.models import SystemSettings
 from currencies.models import Crypto
 from currencies.models import Fiat
 from deposits.models import Deposit
+from deposits.service import DepositService
 from invoices.models import Invoice
 from invoices.models import InvoiceStatus
 from invoices.service import InvoiceService
 from projects.models import Customer
 from projects.models import Project
+from webhooks.models import WebhookEvent
 
 
 class AmlTestMixin:
@@ -212,152 +216,215 @@ class QuicknodeMistTrackClientTests(SimpleTestCase):
         self.assertEqual(httpx_request.call_count, 3)
 
 
-@override_settings(IS_SAAS=False)
-class AmlScreeningServiceTests(AmlTestMixin, TestCase):
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_invoice_below_threshold_does_not_create_assessment(self, score):
-        invoice = self.make_invoice(worth=Decimal("99.99"))
+def low_risk() -> MistTrackAmlResult:
+    return MistTrackAmlResult(
+        risk_level=RiskLevel.LOW, risk_score=Decimal("10"), raw_response={}
+    )
 
-        AmlScreeningService.screen_invoice(invoice.pk)
 
-        score.assert_not_called()
-        self.assertFalse(RiskAssessment.objects.filter(invoice=invoice).exists())
-        invoice.refresh_from_db()
-        self.assertIsNone(invoice.risk_level)
-        self.assertIsNone(invoice.risk_score)
+def high_risk() -> MistTrackAmlResult:
+    return MistTrackAmlResult(
+        risk_level=RiskLevel.HIGH,
+        risk_score=Decimal("88"),
+        raw_response={"risk_level": "High", "score": 88},
+    )
 
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_deposit_below_threshold_does_not_create_assessment(self, score):
-        deposit = self.make_deposit(worth=Decimal("99.99"))
 
-        AmlScreeningService.screen_deposit(deposit.pk)
-
-        score.assert_not_called()
-        self.assertFalse(RiskAssessment.objects.filter(deposit=deposit).exists())
-        deposit.refresh_from_db()
-        self.assertIsNone(deposit.risk_level)
-        self.assertIsNone(deposit.risk_score)
-
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_deposit_unknown_source_address_does_not_create_assessment(self, score):
-        deposit = self.make_deposit(worth=Decimal("500"))
-        Transfer.objects.filter(pk=self.transfer.pk).update(
-            from_address=EVM_UNKNOWN_SOURCE_ADDRESS
+class AmlShouldScreenTests(AmlTestMixin, TestCase):
+    def test_requires_switch_threshold_covered_chain_known_source_and_endpoint(self):
+        self.assertTrue(
+            AmlScreeningService.should_screen(
+                project=self.project, worth=Decimal("100.01"), transfer=self.transfer
+            )
+        )
+        # 价值必须严格大于阈值
+        self.assertFalse(
+            AmlScreeningService.should_screen(
+                project=self.project, worth=Decimal("100"), transfer=self.transfer
+            )
         )
 
-        AmlScreeningService.screen_deposit(deposit.pk)
-
-        score.assert_not_called()
-        self.assertFalse(RiskAssessment.objects.filter(deposit=deposit).exists())
-        deposit.refresh_from_db()
-        self.assertIsNone(deposit.risk_level)
-        self.assertIsNone(deposit.risk_score)
-
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_screening_disabled_does_not_create_assessment(self, score):
         self.project.aml_screening_enabled = False
-        self.project.save(update_fields=["aml_screening_enabled"])
-        invoice = self.make_invoice(worth=Decimal("500"))
-
-        AmlScreeningService.screen_invoice(invoice.pk)
-
-        score.assert_not_called()
-        self.assertFalse(RiskAssessment.objects.filter(invoice=invoice).exists())
-
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_screening_follows_each_project_own_settings(self, score):
-        """同金额收款按各自所属项目的开关与阈值判定，项目之间互不影响。"""
-        score.return_value = MistTrackAmlResult(
-            risk_level=RiskLevel.LOW,
-            risk_score=Decimal("10"),
-            raw_response={},
+        self.assertFalse(
+            AmlScreeningService.should_screen(
+                project=self.project, worth=Decimal("500"), transfer=self.transfer
+            )
         )
-        strict_project = Project.objects.create(
-            name="High Threshold Project",
-            aml_screening_enabled=True,
-            aml_screening_threshold_usd=Decimal("1000"),
-        )
-        strict_customer = Customer.objects.create(project=strict_project, uid="u-2")
-        invoice = self.make_invoice(worth=Decimal("500"))
-        self.transfer.type = TransferType.Deposit
-        self.transfer.save(update_fields=["type"])
-        deposit = Deposit.objects.create(
-            customer=strict_customer,
-            transfer=self.transfer,
-            worth=Decimal("500"),
-        )
+        self.project.aml_screening_enabled = True
 
-        AmlScreeningService.screen_invoice(invoice.pk)
-        AmlScreeningService.screen_deposit(deposit.pk)
-
-        score.assert_called_once()
-        self.assertTrue(RiskAssessment.objects.filter(invoice=invoice).exists())
-        self.assertFalse(RiskAssessment.objects.filter(deposit=deposit).exists())
-
-    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_saas_mode_screens_without_tier_permission(self, score):
-        """AML 不是套餐权限：SaaS 模式下无需任何权限缓存，按项目开关正常筛查。"""
-        score.return_value = MistTrackAmlResult(
-            risk_level=RiskLevel.LOW,
-            risk_score=Decimal("10"),
-            raw_response={},
-        )
-        invoice = self.make_invoice(worth=Decimal("500"))
-
-        AmlScreeningService.screen_invoice(invoice.pk)
-
-        score.assert_called_once()
-        self.assertTrue(RiskAssessment.objects.filter(invoice=invoice).exists())
-
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_unsupported_chain_does_not_create_assessment(self, score):
-        """MistTrack 只覆盖主网：测试网（含 Nile）与未覆盖的主网都不查询、不写记录。"""
-        invoice = self.make_invoice(worth=Decimal("500"))
+        # MistTrack 只覆盖主网：测试网（含 Nile）与未覆盖的主网不查询
         for code in (ChainCode.Sepolia, ChainCode.Nile, ChainCode.Linea):
             with self.subTest(code=code):
-                # 占位 rpc 的 active 链不能走 save()（会触发 clean 的远端校验），用 update 直接改 code。
-                Chain.objects.filter(pk=self.chain.pk).update(code=code)
-
-                AmlScreeningService.screen_invoice(invoice.pk)
-
-                score.assert_not_called()
+                self.transfer.chain.code = code
                 self.assertFalse(
-                    RiskAssessment.objects.filter(invoice=invoice).exists()
+                    AmlScreeningService.should_screen(
+                        project=self.project,
+                        worth=Decimal("500"),
+                        transfer=self.transfer,
+                    )
                 )
+        self.transfer.chain.code = ChainCode.Ethereum
+
+        self.transfer.from_address = EVM_UNKNOWN_SOURCE_ADDRESS
+        self.assertFalse(
+            AmlScreeningService.should_screen(
+                project=self.project, worth=Decimal("500"), transfer=self.transfer
+            )
+        )
+        self.transfer.from_address = "0x1111111111111111111111111111111111111111"
+
+        self.system_settings.quicknode_misttrack_endpoint_url = ""
+        # 系统参数缓存在事务提交后失效
+        with self.captureOnCommitCallbacks(execute=True):
+            self.system_settings.save(
+                update_fields=["quicknode_misttrack_endpoint_url"]
+            )
+        self.assertFalse(
+            AmlScreeningService.should_screen(
+                project=self.project, worth=Decimal("500"), transfer=self.transfer
+            )
+        )
+
+
+class AmlScreenTransferTests(AmlTestMixin, TestCase):
+    @patch("aml.service.send_saas_callback")
+    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
+    def test_result_is_kept_on_transfer_until_payment_confirms(self, score, report):
+        score.return_value = high_risk()
+        invoice = self.make_invoice(worth=Decimal("500"))
+        Invoice.objects.filter(pk=invoice.pk).update(status=InvoiceStatus.WAITING)
+
+        AmlScreeningService.screen_transfer(self.transfer.pk)
+
+        score.assert_called_once_with(chain="ETH", address=self.transfer.from_address)
+        assessment = RiskAssessment.objects.get(transfer=self.transfer)
+        self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
+        self.assertEqual(assessment.risk_level, RiskLevel.HIGH)
+        self.assertEqual(assessment.risk_score, Decimal("88"))
+        # 收款尚未确认：不写业务快照、不计费
+        invoice.refresh_from_db()
+        self.assertIsNone(invoice.risk_level)
+        report.assert_not_called()
+
+    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
+    def test_provider_failure_records_failed_assessment(self, score):
+        score.side_effect = RuntimeError("quicknode down")
+
+        AmlScreeningService.screen_transfer(self.transfer.pk)
+
+        assessment = RiskAssessment.objects.get(transfer=self.transfer)
+        self.assertEqual(assessment.status, RiskAssessment.Status.FAILED)
+        self.assertIn("quicknode down", assessment.error_message)
+        self.assertIsNone(assessment.risk_level)
+
+    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
+    def test_dropped_transfer_is_not_queried(self, score):
+        missing_pk = self.transfer.pk
+        self.transfer.delete()
+
+        AmlScreeningService.screen_transfer(missing_pk)
+
+        score.assert_not_called()
 
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_tron_mainnet_queries_with_tron_blockchain_value(self, score):
-        invoice = self.make_invoice(worth=Decimal("500"))
+        score.return_value = low_risk()
         Chain.objects.filter(pk=self.chain.pk).update(code=ChainCode.Tron)
-        score.return_value = MistTrackAmlResult(
-            risk_level=RiskLevel.LOW,
-            risk_score=Decimal("10"),
-            raw_response={},
-        )
 
-        AmlScreeningService.screen_invoice(invoice.pk)
+        AmlScreeningService.screen_transfer(self.transfer.pk)
 
         score.assert_called_once_with(chain="TRON", address=self.transfer.from_address)
 
-    def test_provider_not_configured_does_not_create_assessment(self):
+    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
+    def test_same_address_is_requeried_for_every_transfer(self, score):
+        """同一付款地址的每笔转账都实时查询，不复用前一笔的结果。
+
+        防止攻击者先用干净资金付款让地址被判低风险，再转入黑币付款沿用旧结论。
+        """
+        score.side_effect = [low_risk(), high_risk()]
+        second = Transfer.objects.create(
+            chain=self.chain,
+            block=101,
+            block_hash="0x" + "ef" * 32,
+            hash="0x" + "ee" * 32,
+            crypto=self.native,
+            from_address=self.transfer.from_address,
+            to_address=self.transfer.to_address,
+            value=10**18,
+            amount=Decimal("1"),
+            type=TransferType.Deposit,
+            timestamp=1_700_000_100,
+            datetime=timezone.now(),
+        )
+
+        AmlScreeningService.screen_transfer(self.transfer.pk)
+        AmlScreeningService.screen_transfer(second.pk)
+
+        self.assertEqual(score.call_count, 2)
+        self.assertEqual(
+            RiskAssessment.objects.get(transfer=second).risk_level, RiskLevel.HIGH
+        )
+
+    @patch("aml.service.send_saas_callback")
+    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
+    def test_late_result_is_applied_to_confirmed_invoice_and_billed(
+        self, score, report
+    ):
+        score.return_value = high_risk()
         invoice = self.make_invoice(worth=Decimal("500"))
-        self.system_settings.quicknode_misttrack_endpoint_url = ""
-        self.system_settings.save(update_fields=["quicknode_misttrack_endpoint_url"])
+        Transfer.objects.filter(pk=self.transfer.pk).update(
+            status=TransferStatus.CONFIRMED
+        )
 
-        AmlScreeningService.screen_invoice(invoice.pk)
+        AmlScreeningService.screen_transfer(self.transfer.pk)
 
-        self.assertFalse(RiskAssessment.objects.filter(invoice=invoice).exists())
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.risk_level, RiskLevel.HIGH)
+        self.assertEqual(invoice.risk_score, Decimal("88"))
+        callback = report.call_args.args[0]
+        self.assertEqual(
+            (callback.event, callback.appid, callback.sys_no),
+            (
+                CallbackEvent.AML_SCREENED,
+                self.project.appid,
+                f"aml-screening:{invoice.sys_no}",
+            ),
+        )
+
+    @patch("aml.service.send_saas_callback")
+    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
+    def test_late_result_is_applied_to_confirmed_deposit(self, score, report):
+        score.return_value = high_risk()
+        deposit = self.make_deposit(worth=Decimal("500"))
+        Transfer.objects.filter(pk=self.transfer.pk).update(
+            status=TransferStatus.CONFIRMED
+        )
+
+        AmlScreeningService.screen_transfer(self.transfer.pk)
+
+        deposit.refresh_from_db()
+        self.assertEqual(deposit.risk_level, RiskLevel.HIGH)
+        self.assertEqual(
+            report.call_args.args[0].sys_no, f"aml-screening:{deposit.sys_no}"
+        )
+
+    @patch("aml.service.send_saas_callback")
+    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
+    def test_failed_query_is_not_billed(self, score, report):
+        score.side_effect = RuntimeError("quicknode down")
+        self.make_invoice(worth=Decimal("500"))
+        Transfer.objects.filter(pk=self.transfer.pk).update(
+            status=TransferStatus.CONFIRMED
+        )
+
+        AmlScreeningService.screen_transfer(self.transfer.pk)
+
+        report.assert_not_called()
 
 
 @override_settings(IS_SAAS=False)
-class AmlBusinessDispatchTests(AmlTestMixin, TestCase):
-    @patch("aml.tasks.screen_invoice_aml.delay")
-    @patch("invoices.service.send_saas_callback")
-    @patch("invoices.service.WebhookService.create_event")
-    def test_invoice_confirm_enqueues_aml_after_transaction_commit(
-        self, _create_event, _callback, delay
-    ):
+class AmlPaymentFlowTests(AmlTestMixin, TestCase):
+    def make_waiting_invoice(self) -> Invoice:
         invoice = Invoice.objects.create(
             project=self.project,
             out_no="aml-match",
@@ -377,125 +444,121 @@ class AmlBusinessDispatchTests(AmlTestMixin, TestCase):
         invoice.refresh_from_db()
         self.transfer.datetime = timezone.now()
         self.transfer.save(update_fields=["datetime"])
+        return invoice
 
-        matched = InvoiceService.try_match_invoice(self.transfer)
-        self.assertTrue(matched)
-        invoice.refresh_from_db()
+    @patch("invoices.service.screen_transfer_aml.delay")
+    def test_invoice_match_starts_screening_and_skips_quick_confirm(self, delay):
+        # 快速确认阈值高于账单价值，本应快速确认；但需要 AML，必须走完整确认
+        self.project.fast_confirm_threshold = Decimal("1000")
+        self.project.save(update_fields=["fast_confirm_threshold"])
+        self.make_waiting_invoice()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.assertTrue(InvoiceService.try_match_invoice(self.transfer))
+
+        delay.assert_called_once_with(self.transfer.pk)
+        self.transfer.refresh_from_db()
+        self.assertEqual(self.transfer.confirm_mode, ConfirmMode.FULL)
+
+    @patch("invoices.service.screen_transfer_aml.delay")
+    def test_invoice_match_without_aml_keeps_quick_confirm(self, delay):
+        self.project.fast_confirm_threshold = Decimal("1000")
+        self.project.aml_screening_enabled = False
+        self.project.save(
+            update_fields=["fast_confirm_threshold", "aml_screening_enabled"]
+        )
+        self.make_waiting_invoice()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.assertTrue(InvoiceService.try_match_invoice(self.transfer))
 
         delay.assert_not_called()
+        self.transfer.refresh_from_db()
+        self.assertEqual(self.transfer.confirm_mode, ConfirmMode.QUICK)
+
+    @patch("deposits.service.screen_transfer_aml.delay")
+    def test_deposit_match_starts_screening(self, delay):
+        Transfer.objects.filter(pk=self.transfer.pk).update(
+            type=TransferType.Unmatched, amount=Decimal("1")
+        )
+        self.transfer.refresh_from_db()
+        VaultSlot.objects.create(
+            customer=self.customer,
+            chain=self.chain,
+            usage=VaultSlotUsage.DEPOSIT,
+            address=self.transfer.to_address,
+            salt=b"\x33" * 32,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.assertTrue(DepositService.try_match_deposit_transfer(self.transfer))
+
+        # 1 ETH × 2000 USD 超过 100 USD 阈值
+        delay.assert_called_once_with(self.transfer.pk)
+
+    @patch("aml.service.send_saas_callback")
+    def test_invoice_confirm_writes_risk_into_snapshot_webhook_and_billing(
+        self, report
+    ):
+        invoice = self.make_waiting_invoice()
+        Invoice.objects.filter(pk=invoice.pk).update(transfer=self.transfer)
+        RiskAssessment.objects.create(
+            transfer=self.transfer,
+            status=RiskAssessment.Status.SUCCESS,
+            address=self.transfer.from_address,
+            risk_level=RiskLevel.HIGH,
+            risk_score=Decimal("88"),
+        )
         Transfer.objects.filter(pk=self.transfer.pk).update(
             status=TransferStatus.CONFIRMED
         )
-        with self.captureOnCommitCallbacks(execute=True):
-            InvoiceService.confirm_invoice(invoice)
 
-        delay.assert_called_once_with(invoice.pk)
+        InvoiceService.confirm_invoice(invoice)
 
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_invoice_success_updates_assessment_and_snapshot(self, score):
-        invoice = self.make_invoice(worth=Decimal("500"))
-        score.return_value = MistTrackAmlResult(
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.risk_level, RiskLevel.HIGH)
+        event = WebhookEvent.objects.get(project=self.project)
+        self.assertEqual(event.payload["data"]["risk_level"], RiskLevel.HIGH)
+        self.assertEqual(event.payload["data"]["risk_score"], "88")
+        self.assertEqual(
+            report.call_args.args[0].sys_no, f"aml-screening:{invoice.sys_no}"
+        )
+
+    @patch("aml.service.send_saas_callback")
+    def test_deposit_confirm_writes_risk_into_snapshot_and_webhook(self, report):
+        deposit = self.make_deposit(worth=Decimal("500"))
+        RiskAssessment.objects.create(
+            transfer=self.transfer,
+            status=RiskAssessment.Status.SUCCESS,
+            address=self.transfer.from_address,
             risk_level=RiskLevel.SEVERE,
             risk_score=Decimal("95"),
-            raw_response={"risk_level": "Severe", "score": 95},
         )
-
-        AmlScreeningService.screen_invoice(invoice.pk)
-
-        score.assert_called_once_with(chain="ETH", address=self.transfer.from_address)
-        assessment = RiskAssessment.objects.get(invoice=invoice)
-        self.assertEqual(assessment.source, Provider.QUICKNODE_MISTTRACK)
-        self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
-        self.assertEqual(assessment.risk_level, RiskLevel.SEVERE)
-        self.assertEqual(assessment.risk_score, Decimal("95"))
-        invoice.refresh_from_db()
-        self.assertEqual(invoice.risk_level, RiskLevel.SEVERE)
-        self.assertEqual(invoice.risk_score, Decimal("95"))
-
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_same_address_is_requeried_for_every_payment(self, score):
-        """同一付款地址的每笔收款都实时查询，不复用前一笔的结果。
-
-        防止攻击者先用干净资金付款让地址被判低风险，再转入黑币付款沿用旧结论。
-        """
-        score.side_effect = [
-            MistTrackAmlResult(
-                risk_level=RiskLevel.LOW,
-                risk_score=Decimal("10"),
-                raw_response={},
-            ),
-            MistTrackAmlResult(
-                risk_level=RiskLevel.SEVERE,
-                risk_score=Decimal("99"),
-                raw_response={},
-            ),
-        ]
-        invoice = self.make_invoice(worth=Decimal("500"))
-        AmlScreeningService.screen_invoice(invoice.pk)
-
-        deposit = self.make_deposit(worth=Decimal("500"))
-        AmlScreeningService.screen_deposit(deposit.pk)
-
-        self.assertEqual(score.call_count, 2)
-        invoice.refresh_from_db()
+        Transfer.objects.filter(pk=self.transfer.pk).update(
+            status=TransferStatus.CONFIRMED
+        )
+        self.transfer.refresh_from_db()
         deposit.refresh_from_db()
-        self.assertEqual(invoice.risk_level, RiskLevel.LOW)
+
+        DepositService.confirm_deposit(deposit)
+
+        deposit.refresh_from_db()
         self.assertEqual(deposit.risk_level, RiskLevel.SEVERE)
-        self.assertEqual(deposit.risk_score, Decimal("99"))
+        event = WebhookEvent.objects.get(project=self.project)
+        self.assertEqual(event.payload["data"]["risk_level"], RiskLevel.SEVERE)
+        report.assert_called_once()
 
     @patch("aml.service.send_saas_callback")
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_successful_query_is_reported_to_saas_for_billing(self, score, report):
-        score.return_value = MistTrackAmlResult(
-            risk_level=RiskLevel.LOW,
-            risk_score=Decimal("10"),
-            raw_response={},
-        )
-        invoice = self.make_invoice(worth=Decimal("500"))
-        AmlScreeningService.screen_invoice(invoice.pk)
-        deposit = self.make_deposit(worth=Decimal("500"))
-        AmlScreeningService.screen_deposit(deposit.pk)
-
-        callbacks = [call.args[0] for call in report.call_args_list]
-        self.assertEqual(
-            [(cb.event, cb.appid, cb.sys_no) for cb in callbacks],
-            [
-                (
-                    CallbackEvent.AML_SCREENED,
-                    self.project.appid,
-                    f"aml-screening:{invoice.sys_no}",
-                ),
-                (
-                    CallbackEvent.AML_SCREENED,
-                    self.project.appid,
-                    f"aml-screening:{deposit.sys_no}",
-                ),
-            ],
+    def test_confirm_before_result_sends_webhook_without_risk(self, report):
+        """查询赶不上确认：webhook 照常发出、不暂缓，风险字段为空，也不计费。"""
+        invoice = self.make_waiting_invoice()
+        Invoice.objects.filter(pk=invoice.pk).update(transfer=self.transfer)
+        Transfer.objects.filter(pk=self.transfer.pk).update(
+            status=TransferStatus.CONFIRMED
         )
 
-    @patch("aml.service.send_saas_callback")
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_failed_query_is_not_reported_to_saas(self, score, report):
-        score.side_effect = RuntimeError("quicknode down")
-        invoice = self.make_invoice(worth=Decimal("500"))
+        InvoiceService.confirm_invoice(invoice)
 
-        AmlScreeningService.screen_invoice(invoice.pk)
-
+        event = WebhookEvent.objects.get(project=self.project)
+        self.assertIsNone(event.payload["data"]["risk_level"])
         report.assert_not_called()
-
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_external_failure_records_failed_and_clears_snapshot(self, score):
-        invoice = self.make_invoice(worth=Decimal("500"))
-        invoice.risk_level = RiskLevel.HIGH
-        invoice.risk_score = Decimal("80")
-        invoice.save(update_fields=["risk_level", "risk_score", "updated_at"])
-        score.side_effect = RuntimeError("quicknode down")
-
-        AmlScreeningService.screen_invoice(invoice.pk)
-
-        assessment = RiskAssessment.objects.get(invoice=invoice)
-        self.assertEqual(assessment.status, RiskAssessment.Status.FAILED)
-        self.assertIn("quicknode down", assessment.error_message)
-        invoice.refresh_from_db()
-        self.assertIsNone(invoice.risk_level)
-        self.assertIsNone(invoice.risk_score)

@@ -5,7 +5,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
-from aml.tasks import screen_invoice_aml
+from aml.service import AmlScreeningService
+from aml.tasks import screen_transfer_aml
 from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
@@ -593,9 +594,13 @@ class InvoiceService:
 
     @staticmethod
     def bind_transfer_to_invoice(*, invoice: Invoice, transfer: Transfer) -> bool:
+        needs_aml = AmlScreeningService.should_screen(
+            project=invoice.project, worth=invoice.worth, transfer=transfer
+        )
+        # 需要 AML 的账单不走快速确认：快速确认一匹配就完成，查询结果来不及写进确认 webhook。
         confirm_mode = (
             ConfirmMode.QUICK
-            if invoice.project.fast_confirm_threshold > invoice.worth
+            if invoice.project.fast_confirm_threshold > invoice.worth and not needs_aml
             else ConfirmMode.FULL
         )
         transfer = TransferService.assign_type_and_mode(
@@ -611,6 +616,12 @@ class InvoiceService:
         invoice.refresh_from_db()
 
         expire_invoice_public_cache_on_commit(invoice.sys_no)
+
+        # 匹配即开始 AML 查询，与区块确认并行；确认时再从 Transfer 读取结果。
+        if needs_aml:
+            transaction.on_commit(
+                lambda transfer_id=transfer.pk: screen_transfer_aml.delay(transfer_id)
+            )
 
         return True
 
@@ -697,7 +708,8 @@ class InvoiceService:
         expire_invoice_public_cache_on_commit(invoice.sys_no)
 
         cls.schedule_collection_if_needed(invoice)
-        transaction.on_commit(lambda: screen_invoice_aml.delay(invoice.pk))
+        # 必须在构建 webhook 之前：把匹配时已开始的 AML 结果写进账单快照与通知内容。
+        AmlScreeningService.apply_to_business(invoice)
 
         if invoice.protocol == InvoiceProtocol.EPAY_V1:
             from .epay.service import EpaySubmitService

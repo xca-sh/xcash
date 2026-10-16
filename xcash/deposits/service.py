@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import structlog
-from aml.tasks import screen_deposit_aml
+from aml.service import AmlScreeningService
+from aml.tasks import screen_transfer_aml
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
@@ -55,13 +58,19 @@ class DepositService:
         }
 
     @staticmethod
-    def refresh_worth(deposit: Deposit) -> None:
+    def calculate_worth(transfer: Transfer) -> Decimal | None:
+        """按当前价格折算转账的 USD 价值；价格不可用时返回 None。"""
         try:
-            worth = deposit.transfer.crypto.usd_amount(deposit.transfer.amount)
+            return transfer.crypto.usd_amount(transfer.amount)
         except Exception:  # noqa
-            logger.exception(
-                "calculate_worth 失败，worth 保持默认值 0", deposit_id=deposit.pk
-            )
+            logger.exception("calculate_worth 失败", transfer_id=transfer.pk)
+            return None
+
+    @classmethod
+    def refresh_worth(cls, deposit: Deposit) -> None:
+        worth = cls.calculate_worth(deposit.transfer)
+        if worth is None:
+            # worth 保持默认值 0
             return
 
         Deposit.objects.filter(pk=deposit.pk).update(
@@ -93,15 +102,34 @@ class DepositService:
     def try_match_deposit_transfer(cls, transfer: Transfer) -> bool:
         # 停用币（Crypto.active=False）也要归类入账：链上资金已实收，记账事实
         # 不能因运营停用而丢失；停用只挡新充币地址申请与商户 webhook 通知。
-        if not VaultSlot.objects.filter(
-            chain=transfer.chain,
-            address=transfer.to_address,
-            usage=VaultSlotUsage.DEPOSIT,
-        ).exists():
+        slot = (
+            VaultSlot.objects.select_related("customer__project")
+            .filter(
+                chain=transfer.chain,
+                address=transfer.to_address,
+                usage=VaultSlotUsage.DEPOSIT,
+            )
+            .first()
+        )
+        if slot is None:
             return False
 
         transfer.type = TransferType.Deposit
         transfer.save(update_fields=["type"])
+
+        # 匹配即开始 AML 查询，与区块确认并行；充值记录要到确认时才创建，
+        # 这里按当前价格估算价值判断是否达到项目阈值。
+        worth = cls.calculate_worth(transfer)
+        if (
+            slot.customer is not None
+            and worth is not None
+            and AmlScreeningService.should_screen(
+                project=slot.customer.project, worth=worth, transfer=transfer
+            )
+        ):
+            db_transaction.on_commit(
+                lambda transfer_id=transfer.pk: screen_transfer_aml.delay(transfer_id)
+            )
         return True
 
     @classmethod
@@ -145,7 +173,8 @@ class DepositService:
             cls.schedule_collect_for_completed_deposit(deposit)
         except Exception:  # noqa
             logger.exception("调度 VaultSlot 归集任务失败", deposit_id=deposit.pk)
-        db_transaction.on_commit(lambda: screen_deposit_aml.delay(deposit.pk))
+        # 必须在通知之前：把匹配时已开始的 AML 结果写进充值快照与 webhook 内容。
+        AmlScreeningService.apply_to_business(deposit)
         if deposit.transfer.crypto.active:
             cls.notify_completed(deposit)
         else:
