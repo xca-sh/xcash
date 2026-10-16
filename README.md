@@ -68,7 +68,7 @@ docker compose up -d
 
 内置 Caddy 监听 `127.0.0.1:6688`，用你的反向代理（Nginx、Caddy 等）转发流量并配置 TLS。首次启动会创建后台账号 `admin`，其密码由 `init_env.sh` 随机生成——脚本执行完会打印一次，同时保存在 `.env` 的 `DJANGO_DEFAULT_SUPERUSER_PASSWORD`，**请存入密码管理器**。然后在管理后台完成三步：
 
-1. 为需要启用的公链填写 RPC 节点（QuickNode / Alchemy / Infura；Tron 需要 TronGrid API Key）。
+1. 为需要使用的公链填写 RPC 节点（QuickNode / Alchemy / Infura；Tron 填写 TronGrid API Key）并启用。
 2. 为系统钱包在每条启用的链上充值少量 Gas（Tron 需准备能量）。
 3. 创建项目、设置收款地址，通过 [REST API](API.md) 完成对接。
 
@@ -96,7 +96,7 @@ docker compose up -d
 | 账单收款 | 是 | 是 | 是 | 是 | 是 | 是 | 是 |
 | 充值收款 | 是 | 是 | 是 | 是 | 是 | 是 | 是 |
 
-- **EVM**：支持任意 ERC-20 代币，在后台添加代币合约地址即可收款。
+- **EVM**：已预置 USDT、USDC 等常用稳定币，其他 ERC-20 代币可在后台 **货币 → 加密货币** 中添加合约地址。
 - **Tron**：支持 USDT 与原生 TRX。
 
 上表主网与测试网 Sepolia、Nile 默认预置；Avalanche、Linea、Scroll 需在后台手动添加；其他链需要改代码接入。
@@ -157,12 +157,6 @@ xcash.example.com {
 }
 ```
 
-如果反向代理在另一台机器上、需要设置 `LISTEN_TO=0.0.0.0` 对外暴露 6688 端口，请同时把受信代理收窄到反向代理的 IP：
-
-```env
-CADDY_TRUSTED_PROXIES=203.0.113.10
-```
-
 建议设置 `ADMIN_PATH` 把后台移到自定义路径（未设置时挂在站点根路径）：
 
 ```env
@@ -177,9 +171,9 @@ docker compose up -d
 
 镜像自动从 `ghcr.io/xca-sh/xcash` 拉取，启动时会自动执行数据库迁移。首次启动会创建后台账号 `admin`，密码为 `.env` 中的 `DJANGO_DEFAULT_SUPERUSER_PASSWORD`；生产环境下该口令为空、短于 12 位或等于示例值时会拒绝创建管理员并中止启动。
 
-### 4. 配置链 RPC
+### 4. 配置并启用公链
 
-登录管理后台，进入 **区块链 → 公链**，为需要使用的链填写 RPC 地址。推荐 [QuickNode](https://www.quicknode.com/)、[Alchemy](https://www.alchemy.com/) 或 [Infura](https://www.infura.io/)；Tron 需要在 [TronGrid](https://www.trongrid.io/) 获取 API Key。
+登录管理后台，进入 **区块链 → 公链**：EVM 链填写 RPC 地址（推荐 [QuickNode](https://www.quicknode.com/)、[Alchemy](https://www.alchemy.com/) 或 [Infura](https://www.infura.io/)），Tron 填写 [TronGrid](https://www.trongrid.io/) API Key，然后勾选「启用」。
 
 ### 5. 为系统钱包准备 Gas
 
@@ -196,7 +190,7 @@ docker compose up -d
 
 - **IP 白名单**：允许调用 API 的服务器 IP；测试阶段可用 `*`，生产环境建议收窄。
 - **通知地址**：接收 Webhook 事件。
-- **收款地址**：钱包直收模式添加你自己的「钱包直收地址」；智能合约收款与充值收款需配置对应链类型（EVM / Tron）的「归集地址」，**一旦设置不可修改**，建议使用多签钱包。
+- **收款地址**：账单默认使用钱包直收，在项目页添加你自己的「钱包直收地址」即可；若要使用充值收款或智能合约账单收款，需配置对应链类型（EVM / Tron）的「归集地址」，**一旦设置不可修改**，建议使用多签钱包。
 
 以上配置齐全后项目才就绪，否则 API 返回 `1004`。之后参考 [API 对接文档](https://xca.sh/docs/#api-base) 或 [API.md](API.md) 接入账单收款、充值收款和 Webhook。
 
@@ -239,7 +233,7 @@ git pull
 ./scripts/upgrade.sh
 ```
 
-脚本会拉取新镜像、执行迁移并平滑重启，全部就绪才报告成功；失败时不影响线上服务，重跑即可。
+脚本会拉取新镜像、执行迁移并平滑重启，全部就绪才报告成功；失败时会返回非零状态并输出排查提示。
 
 建议在 uptime 监控中拉取以下免鉴权端点，非 200 即告警：
 
@@ -254,7 +248,7 @@ git pull
 - **后端**：Django 5.2 + Django REST Framework
 - **任务队列**：Celery + Redis
 - **数据库**：PostgreSQL
-- **区块链交互**：web3.py（EVM）
+- **区块链交互**：web3.py（EVM）、TronGrid HTTP API（Tron）
 - **钱包派生**：BIP44 HD 钱包（bip-utils）
 - **前端账单收款页**：React 19 + Vite + Tailwind CSS
 - **部署**：Docker Compose
