@@ -7,6 +7,7 @@ from django.utils.translation import gettext_lazy as _
 
 class Provider(models.TextChoices):
     QUICKNODE_MISTTRACK = "quicknode_misttrack", _("QuickNode MistTrack")
+    # 已停用的数据源，仅保留以正确展示历史 RiskAssessment 记录。
     MISTTRACK_OPENAPI = "misttrack_openapi", _("MistTrack OpenAPI")
 
 

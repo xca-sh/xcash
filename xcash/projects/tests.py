@@ -1,9 +1,6 @@
-import importlib
-from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.apps import apps as django_apps
 from django.contrib import admin
 from django.test import TestCase
 from django.test.client import RequestFactory
@@ -12,7 +9,6 @@ from chains.constants import ChainCode
 from chains.models import Chain
 from chains.tests_fixtures import make_evm_chain
 from common.admin import ModelAdmin
-from core.models import SystemSettings
 from currencies.models import Crypto
 from invoices.models import DifferRecipientAddress
 from projects.admin import ProjectAdmin
@@ -189,58 +185,3 @@ class ProjectReadinessTests(TestCase):
         _, errors = project.is_ready
 
         self.assertNotIn("钱包未配置", [str(error) for error in errors])
-
-
-class ProjectAmlSettingsBackfillMigrationTests(TestCase):
-    """projects.0003 把全局 AML 参数回填到项目的规则。
-
-    回填函数直接跑在当前模型上；下个版本删除 SystemSettings 上的旧 AML 列时，
-    本测试随之删除。
-    """
-
-    @staticmethod
-    def run_backfill():
-        migration = importlib.import_module(
-            "projects.migrations.0003_project_aml_screening_settings"
-        )
-        migration.backfill_project_aml_settings_from_system(django_apps, None)
-
-    def test_enabled_global_settings_are_copied_to_every_project(self):
-        SystemSettings.objects.create(
-            aml_screening_enabled=True,
-            aml_screening_threshold_usd=Decimal("250"),
-        )
-        first = Project.objects.create(name="first")
-        second = Project.objects.create(name="second")
-
-        self.run_backfill()
-        # 幂等：重复执行结果不变。
-        self.run_backfill()
-
-        for project in (first, second):
-            project.refresh_from_db()
-            self.assertTrue(project.aml_screening_enabled)
-            self.assertEqual(project.aml_screening_threshold_usd, Decimal("250"))
-
-    def test_disabled_global_settings_keep_project_defaults(self):
-        # 未开启 AML 时全局阈值是从未动过的 0，不能搬到项目上。
-        SystemSettings.objects.create(
-            aml_screening_enabled=False,
-            aml_screening_threshold_usd=Decimal("0"),
-        )
-        project = Project.objects.create(name="untouched")
-
-        self.run_backfill()
-
-        project.refresh_from_db()
-        self.assertFalse(project.aml_screening_enabled)
-        self.assertEqual(project.aml_screening_threshold_usd, Decimal("100"))
-
-    def test_missing_global_settings_keep_project_defaults(self):
-        project = Project.objects.create(name="no-settings")
-
-        self.run_backfill()
-
-        project.refresh_from_db()
-        self.assertFalse(project.aml_screening_enabled)
-        self.assertEqual(project.aml_screening_threshold_usd, Decimal("100"))

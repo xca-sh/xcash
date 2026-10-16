@@ -3,12 +3,10 @@ from __future__ import annotations
 import time
 from datetime import timedelta
 from decimal import Decimal
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
 from aml.clients import MistTrackAmlResult
-from aml.clients import MistTrackOpenApiClient
 from aml.clients import QuicknodeMistTrackClient
 from aml.models import Provider
 from aml.models import RiskAssessment
@@ -23,7 +21,6 @@ from django.utils import timezone
 from chains.constants import EVM_UNKNOWN_SOURCE_ADDRESS
 from chains.constants import ChainCode
 from chains.models import Chain
-from chains.models import ChainType
 from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
@@ -131,14 +128,12 @@ class QuicknodeMistTrackClientTests(SimpleTestCase):
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "mt_addressRiskScore",
-                "params": [{"chain": "ETH", "address": "0xabc"}],
+                "params": ["ETH", "0xabc"],
             },
             timeout=5.0,
         )
         self.assertEqual(result.risk_level, RiskLevel.HIGH)
         self.assertEqual(result.risk_score, Decimal("88"))
-        # QuickNode add-on 不返回 address_label
-        self.assertIsNone(result.address_label)
 
     @patch("aml.clients.time.sleep", return_value=None)
     @patch("aml.clients.httpx.request")
@@ -154,243 +149,67 @@ class QuicknodeMistTrackClientTests(SimpleTestCase):
                 endpoint_url="https://quicknode.example"
             ).address_risk_score(chain="ETH", address="0xabc")
 
-
-class MistTrackOpenApiClientTests(SimpleTestCase):
     @patch("aml.clients.time.sleep", return_value=None)
     @patch("aml.clients.httpx.request")
-    def test_address_risk_score_calls_v3_endpoint_with_api_key(
-        self, httpx_request, _sleep
-    ):
-        response = httpx.Response(
-            200,
-            json={
-                "success": True,
-                "msg": "",
-                "data": {
-                    "risk_level": "High",
-                    "score": 75,
-                    "address_label": "Binance",
-                },
-            },
-            request=httpx.Request("GET", "https://openapi.misttrack.io/v3/risk_score"),
-        )
-        httpx_request.return_value = response
-
-        result = MistTrackOpenApiClient(api_key="secret").address_risk_score(
-            coin="ETH", address="0xabc"
-        )
-
-        httpx_request.assert_called_once_with(
-            "GET",
-            "https://openapi.misttrack.io/v3/risk_score",
-            params={"coin": "ETH", "address": "0xabc", "api_key": "secret"},
-            timeout=5.0,
-        )
-        self.assertEqual(result.risk_level, RiskLevel.HIGH)
-        self.assertEqual(result.risk_score, Decimal("75"))
-        self.assertEqual(result.address_label, "Binance")
-        self.assertEqual(result.raw_response["address_label"], "Binance")
-
-    @patch("aml.clients.time.sleep", return_value=None)
-    @patch("aml.clients.httpx.request")
-    def test_api_error_raises_client_error(self, httpx_request, _sleep):
-        httpx_request.return_value = httpx.Response(
-            200,
-            json={"success": False, "msg": "InvalidApiKey"},
-            request=httpx.Request("GET", "https://openapi.misttrack.io/v3/risk_score"),
-        )
-
-        with self.assertRaisesMessage(RuntimeError, "InvalidApiKey"):
-            MistTrackOpenApiClient(api_key="bad").address_risk_score(
-                coin="ETH", address="0xabc"
-            )
-
-    @patch("aml.clients.time.sleep", return_value=None)
-    @patch("aml.clients.httpx.request")
-    def test_4xx_response_does_not_leak_api_key(self, httpx_request, _sleep):
-        """HTTP 4xx 抛出的异常消息不得包含明文 api_key（防日志泄露）。"""
+    def test_4xx_raises_without_retry(self, httpx_request, _sleep):
         httpx_request.return_value = httpx.Response(
             401,
-            text="api_key=super-secret-leaked is invalid",
-            request=httpx.Request(
-                "GET",
-                "https://openapi.misttrack.io/v3/risk_score?api_key=super-secret-leaked",
-            ),
+            text="unauthorized",
+            request=httpx.Request("POST", "https://quicknode.example"),
         )
 
-        with self.assertRaises(RuntimeError) as ctx:
-            MistTrackOpenApiClient(api_key="super-secret-leaked").address_risk_score(
-                coin="ETH", address="0xabc"
-            )
+        with self.assertRaises(RuntimeError):
+            QuicknodeMistTrackClient(
+                endpoint_url="https://quicknode.example"
+            ).address_risk_score(chain="ETH", address="0xabc")
 
-        self.assertNotIn("super-secret-leaked", str(ctx.exception))
-        # 4xx 不重试
         self.assertEqual(httpx_request.call_count, 1)
 
     @patch("aml.clients.time.sleep", return_value=None)
     @patch("aml.clients.httpx.request")
-    def test_5xx_retries_then_succeeds(self, httpx_request, _sleep):
+    def test_5xx_and_429_retry_then_succeed(self, httpx_request, _sleep):
         ok = httpx.Response(
             200,
             json={
-                "success": True,
-                "msg": "",
-                "data": {
-                    "risk_level": "Low",
-                    "score": 10,
-                },
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"risk_level": "Low", "score": 10},
             },
-            request=httpx.Request("GET", "https://openapi.misttrack.io/v3/risk_score"),
+            request=httpx.Request("POST", "https://quicknode.example"),
         )
-        fail = httpx.Response(
+        bad_gateway = httpx.Response(
             502,
             text="Bad Gateway",
-            request=httpx.Request("GET", "https://openapi.misttrack.io/v3/risk_score"),
+            request=httpx.Request("POST", "https://quicknode.example"),
         )
-        httpx_request.side_effect = [fail, fail, ok]
+        rate_limited = httpx.Response(
+            429,
+            text="Too Many Requests",
+            request=httpx.Request("POST", "https://quicknode.example"),
+        )
+        httpx_request.side_effect = [bad_gateway, rate_limited, ok]
 
-        result = MistTrackOpenApiClient(api_key="k").address_risk_score(
-            coin="ETH", address="0xabc"
-        )
+        result = QuicknodeMistTrackClient(
+            endpoint_url="https://quicknode.example"
+        ).address_risk_score(chain="ETH", address="0xabc")
 
         self.assertEqual(result.risk_level, RiskLevel.LOW)
         self.assertEqual(httpx_request.call_count, 3)
 
     @patch("aml.clients.time.sleep", return_value=None)
     @patch("aml.clients.httpx.request")
-    def test_429_with_retry_after_retries_then_succeeds(self, httpx_request, _sleep):
-        """429 响应体携带 retry_after 时应按该值休眠后重试。"""
-        ok = httpx.Response(
-            200,
-            json={
-                "success": True,
-                "msg": "",
-                "data": {
-                    "risk_level": "Low",
-                    "score": 10,
-                },
-            },
-            request=httpx.Request("GET", "https://openapi.misttrack.io/v3/risk_score"),
-        )
-        rate_limited = httpx.Response(
-            429,
-            json={"success": False, "msg": "ExceededRateLimit", "retry_after": 2},
-            request=httpx.Request("GET", "https://openapi.misttrack.io/v3/risk_score"),
-        )
-        httpx_request.side_effect = [rate_limited, ok]
-
-        result = MistTrackOpenApiClient(api_key="k").address_risk_score(
-            coin="ETH", address="0xabc"
-        )
-
-        self.assertEqual(result.risk_level, RiskLevel.LOW)
-        self.assertEqual(httpx_request.call_count, 2)
-
-    @patch("aml.clients.time.sleep", return_value=None)
-    @patch("aml.clients.httpx.request")
-    def test_429_exhausted_retries_raises_error(self, httpx_request, _sleep):
-        """429 连续重试耗尽后应抛出异常。"""
-        rate_limited = httpx.Response(
-            429,
-            json={"success": False, "msg": "ExceededRateLimit", "retry_after": 1},
-            request=httpx.Request("GET", "https://openapi.misttrack.io/v3/risk_score"),
-        )
-        httpx_request.side_effect = [rate_limited, rate_limited, rate_limited]
-
-        with self.assertRaises(RuntimeError):
-            MistTrackOpenApiClient(api_key="k").address_risk_score(
-                coin="ETH", address="0xabc"
-            )
-
-        self.assertEqual(httpx_request.call_count, 3)
-
-    @patch("aml.clients.time.sleep", return_value=None)
-    @patch("aml.clients.httpx.request")
-    def test_network_error_message_does_not_leak_api_key(self, httpx_request, _sleep):
-        """网络异常重试耗尽后抛出的消息不得包含 api_key。"""
-        httpx_request.side_effect = httpx.ConnectError(
-            "connection refused for https://openapi.misttrack.io/v3/risk_score?api_key=leak-me"
-        )
+    def test_exhausted_retries_raise_without_leaking_endpoint_token(
+        self, httpx_request, _sleep
+    ):
+        httpx_request.side_effect = httpx.ConnectError("connection refused")
 
         with self.assertRaises(RuntimeError) as ctx:
-            MistTrackOpenApiClient(api_key="leak-me").address_risk_score(
-                coin="ETH", address="0xabc"
-            )
+            QuicknodeMistTrackClient(
+                endpoint_url="https://demo.quiknode.pro/secret-token/"
+            ).address_risk_score(chain="ETH", address="0xabc")
 
-        self.assertNotIn("leak-me", str(ctx.exception))
+        self.assertNotIn("secret-token", str(ctx.exception))
         self.assertEqual(httpx_request.call_count, 3)
-
-
-class AmlChainMappingTests(SimpleTestCase):
-    def test_quicknode_maps_only_addon_supported_networks(self):
-        cases = {
-            ChainType.TRON: "TRX",
-            1: "ETH",
-            56: "BNB",
-            42161: "ARBITRUM",
-        }
-
-        for chain_key, expected in cases.items():
-            with self.subTest(chain_key=chain_key):
-                if isinstance(chain_key, int):
-                    chain = SimpleNamespace(
-                        type=ChainType.EVM, chain_id=chain_key, chain="mock"
-                    )
-                else:
-                    chain = SimpleNamespace(type=chain_key, chain="mock")
-                self.assertEqual(
-                    AmlScreeningService._quicknode_misttrack_chain(chain), expected
-                )
-
-    def test_common_evm_mainnets_map_to_misttrack_openapi_coin_codes(self):
-        cases = {
-            (1, "ETH"): "ETH",
-            (1, "USDT"): "USDT-ERC20",
-            (10, "ETH"): "ETH-Optimism",
-            (10, "USDT"): "USDT-Optimism",
-            (10, "USDC"): "USDC-Optimism",
-            (56, "BNB"): "BNB",
-            (56, "USDT"): "USDT-BEP20",
-            (56, "BUSD"): "BUSD-BEP20",
-            (137, "POL"): "POL-Polygon",
-            (137, "USDT"): "USDT-Polygon",
-            (137, "USDC.E"): "USDC.e-Polygon",
-            (324, "ETH"): "ETH-zkSync",
-            (324, "ZK"): "ZK-zkSync",
-            (4689, "IOTX"): "IOTX",
-            (8453, "ETH"): "ETH-Base",
-            (8453, "USDC"): "USDC-Base",
-            (8453, "USDT"): "USDT-Base",
-            (8453, "CBBTC"): "cbBTC-Base",
-            (42161, "ETH"): "ETH-Arbitrum",
-            (42161, "USDT"): "USDT-Arbitrum",
-            (42161, "ARB"): "ARB-Arbitrum",
-            (43114, "AVAX"): "AVAX-Avalanche",
-            (43114, "USDT"): "USDT-Avalanche",
-            (43114, "BTC.B"): "BTC.b-Avalanche",
-        }
-
-        for (chain_id, symbol), expected in cases.items():
-            with self.subTest(chain_id=chain_id, symbol=symbol):
-                chain = SimpleNamespace(
-                    type=ChainType.EVM, chain_id=chain_id, chain="mock"
-                )
-                crypto = Crypto(symbol=symbol)
-                self.assertEqual(
-                    AmlScreeningService._misttrack_openapi_coin(
-                        chain=chain, crypto=crypto
-                    ),
-                    expected,
-                )
-
-    def test_tron_usdt_maps_to_trc20_coin_code(self):
-        chain = SimpleNamespace(type=ChainType.TRON, chain="mock")
-        crypto = Crypto(symbol="USDT")
-
-        self.assertEqual(
-            AmlScreeningService._misttrack_openapi_coin(chain=chain, crypto=crypto),
-            "USDT-TRC20",
-        )
 
 
 @override_settings(IS_SAAS=False)
@@ -607,67 +426,39 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         self.assertFalse(RiskAssessment.objects.filter(deposit=deposit).exists())
 
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    @patch("aml.service.MistTrackOpenApiClient.address_risk_score")
-    def test_openapi_api_key_takes_precedence_over_quicknode_endpoint(
-        self, openapi_score, quicknode_score
-    ):
+    def test_unsupported_chain_does_not_create_assessment(self, score):
+        """MistTrack 只覆盖主网：测试网（含 Nile）与未覆盖的主网都不查询、不写记录。"""
         invoice = self.make_invoice(worth=Decimal("500"))
-        self.system_settings.misttrack_openapi_api_key = "openapi-secret"
-        self.system_settings.save(update_fields=["misttrack_openapi_api_key"])
-        openapi_score.return_value = MistTrackAmlResult(
-            risk_level=RiskLevel.HIGH,
-            risk_score=Decimal("75"),
-            raw_response={"risk_level": "High", "score": 75},
-        )
+        for code in (ChainCode.Sepolia, ChainCode.Nile, ChainCode.Linea):
+            with self.subTest(code=code):
+                # 占位 rpc 的 active 链不能走 save()（会触发 clean 的远端校验），用 update 直接改 code。
+                Chain.objects.filter(pk=self.chain.pk).update(code=code)
 
-        AmlScreeningService.screen_invoice(invoice.pk)
+                AmlScreeningService.screen_invoice(invoice.pk)
 
-        openapi_score.assert_called_once_with(
-            coin="ETH", address=self.transfer.from_address
-        )
-        quicknode_score.assert_not_called()
-        assessment = RiskAssessment.objects.get(invoice=invoice)
-        self.assertEqual(assessment.source, Provider.MISTTRACK_OPENAPI)
-        self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
-        invoice.refresh_from_db()
-        self.assertEqual(invoice.risk_level, RiskLevel.HIGH)
+                score.assert_not_called()
+                self.assertFalse(
+                    RiskAssessment.objects.filter(invoice=invoice).exists()
+                )
 
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_quicknode_unsupported_chain_does_not_create_assessment(self, score):
+    def test_tron_mainnet_queries_with_tron_blockchain_value(self, score):
         invoice = self.make_invoice(worth=Decimal("500"))
-        # 占位 rpc 的 active 链不能走 save()（会触发 clean 的远端校验），用 update 直接改 code。
-        Chain.objects.filter(pk=self.chain.pk).update(code=ChainCode.Polygon)
-        self.chain.refresh_from_db()
+        Chain.objects.filter(pk=self.chain.pk).update(code=ChainCode.Tron)
+        score.return_value = MistTrackAmlResult(
+            risk_level=RiskLevel.LOW,
+            risk_score=Decimal("10"),
+            raw_response={},
+        )
 
         AmlScreeningService.screen_invoice(invoice.pk)
 
-        score.assert_not_called()
-        self.assertFalse(RiskAssessment.objects.filter(invoice=invoice).exists())
-
-    @patch("aml.service.MistTrackOpenApiClient.address_risk_score")
-    def test_openapi_unsupported_chain_does_not_create_assessment(self, score):
-        invoice = self.make_invoice(worth=Decimal("500"))
-        self.system_settings.misttrack_openapi_api_key = "openapi-secret"
-        self.system_settings.save(update_fields=["misttrack_openapi_api_key"])
-        # 占位 rpc 的 active 链不能走 save()（会触发 clean 的远端校验），用 update 直接改 code。
-        Chain.objects.filter(pk=self.chain.pk).update(code=ChainCode.Sepolia)
-        self.chain.refresh_from_db()
-
-        AmlScreeningService.screen_invoice(invoice.pk)
-
-        score.assert_not_called()
-        self.assertFalse(RiskAssessment.objects.filter(invoice=invoice).exists())
+        score.assert_called_once_with(chain="TRON", address=self.transfer.from_address)
 
     def test_provider_not_configured_does_not_create_assessment(self):
         invoice = self.make_invoice(worth=Decimal("500"))
         self.system_settings.quicknode_misttrack_endpoint_url = ""
-        self.system_settings.misttrack_openapi_api_key = ""
-        self.system_settings.save(
-            update_fields=[
-                "quicknode_misttrack_endpoint_url",
-                "misttrack_openapi_api_key",
-            ]
-        )
+        self.system_settings.save(update_fields=["quicknode_misttrack_endpoint_url"])
 
         AmlScreeningService.screen_invoice(invoice.pk)
 
@@ -726,7 +517,7 @@ class AmlBusinessDispatchTests(AmlTestMixin, TestCase):
 
         AmlScreeningService.screen_invoice(invoice.pk)
 
-        score.assert_called_once()
+        score.assert_called_once_with(chain="ETH", address=self.transfer.from_address)
         assessment = RiskAssessment.objects.get(invoice=invoice)
         self.assertEqual(assessment.source, Provider.QUICKNODE_MISTTRACK)
         self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)

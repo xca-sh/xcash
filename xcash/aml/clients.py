@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import random
-import re
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -16,19 +15,11 @@ class MistTrackAmlResult:
     risk_level: str
     risk_score: Decimal | None
     raw_response: dict[str, Any]
-    address_label: str | None = None
 
 
 _DEFAULT_TIMEOUT = 5.0
 _MAX_ATTEMPTS = 3
 _BASE_BACKOFF = 0.5
-
-# 用于擦除异常消息中可能携带的 secret（api_key/QuickNode endpoint token）
-_API_KEY_REGEX = re.compile(r"(api_key=)[^&\s'\"]+", re.IGNORECASE)
-
-
-def _scrub_secrets(message: str) -> str:
-    return _API_KEY_REGEX.sub(r"\1***", message)
 
 
 def _scrub_url(url: str) -> str:
@@ -44,11 +35,9 @@ def _request_with_retry(
     *,
     request_kwargs: dict[str, Any],
     error_label: str,
-    scrub_message: bool,
 ) -> httpx.Response:
     """统一的带指数退避重试的 HTTP 调用。
-    重试策略：仅对网络错误与 5xx 重试，4xx 直接抛出。最多 3 次，退避 0.5s/1s/2s + jitter。
-    异常消息中的 api_key/URL token 在抛出前被擦除。
+    重试策略：仅对网络错误、429 与 5xx 重试，其余 4xx 直接抛出。最多 3 次，退避 0.5s/1s/2s + jitter。
     """
     last_exc: Exception | None = None
     for attempt in range(_MAX_ATTEMPTS):
@@ -67,12 +56,8 @@ def _request_with_retry(
                     if attempt == _MAX_ATTEMPTS - 1:
                         break
                 elif status >= 400:
-                    # 4xx 不重试，但要擦除响应中可能存在的敏感字符
                     body = response.text[:200]
-                    msg = f"{error_label} HTTP {status}: {body}"
-                    if scrub_message:
-                        msg = _scrub_secrets(msg)
-                    raise RuntimeError(msg)
+                    raise RuntimeError(f"{error_label} HTTP {status}: {body}")
                 else:
                     return response
             else:
@@ -83,13 +68,17 @@ def _request_with_retry(
         backoff = _BASE_BACKOFF * (2**attempt) + random.uniform(0, 0.25)  # noqa: S311
         time.sleep(backoff)
 
-    msg = f"{error_label} request failed: {last_exc}"
-    if scrub_message:
-        msg = _scrub_secrets(msg)
-    raise RuntimeError(msg)
+    raise RuntimeError(f"{error_label} request failed: {last_exc}")
 
 
 class QuicknodeMistTrackClient:
+    """QuickNode Marketplace 的 MistTrack Address Risk Scores add-on。
+
+    协议见 https://docs.misttrack.io/openapi/quicknode-add-on-docs ：
+    JSON-RPC 方法 mt_addressRiskScore，params 为位置参数 [blockchain, address]，
+    result 含 score / risk_level / detail_list / hacking_event。
+    """
+
     def __init__(self, *, endpoint_url: str):
         self.endpoint_url = endpoint_url
 
@@ -98,7 +87,7 @@ class QuicknodeMistTrackClient:
             "jsonrpc": "2.0",
             "id": 1,
             "method": "mt_addressRiskScore",
-            "params": [{"chain": chain, "address": address}],
+            "params": [chain, address],
         }
         response = _request_with_retry(
             "POST",
@@ -106,7 +95,6 @@ class QuicknodeMistTrackClient:
             request_kwargs={"json": payload, "timeout": _DEFAULT_TIMEOUT},
             # 不在 error_label 中泄露 endpoint，外层日志按 host 摘要
             error_label=f"QuickNode MistTrack({_scrub_url(self.endpoint_url)})",
-            scrub_message=False,
         )
 
         data = response.json()
@@ -133,50 +121,4 @@ class QuicknodeMistTrackClient:
             risk_level=str(risk_level),
             risk_score=Decimal(str(score)) if score is not None else None,
             raw_response=result,
-            address_label=None,  # QuickNode add-on 不返回该字段
-        )
-
-
-class MistTrackOpenApiClient:
-    endpoint_url = "https://openapi.misttrack.io/v3/risk_score"
-
-    def __init__(self, *, api_key: str):
-        self.api_key = api_key
-
-    def address_risk_score(self, *, coin: str, address: str) -> MistTrackAmlResult:
-        response = _request_with_retry(
-            "GET",
-            self.endpoint_url,
-            request_kwargs={
-                "params": {"coin": coin, "address": address, "api_key": self.api_key},
-                "timeout": _DEFAULT_TIMEOUT,
-            },
-            error_label="MistTrack OpenAPI",
-            # api_key 走 query string，任何异常消息都必须脱敏
-            scrub_message=True,
-        )
-
-        data = response.json()
-        if not isinstance(data, dict):
-            raise TypeError("MistTrack OpenAPI returned non-object response")
-        if not data.get("success"):
-            raise RuntimeError(
-                str(data.get("msg") or "MistTrack OpenAPI request failed")
-            )
-
-        result = data.get("data")
-        if not isinstance(result, dict):
-            raise TypeError("MistTrack OpenAPI response missing data")
-
-        risk_level = result.get("risk_level")
-        if risk_level not in RiskLevel.values:
-            raise RuntimeError(f"unknown MistTrack risk level: {risk_level}")
-
-        score = result.get("score")
-        label = result.get("address_label")
-        return MistTrackAmlResult(
-            risk_level=str(risk_level),
-            risk_score=Decimal(str(score)) if score is not None else None,
-            raw_response=result,
-            address_label=str(label) if label is not None else None,
         )

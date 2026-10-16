@@ -98,49 +98,13 @@ class SystemSettings(models.Model):
             "达到上限后仍可复用已有可用槽位，但不再创建新槽位。"
         ),
     )
-    # 以下四个 aml_screening_* 字段已废弃：开关与阈值下放到 Project，地址风险缓存与
-    # 强制刷新阈值随缓存一并移除。业务代码不再读取，列仅保留给 projects.0003 迁移
-    # 回填使用，下个版本删除。
-    aml_screening_enabled = models.BooleanField(
-        _("开启 AML 筛查"),
-        default=False,
-        help_text=_("开启后对高于 AML 查询阈值的账单收款和充值收款查询外部地址风险。"),
-    )
-    aml_screening_threshold_usd = models.DecimalField(
-        _("AML 查询阈值(USD)"),
-        max_digits=16,
-        decimal_places=6,
-        default=Decimal("0"),
-        validators=[MinValueValidator(Decimal("0"))],
-        help_text=_("账单收款或充值收款价值大于该阈值时执行 AML 查询。"),
-    )
-    aml_screening_cache_seconds = models.PositiveIntegerField(
-        _("AML 查询缓存秒数"),
-        default=3600,
-        validators=[MinValueValidator(1)],
-        help_text=_("同一地址 AML 查询成功后在 Django 缓存中保留的秒数。"),
-    )
-    aml_screening_force_refresh_threshold_usd = models.DecimalField(
-        _("AML 查询强制刷新阈值(USD)"),
-        max_digits=16,
-        decimal_places=6,
-        default=Decimal("10000"),
-        validators=[MinValueValidator(Decimal("0"))],
-        help_text=_("本次业务价值大于该阈值时跳过缓存直接查询。"),
-    )
     quicknode_misttrack_endpoint_url = models.URLField(
         _("QuickNode MistTrack Endpoint"),
         blank=True,
         default="",
-        help_text=_("QuickNode MistTrack add-on 的 JSON-RPC endpoint URL。"),
-    )
-    misttrack_openapi_api_key = models.CharField(
-        _("MistTrack OpenAPI API Key"),
-        max_length=255,
-        blank=True,
-        default="",
         help_text=_(
-            "MistTrack 官方 OpenAPI API Key；配置后优先使用 MistTrack V3 风险评分接口。"
+            "开通了 MistTrack Address Risk Scores add-on 的 QuickNode endpoint URL；"
+            "留空则不做 AML 查询。"
         ),
     )
     created_by = models.ForeignKey(

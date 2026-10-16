@@ -113,10 +113,3 @@ def get_quicknode_misttrack_endpoint_url() -> str:
     if system_settings is not None:
         return system_settings.quicknode_misttrack_endpoint_url.strip()
     return ""
-
-
-def get_misttrack_openapi_api_key() -> str:
-    system_settings = get_system_settings()
-    if system_settings is not None:
-        return system_settings.misttrack_openapi_api_key.strip()
-    return ""

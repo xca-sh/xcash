@@ -187,10 +187,7 @@ class SystemSettingsAdmin(ModelAdmin):
             _("AML 筛查"),
             {
                 "classes": ("tab",),
-                "fields": (
-                    "misttrack_openapi_api_key",
-                    "quicknode_misttrack_endpoint_url",
-                ),
+                "fields": ("quicknode_misttrack_endpoint_url",),
                 "description": _(
                     "AML 开关与查询阈值已改为按项目配置，请在项目详情页设置。"
                 ),

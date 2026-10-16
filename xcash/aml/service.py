@@ -1,47 +1,46 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import TYPE_CHECKING
 from typing import Any
 
 import structlog
 from aml.clients import MistTrackAmlResult
-from aml.clients import MistTrackOpenApiClient
 from aml.clients import QuicknodeMistTrackClient
-from aml.misttrack_coin_map import OPENAPI_EVM_COIN
-from aml.misttrack_coin_map import OPENAPI_TRON_COIN
-from aml.misttrack_coin_map import QUICKNODE_EVM_CHAIN
 from aml.models import Provider
 from aml.models import RiskAssessment
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from chains.models import Chain
-from chains.models import ChainType
+from chains.constants import ChainCode
 from common.permission_check import get_saas_risk_marking_enabled
-from core.runtime_settings import get_misttrack_openapi_api_key
 from core.runtime_settings import get_quicknode_misttrack_endpoint_url
 from deposits.models import Deposit
 from invoices.models import Invoice
 
-if TYPE_CHECKING:
-    from currencies.models import Crypto
-
 logger = structlog.get_logger()
 
 
-class UnsupportedProviderChainError(RuntimeError):
-    """provider 当前未覆盖该 chain/coin 的映射，无法发起 AML 查询。"""
+# xcash 链 code → mt_addressRiskScore 的 blockchain 参数取值。
+# 取值表见 https://docs.misttrack.io/openapi/quicknode-add-on-docs ，只列 xcash 支持且
+# MistTrack 覆盖的主网；Linea / Scroll 与全部测试网不在 MistTrack 覆盖范围内。
+QUICKNODE_MISTTRACK_CHAIN: dict[str, str] = {
+    ChainCode.Ethereum: "ETH",
+    ChainCode.BSC: "BNB",
+    ChainCode.Polygon: "Polygon",
+    ChainCode.ArbitrumOne: "ARBITRUM",
+    ChainCode.Optimism: "Optimism",
+    ChainCode.Base: "Base",
+    ChainCode.Avalanche: "AVAX",
+    ChainCode.Tron: "TRON",
+}
 
 
 class AmlScreeningService:
     @classmethod
     def screen_invoice(cls, invoice_id: int) -> None:
         invoice = (
-            Invoice.objects.select_related(
-                "transfer", "transfer__chain", "transfer__crypto", "project"
-            )
+            Invoice.objects.select_related("transfer", "transfer__chain", "project")
             .filter(pk=invoice_id)
             .first()
         )
@@ -72,7 +71,6 @@ class AmlScreeningService:
             Deposit.objects.select_related(
                 "transfer",
                 "transfer__chain",
-                "transfer__crypto",
                 "customer",
                 "customer__project",
             )
@@ -137,8 +135,8 @@ class AmlScreeningService:
             )
             return
 
-        provider = cls._select_provider()
-        if provider is None:
+        endpoint_url = get_quicknode_misttrack_endpoint_url()
+        if not endpoint_url:
             logger.info(
                 "aml_screening.provider_not_configured",
                 target_type=target_type,
@@ -149,48 +147,43 @@ class AmlScreeningService:
         # 每笔都实时查询、不复用历史结果：地址风险随其资金来源随时变化，攻击者可以先用
         # 干净资金付款让地址被判低风险，再在缓存期内转入黑币付款。查询量由项目阈值控制。
         address = transfer.from_address
-        try:
-            result = cls._query_provider(
-                provider=provider,
-                chain=transfer.chain,
-                crypto=transfer.crypto,
-                address=address,
-            )
-        except UnsupportedProviderChainError as exc:
+        misttrack_chain = QUICKNODE_MISTTRACK_CHAIN.get(transfer.chain.code)
+        if misttrack_chain is None:
+            # MistTrack 只覆盖主网，测试网与未覆盖的链不查询、不写记录。
             logger.info(
-                "aml_screening.unsupported_provider_chain",
-                source=provider["source"],
+                "aml_screening.unsupported_chain",
                 target_type=target_type,
                 target_id=target.pk,
                 chain=transfer.chain.code,
-                crypto=transfer.crypto.symbol,
-                error=str(exc),
             )
             return
+
+        try:
+            result = QuicknodeMistTrackClient(
+                endpoint_url=endpoint_url
+            ).address_risk_score(chain=misttrack_chain, address=address)
         except Exception as exc:
             logger.warning(
                 "aml_screening.provider_failed",
-                source=provider["source"],
                 target_type=target_type,
                 target_id=target.pk,
                 address=address,
                 error=str(exc),
             )
-            cls._record_failed(target, target_type, str(exc), source=provider["source"])
+            cls._record_failed(target, target_type, str(exc))
             return
 
-        cls._record_success(target, target_type, provider["source"], result)
+        cls._record_success(target, target_type, result)
 
     @classmethod
     def _record_success(
         cls,
         target: Invoice | Deposit,
         target_type: str,
-        source: str,
         result: MistTrackAmlResult,
     ) -> None:
         defaults = {
-            "source": source,
+            "source": Provider.QUICKNODE_MISTTRACK,
             "status": RiskAssessment.Status.SUCCESS,
             "target_type": target_type,
             "address": target.transfer.from_address,
@@ -210,14 +203,12 @@ class AmlScreeningService:
         target: Invoice | Deposit,
         target_type: str,
         error_message: str,
-        *,
-        source: str = Provider.QUICKNODE_MISTTRACK,
     ) -> None:
         cls._upsert_assessment(
             target,
             target_type,
             {
-                "source": source,
+                "source": Provider.QUICKNODE_MISTTRACK,
                 "status": RiskAssessment.Status.FAILED,
                 "target_type": target_type,
                 "address": target.transfer.from_address,
@@ -254,56 +245,3 @@ class AmlScreeningService:
             lookup = {"deposit": target}
             defaults["invoice"] = None
         RiskAssessment.objects.update_or_create(defaults=defaults, **lookup)
-
-    @staticmethod
-    def _select_provider() -> dict[str, str] | None:
-        api_key = get_misttrack_openapi_api_key()
-        if api_key:
-            return {"source": Provider.MISTTRACK_OPENAPI, "api_key": api_key}
-
-        endpoint_url = get_quicknode_misttrack_endpoint_url()
-        if endpoint_url:
-            return {
-                "source": Provider.QUICKNODE_MISTTRACK,
-                "endpoint_url": endpoint_url,
-            }
-
-        return None
-
-    @classmethod
-    def _query_provider(
-        cls, *, provider: dict[str, str], chain: Chain, crypto: Crypto, address: str
-    ) -> MistTrackAmlResult:
-        if provider["source"] == Provider.MISTTRACK_OPENAPI:
-            coin = cls._misttrack_openapi_coin(chain=chain, crypto=crypto)
-            return MistTrackOpenApiClient(
-                api_key=provider["api_key"]
-            ).address_risk_score(coin=coin, address=address)
-
-        quicknode_chain = cls._quicknode_misttrack_chain(chain)
-        return QuicknodeMistTrackClient(
-            endpoint_url=provider["endpoint_url"]
-        ).address_risk_score(chain=quicknode_chain, address=address)
-
-    @staticmethod
-    def _quicknode_misttrack_chain(chain: Chain) -> str:
-        if chain.type == ChainType.TRON:
-            return "TRX"
-        if chain.type == ChainType.EVM and chain.chain_id in QUICKNODE_EVM_CHAIN:
-            return QUICKNODE_EVM_CHAIN[chain.chain_id]
-        raise UnsupportedProviderChainError(
-            f"unsupported QuickNode MistTrack chain: {chain.code}"
-        )
-
-    @staticmethod
-    def _misttrack_openapi_coin(*, chain: Chain, crypto: Crypto) -> str:
-        symbol = crypto.symbol.upper()
-        if chain.type == ChainType.TRON and symbol in OPENAPI_TRON_COIN:
-            return OPENAPI_TRON_COIN[symbol]
-        if chain.type == ChainType.EVM:
-            mapping = OPENAPI_EVM_COIN.get(chain.chain_id)
-            if mapping and symbol in mapping:
-                return mapping[symbol]
-        raise UnsupportedProviderChainError(
-            f"unsupported MistTrack OpenAPI coin: {crypto.symbol} on {chain.code}"
-        )
