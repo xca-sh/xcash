@@ -6,6 +6,13 @@ name: CI
 on:
   push:
     branches: [main]
+    # 纯文档提交不跑 CI、不发布镜像；只要同一次推送里混有其他文件，仍会完整运行。
+    # pull_request 不加过滤：分支保护要求的检查若被跳过，文档 PR 会一直卡在待检查。
+    paths-ignore:
+      - "**.md"
+      - "**.MD"
+      - "docs/**"
+      - "LICENSE"
   pull_request:
     branches: [main]
 

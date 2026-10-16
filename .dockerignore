@@ -55,3 +55,7 @@ Thumbs.db
 **/backups/
 **/*.dump
 **/*.sql
+
+# 文档：应用运行时不读取任何 Markdown，排除后纯文档改动不会让镜像层变化
+**/*.md
+**/*.MD
