@@ -8,12 +8,10 @@ from aml.clients import MistTrackAmlResult
 from aml.clients import QuicknodeMistTrackClient
 from aml.models import Provider
 from aml.models import RiskAssessment
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 from chains.constants import ChainCode
-from common.permission_check import get_saas_risk_marking_enabled
 from core.runtime_settings import get_quicknode_misttrack_endpoint_url
 from deposits.models import Deposit
 from invoices.models import Invoice
@@ -47,17 +45,13 @@ class AmlScreeningService:
         if invoice is None or invoice.transfer_id is None:
             return
 
-        # 以下三种"业务上根本不该走 AML"的场景直接返回，不写 RiskAssessment：
+        # 以下两种"业务上根本不该走 AML"的场景直接返回，不写 RiskAssessment：
         # - 项目未开启 AML：会让该项目所有 invoice/deposit 各写一条无查询记录，纯垃圾数据。
         # - 价值不超过项目阈值：小额支付占绝大多数，要查"哪些单没 AML"看 invoice.risk_level IS NULL 即可。
-        # - SaaS tier 未开权限：每个商户每笔都写记录会污染审计数据，权限本身在 saas tier 可查。
-        # 项目配置是本地字段判断，放在需要读 SaaS 权限缓存的 gate 之前。
         project = invoice.project
         if not project.aml_screening_enabled:
             return
         if invoice.worth <= project.aml_screening_threshold_usd:
-            return
-        if not cls._is_aml_screening_allowed(invoice):
             return
 
         cls._screen_target(
@@ -86,42 +80,11 @@ class AmlScreeningService:
             return
         if deposit.worth <= project.aml_screening_threshold_usd:
             return
-        if not cls._is_aml_screening_allowed(deposit):
-            return
 
         cls._screen_target(
             target=deposit,
             target_type=RiskAssessment.TargetType.DEPOSIT,
         )
-
-    @classmethod
-    def _is_aml_screening_allowed(cls, target: Invoice | Deposit) -> bool:
-        """SaaS 模式下按 tier 的 enable_risk_marking 判定；自托管模式直接放行。
-
-        语义：SaaS 权限缓存中的 enable_risk_marking 控制是否允许本项目产生外部 AML 查询成本。
-        - 自托管（IS_SAAS=False）→ 放行，保持独立部署旧行为。
-        - SaaS 模式 + 缓存命中 → 按 enable_risk_marking 判定。
-        - SaaS 模式 + 冷缓存 → fail-closed，避免在权限不明时产生 MistTrack 成本。
-        """
-        if not settings.IS_SAAS:
-            return True
-
-        if isinstance(target, Invoice):
-            appid = target.project.appid
-        else:
-            appid = target.customer.project.appid
-
-        enabled = get_saas_risk_marking_enabled(appid=appid)
-        if enabled is None:
-            logger.info(
-                "aml_screening.saas_perm_unavailable",
-                appid=appid,
-                target_type=target.__class__.__name__,
-                target_id=target.pk,
-            )
-            return False
-
-        return enabled
 
     @classmethod
     def _screen_target(cls, *, target: Invoice | Deposit, target_type: str):

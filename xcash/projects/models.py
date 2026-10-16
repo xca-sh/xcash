@@ -69,7 +69,7 @@ class Project(models.Model):
     aml_screening_threshold_usd = models.DecimalField(
         _("AML 查询阈值(USD)"),
         max_digits=16,
-        decimal_places=6,
+        decimal_places=2,
         default=Decimal("100"),
         validators=[MinValueValidator(Decimal("0"))],
         help_text=_("账单收款或充值收款价值大于该阈值时执行 AML 查询。"),

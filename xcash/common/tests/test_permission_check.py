@@ -15,7 +15,6 @@ from common.permission_check import _refresh_saas_permission
 from common.permission_check import check_saas_permission
 from common.permission_check import get_saas_deposit_customer_limit
 from common.permission_check import get_saas_invoice_vault_slot_limit
-from common.permission_check import get_saas_risk_marking_enabled
 
 
 @override_settings(
@@ -143,19 +142,6 @@ class CheckSaasPermissionTest(TestCase):
         )
 
         check_saas_permission(appid="XC-deposit-all-methods", action="deposit")
-
-    def test_risk_marking_reads_current_saas_field(self):
-        cache.set(
-            "saas:permission:XC-risk",
-            {
-                "frozen": False,
-                "enable_risk_marking": True,
-                "_fetched_at": time.time(),
-            },
-            None,
-        )
-
-        self.assertIs(get_saas_risk_marking_enabled(appid="XC-risk"), True)
 
     def test_deposit_customer_limit_preserves_zero(self):
         cache.set(

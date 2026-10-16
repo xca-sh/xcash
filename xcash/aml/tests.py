@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
@@ -294,136 +293,21 @@ class AmlScreeningServiceTests(AmlTestMixin, TestCase):
         self.assertTrue(RiskAssessment.objects.filter(invoice=invoice).exists())
         self.assertFalse(RiskAssessment.objects.filter(deposit=deposit).exists())
 
-    # ===== SaaS gate（spec §5） =====
+    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_invoice_self_hosted_mode_screens_normally(self, score):
-        """自托管模式（class-level IS_SAAS=False），gate 直接放行。"""
-        invoice = self.make_invoice(worth=Decimal("500"))
+    def test_saas_mode_screens_without_tier_permission(self, score):
+        """AML 不是套餐权限：SaaS 模式下无需任何权限缓存，按项目开关正常筛查。"""
         score.return_value = MistTrackAmlResult(
-            risk_level=RiskLevel.SEVERE,
-            risk_score=Decimal("95"),
+            risk_level=RiskLevel.LOW,
+            risk_score=Decimal("10"),
             raw_response={},
         )
+        invoice = self.make_invoice(worth=Decimal("500"))
 
         AmlScreeningService.screen_invoice(invoice.pk)
 
         score.assert_called_once()
-        assessment = RiskAssessment.objects.get(invoice=invoice)
-        self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
-
-    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_invoice_saas_permission_granted_screens(self, score):
-        """SaaS 模式 + 缓存命中 + enable_risk_marking=True → 正常筛查。"""
-        invoice = self.make_invoice(worth=Decimal("500"))
-        cache.set(
-            f"saas:permission:{invoice.project.appid}",
-            {"enable_risk_marking": True, "_fetched_at": time.time()},
-            None,
-        )
-        score.return_value = MistTrackAmlResult(
-            risk_level=RiskLevel.SEVERE,
-            risk_score=Decimal("95"),
-            raw_response={},
-        )
-
-        AmlScreeningService.screen_invoice(invoice.pk)
-
-        score.assert_called_once()
-        assessment = RiskAssessment.objects.get(invoice=invoice)
-        self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
-
-    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_invoice_saas_permission_denied_does_not_create_assessment(self, score):
-        """SaaS 模式 + 缓存命中 + enable_risk_marking=False → 直接 return，不写记录。"""
-        invoice = self.make_invoice(worth=Decimal("500"))
-        cache.set(
-            f"saas:permission:{invoice.project.appid}",
-            {"enable_risk_marking": False, "_fetched_at": time.time()},
-            None,
-        )
-
-        AmlScreeningService.screen_invoice(invoice.pk)
-
-        score.assert_not_called()
-        self.assertFalse(RiskAssessment.objects.filter(invoice=invoice).exists())
-        invoice.refresh_from_db()
-        self.assertIsNone(invoice.risk_level)
-
-    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_invoice_saas_cold_cache_fails_closed(self, score):
-        """SaaS 模式 + 冷缓存 → fail-closed → 直接 return，不调 MistTrack 也不写记录。"""
-        invoice = self.make_invoice(worth=Decimal("500"))
-        # 不预写缓存，cache.clear() 已在 setUp 跑过
-
-        AmlScreeningService.screen_invoice(invoice.pk)
-
-        score.assert_not_called()
-        self.assertFalse(RiskAssessment.objects.filter(invoice=invoice).exists())
-
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_deposit_self_hosted_mode_screens_normally(self, score):
-        """自托管模式（class-level IS_SAAS=False），gate 直接放行。"""
-        deposit = self.make_deposit(worth=Decimal("500"))
-        score.return_value = MistTrackAmlResult(
-            risk_level=RiskLevel.SEVERE,
-            risk_score=Decimal("95"),
-            raw_response={},
-        )
-
-        AmlScreeningService.screen_deposit(deposit.pk)
-
-        score.assert_called_once()
-        assessment = RiskAssessment.objects.get(deposit=deposit)
-        self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
-
-    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_deposit_saas_permission_granted_screens(self, score):
-        deposit = self.make_deposit(worth=Decimal("500"))
-        cache.set(
-            f"saas:permission:{deposit.customer.project.appid}",
-            {"enable_risk_marking": True, "_fetched_at": time.time()},
-            None,
-        )
-        score.return_value = MistTrackAmlResult(
-            risk_level=RiskLevel.SEVERE,
-            risk_score=Decimal("95"),
-            raw_response={},
-        )
-
-        AmlScreeningService.screen_deposit(deposit.pk)
-
-        score.assert_called_once()
-        assessment = RiskAssessment.objects.get(deposit=deposit)
-        self.assertEqual(assessment.status, RiskAssessment.Status.SUCCESS)
-
-    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_deposit_saas_permission_denied_does_not_create_assessment(self, score):
-        deposit = self.make_deposit(worth=Decimal("500"))
-        cache.set(
-            f"saas:permission:{deposit.customer.project.appid}",
-            {"enable_risk_marking": False, "_fetched_at": time.time()},
-            None,
-        )
-
-        AmlScreeningService.screen_deposit(deposit.pk)
-
-        score.assert_not_called()
-        self.assertFalse(RiskAssessment.objects.filter(deposit=deposit).exists())
-
-    @override_settings(IS_SAAS=True, SAAS_API_TOKEN="t")
-    @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
-    def test_deposit_saas_cold_cache_fails_closed(self, score):
-        deposit = self.make_deposit(worth=Decimal("500"))
-
-        AmlScreeningService.screen_deposit(deposit.pk)
-
-        score.assert_not_called()
-        self.assertFalse(RiskAssessment.objects.filter(deposit=deposit).exists())
+        self.assertTrue(RiskAssessment.objects.filter(invoice=invoice).exists())
 
     @patch("aml.service.QuicknodeMistTrackClient.address_risk_score")
     def test_unsupported_chain_does_not_create_assessment(self, score):

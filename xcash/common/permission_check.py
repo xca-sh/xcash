@@ -113,14 +113,6 @@ def check_saas_permission(
         raise APIError(ErrorCode.ACCOUNT_FROZEN)
 
 
-def get_saas_risk_marking_enabled(*, appid: str) -> bool | None:
-    """读取 SaaS 当前 Tier 的风控开关；None 表示自托管或权限缓存不可用。"""
-    perm = _read_saas_perm(appid)
-    if perm is None:
-        return None
-    return bool(perm.get("enable_risk_marking", False))
-
-
 def get_saas_deposit_customer_limit(*, appid: str) -> int | None:
     """读取 SaaS 下发的充值 Customer 软限额。
 

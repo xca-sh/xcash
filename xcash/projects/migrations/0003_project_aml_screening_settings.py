@@ -15,6 +15,7 @@ def backfill_project_aml_settings_from_system(apps, schema_editor):
     - 全局行不存在，或全局未开启 AML：不做任何写入，项目保持新列默认值
       （enabled=False、阈值 100）。未开启时全局阈值多半是从未动过的默认值 0，
       照搬会让日后单独开启 AML 的项目对所有收款付费查询。
+    - 全局阈值为 6 位小数、项目阈值为 2 位小数，回填写入时精度收敛到分（USD 阈值无需更细）。
     - 全局的缓存秒数与强制刷新阈值随地址风险缓存一并废弃，不回填。
     - 无冲突数据：只写本迁移新增的两列，不涉及约束收窄。
     """
@@ -60,7 +61,7 @@ class Migration(migrations.Migration):
             model_name="project",
             name="aml_screening_threshold_usd",
             field=models.DecimalField(
-                decimal_places=6,
+                decimal_places=2,
                 default=Decimal("100"),
                 help_text="账单收款或充值收款价值大于该阈值时执行 AML 查询。",
                 max_digits=16,
