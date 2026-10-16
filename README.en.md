@@ -84,6 +84,17 @@ The [deployment guide](#deployment-guide) below covers every step; how it works 
 
 ![Xcash payment page](xcash/static/xcash-pay-page-en.png)
 
+## AML risk screening (optional)
+
+Xcash can plug into [MistTrack](https://misttrack.io/) address risk scores (via QuickNode's MistTrack Address Risk Scores add-on) to run anti-money-laundering checks on the **payer address** of each payment:
+
+- **Per-project switch** — each project decides whether screening is on and sets its own *AML Query Threshold* (default 100 USD); only invoices and deposits worth more than the threshold are queried, keeping lookup costs under control.
+- **Runs alongside confirmation** — the lookup starts as soon as a transfer is matched to an invoice or deposit, so it never slows confirmation down; the result is pushed in the webhook as `risk_level` (`Low` / `Moderate` / `High` / `Severe`) and `risk_score`, and invoices and deposits can be filtered by risk level in the admin panel.
+- **Live lookup for every payment** — address verdicts are never cached, so an attacker cannot "clean" an address with legitimate funds first and then pay with tainted ones.
+- **Scores, never blocks** — funds go straight to the merchant's wallet through the contract, so the system cannot and does not refuse them. The risk result never changes confirmation, sweeping or notifications; **the merchant decides, based on the risk level and score, whether to ship, credit, freeze or refund**.
+
+Payments that do not qualify (screening off, at or below the threshold, small invoices settled by fast confirmation, unsupported chains such as testnets, or failed lookups) have `null` risk fields — `null` does not mean low risk. See [API.md · AML 风控](API.md#aml-风控) for how to enable it and what each field means.
+
 ## Works with your existing stack
 
 - **WooCommerce** — the official **Xcash for WooCommerce** plugin adds USDT, USDC and other crypto checkout to a WordPress store in a few steps. [Download](https://xca.sh/#integration)
@@ -194,6 +205,8 @@ Go to **Project → Project List** and create a project; each one has its own `A
 - **Receiving addresses** — invoices use direct-to-wallet collection by default, so adding your own *Direct Wallet Address* on the project page is enough; deposits and smart-contract invoices need a *collection address* for the matching chain type (EVM / Tron), which **cannot be changed once set** — a multisig wallet is recommended.
 
 The project is ready only once all of the above is in place; otherwise the API returns `1004`. Then follow the [API documentation](https://xca.sh/docs/#api-base) or [API.md](API.md) to integrate payments, deposits and webhooks.
+
+To use [AML risk screening](#aml-risk-screening-optional), first enter a QuickNode endpoint with the MistTrack Address Risk Scores add-on under **System → Runtime Settings → AML Screening**, then enable it and set the query threshold on the *AML Screening* tab of the project page.
 
 ## Backup and restore
 
