@@ -98,6 +98,9 @@ class SystemSettings(models.Model):
             "达到上限后仍可复用已有可用槽位，但不再创建新槽位。"
         ),
     )
+    # 以下四个 aml_screening_* 字段已废弃：开关与阈值下放到 Project，地址风险缓存与
+    # 强制刷新阈值随缓存一并移除。业务代码不再读取，列仅保留给 projects.0003 迁移
+    # 回填使用，下个版本删除。
     aml_screening_enabled = models.BooleanField(
         _("开启 AML 筛查"),
         default=False,

@@ -62,6 +62,8 @@ class ProjectForm(forms.ModelForm):
             "tron_vault",
             "evm_invoice_receiving_mode",
             "tron_invoice_receiving_mode",
+            "aml_screening_enabled",
+            "aml_screening_threshold_usd",
             "active",
             "is_test",
         )
@@ -344,6 +346,17 @@ class ProjectAdmin(ModelAdmin):
                     "webhook",
                     "webhook_open",
                 ),
+            },
+        ),
+        (
+            _("AML 筛查"),
+            {
+                "classes": ("tab",),
+                "fields": (
+                    "aml_screening_enabled",
+                    "aml_screening_threshold_usd",
+                ),
+                "description": _("查询数据源在系统设置中统一配置。"),
             },
         ),
     )

@@ -296,6 +296,38 @@ class TestFastConfirmThresholdValidation:
         assert response.status_code == 200
 
 
+@pytest.mark.django_db
+class TestAmlScreeningSettings:
+    def test_patch_updates_and_detail_echoes(self, client, project):
+        response = client.patch(
+            _url(project),
+            data={
+                "aml_screening_enabled": True,
+                "aml_screening_threshold_usd": "300",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+        assert response.status_code == 200, response.content
+
+        project.refresh_from_db()
+        assert project.aml_screening_enabled is True
+        assert project.aml_screening_threshold_usd == Decimal("300")
+
+        detail = client.get(_url(project), HTTP_AUTHORIZATION=AUTH_HEADER).json()
+        assert detail["aml_screening_enabled"] is True
+        assert Decimal(detail["aml_screening_threshold_usd"]) == Decimal("300")
+
+    def test_rejects_negative_threshold(self, client, project):
+        response = client.patch(
+            _url(project),
+            data={"aml_screening_threshold_usd": "-1"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+        assert response.status_code == 400
+
+
 # ---------- 生效收款方式预览 ----------
 
 

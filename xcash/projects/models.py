@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models import Q
 from django.utils.safestring import mark_safe
@@ -58,6 +59,20 @@ class Project(models.Model):
         default=Decimal("10"),
         verbose_name=_("快速确认阈值（USD）"),
         help_text=_("低于该金额的账单收款无需等待区块确认数，立即确认"),
+    )
+    # AML 筛查参数按项目配置：是否筛查、多大金额才值得付费查询，取决于商户自身业务。
+    aml_screening_enabled = models.BooleanField(
+        _("开启 AML 筛查"),
+        default=False,
+        help_text=_("开启后对高于 AML 查询阈值的账单收款和充值收款查询付款地址风险。"),
+    )
+    aml_screening_threshold_usd = models.DecimalField(
+        _("AML 查询阈值(USD)"),
+        max_digits=16,
+        decimal_places=6,
+        default=Decimal("100"),
+        validators=[MinValueValidator(Decimal("0"))],
+        help_text=_("账单收款或充值收款价值大于该阈值时执行 AML 查询。"),
     )
     hmac_key = ShortUUIDField(
         verbose_name=_("HMAC密钥"),

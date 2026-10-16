@@ -45,6 +45,10 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
             # 不动已存在账单。choices 校验由 ModelSerializer 从模型字段自动派生。
             "evm_invoice_receiving_mode",
             "tron_invoice_receiving_mode",
+            # AML 筛查按项目配置；是否真正产生外部查询仍受 SaaS tier 的
+            # enable_risk_marking 约束。阈值非负由模型 MinValueValidator 派生校验。
+            "aml_screening_enabled",
+            "aml_screening_threshold_usd",
         ]
         extra_kwargs = {field: {"required": False} for field in fields}
 
@@ -131,6 +135,8 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
             "fast_confirm_threshold",
             "evm_invoice_receiving_mode",
             "tron_invoice_receiving_mode",
+            "aml_screening_enabled",
+            "aml_screening_threshold_usd",
             "evm_vault_address",
             "tron_vault_address",
             "is_ready",

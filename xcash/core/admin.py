@@ -188,12 +188,11 @@ class SystemSettingsAdmin(ModelAdmin):
             {
                 "classes": ("tab",),
                 "fields": (
-                    "aml_screening_enabled",
-                    "aml_screening_threshold_usd",
-                    "aml_screening_cache_seconds",
-                    "aml_screening_force_refresh_threshold_usd",
                     "misttrack_openapi_api_key",
                     "quicknode_misttrack_endpoint_url",
+                ),
+                "description": _(
+                    "AML 开关与查询阈值已改为按项目配置，请在项目详情页设置。"
                 ),
             },
         ),
@@ -213,7 +212,6 @@ class SystemSettingsAdmin(ModelAdmin):
     readonly_fields = ("created_by", "updated_by", "created_at", "updated_at")
     list_display = (
         "id",
-        "aml_screening_enabled",
         "updated_by",
         "updated_at",
     )

@@ -108,34 +108,6 @@ def get_invoice_vault_slot_limit_per_project_chain() -> int:
     return 100
 
 
-def get_aml_screening_enabled() -> bool:
-    system_settings = get_system_settings()
-    if system_settings is not None:
-        return bool(system_settings.aml_screening_enabled)
-    return False
-
-
-def get_aml_screening_threshold_usd() -> Decimal:
-    system_settings = get_system_settings()
-    if system_settings is not None:
-        return Decimal(system_settings.aml_screening_threshold_usd)
-    return Decimal("0")
-
-
-def get_aml_screening_cache_seconds() -> int:
-    system_settings = get_system_settings()
-    if system_settings is not None:
-        return int(system_settings.aml_screening_cache_seconds)
-    return 3600
-
-
-def get_aml_screening_force_refresh_threshold_usd() -> Decimal:
-    system_settings = get_system_settings()
-    if system_settings is not None:
-        return Decimal(system_settings.aml_screening_force_refresh_threshold_usd)
-    return Decimal("10000")
-
-
 def get_quicknode_misttrack_endpoint_url() -> str:
     system_settings = get_system_settings()
     if system_settings is not None:
