@@ -34,13 +34,13 @@ Funds move through smart contracts straight into your own wallet:
 
 ## Why Xcash?
 
-Hosted crypto payment processors stand between you and your money: they take custody of funds until payout, charge a percentage of every transaction, require KYC, and can freeze your account — or shut down entirely. Xcash takes the opposite approach: the gateway runs on your server, and the money never stops being yours.
+Hosted crypto payment processors take custody of your funds, charge a percentage of every transaction, require KYC, and can freeze your account. Xcash runs on your own server, and the money never stops being yours.
 
-- **Non-custodial by design** — collections flow through minimal smart contracts whose destination is hard-coded to your own collection address. The system holds no key to your business funds, so a full database dump leaves an attacker nothing to steal. Xcash handles invoice matching, confirmations and notifications; it is never in the fund path.
-- **Zero platform fees** — no percentage cut when you self-host. You only pay on-chain gas, and batched sweeping keeps the cost of a sweep close to a plain token transfer.
-- **Stablecoin-first, multi-chain** — any ERC-20 on Ethereum, BNB Chain, Arbitrum, Base, Polygon, Optimism and other EVM chains; USDT and native TRX on Tron.
+- **Non-custodial** — collections flow through smart contracts straight to your collection address. The system holds no business funds, and even a compromised server cannot change where the money goes.
+- **Zero platform fees** — no percentage cut when you self-host. You only pay on-chain gas, and batched sweeping keeps it low.
+- **Stablecoin-first, multi-chain** — any ERC-20 on Ethereum, BNB Chain, Arbitrum, Base, Polygon, Optimism and other EVM chains; USDT and TRX on Tron.
 - **Two collection modes in one system** — invoice payments for checkout and subscriptions, plus exchange-style dedicated deposit addresses for platforms that maintain user balances.
-- **Production-ready out of the box** — multi-merchant / multi-project isolation, MistTrack risk scoring, reliable webhooks, EasyPay V1 compatibility, one-command Docker deployment.
+- **Production-ready out of the box** — multi-merchant / multi-project isolation, optional MistTrack risk screening, reliable webhooks, HMAC-signed REST API, EasyPay V1 compatibility, one-command Docker deployment.
 
 ### How it compares
 
@@ -71,157 +71,36 @@ The bundled Caddy listens on `127.0.0.1:6688`; point your reverse proxy (Nginx, 
 
 1. Fill in RPC endpoints for the chains you want to enable (QuickNode / Alchemy / Infura; TronGrid API key for Tron).
 2. Fund the system wallet with a small amount of gas on each enabled chain (Tron needs energy).
-3. Create a project, set its collection address, and integrate through the [REST API](API.md).
+3. Create a project, set its receiving addresses, and integrate through the [REST API](API.md).
 
-The [deployment guide](#deployment-guide) below covers every step in detail; full docs live at [xca.sh/docs](https://xca.sh/docs/).
+The [deployment guide](#deployment-guide) below covers every step; how it works and advanced configuration live at [xca.sh/docs](https://xca.sh/docs/).
 
 > Don't want to run servers? **[xca.sh](https://xca.sh)** is the official hosted cloud — the first $500 of monthly volume is fee-free.
 
-## Security: why a compromised server can't steal your funds
-
-Suppose the server running Xcash is fully compromised — database dumped, secrets leaked. As long as your collection address is intact, your assets are not at risk: payments made before, during and after the incident still land in your wallet, because there is nothing on the server that could redirect them.
-
-Security is a structural property of Xcash, not a feature bolted on:
-
-- **Xcash never takes custody of your collections.** Funds do not pass through any account the system controls on your behalf.
-- **Contract collections hard-code the destination.** The collection smart contracts can only ever forward funds to your collection address — the attacker cannot rewrite that.
-- **The collection contract is intentionally minimal.** One job, near-zero attack surface.
-
-```mermaid
-flowchart LR
-    Buyer(["Buyer"])
-    Contract["Collection smart contract<br/>destination hard-coded"]
-    Wallet["Your collection address<br/>private keys stay with you"]
-
-    Buyer -->|Pays| Contract -->|Can only flow to| Wallet
-
-    subgraph XcashBox["Xcash system · control plane"]
-        Core["API / Worker / Database"]
-    end
-    Core -.->|Invoice matching · Status · Notifications<br/>never in the fund path| Contract
-
-    Attacker["Attacker<br/>server compromise / database dump / key leak"]
-    Attacker -->|Controls at most| XcashBox
-    Attacker -- cannot rewrite fund destination --x Wallet
-
-    classDef money fill:#e6f4ea,stroke:#34a853,color:#000;
-    classDef danger fill:#fce8e6,stroke:#ea4335,color:#000;
-    class Buyer,Contract,Wallet money;
-    class Attacker danger;
-```
-
-The fund path (green) is fixed by the smart contract and only ever flows *buyer → collection contract → your collection address*. Xcash itself is a control plane — invoice matching, state transitions, notifications — and **is not in the fund path**. Even an attacker with full control of the Xcash system sees invoice data at most; they cannot change where the money goes.
-
 ## Two ways to get paid
 
-Xcash provides two collection modes. Decide which one fits your business before integrating:
-
-- **Invoice payments** — each transaction creates a fixed-amount, time-limited invoice that completes when the buyer pays. Supports both direct-to-wallet collection and smart-contract collection, where invoices draw addresses from the project's contract address pool (default cap of 100 per project per chain): invoices with different amounts can share an address, and a given amount on a given address is assigned to only one invoice at a time — no amount fudging. Ideal for e-commerce checkout and subscription billing.
-- **Deposits** — every user gets a dedicated deposit address (the same address on all EVM chains, a separate one on Tron), monitored in real time. Users transfer in whenever they like and are credited after block confirmation, with no order to create — the same UX as an exchange. Ideal for wallets, trading platforms, and any business that maintains user balances.
-
-Invoice payments ship with a built-in buyer-facing payment page, ready to use out of the box in English and Chinese:
+- **Invoice payments** — each transaction creates a fixed-amount, time-limited invoice that completes when the buyer pays. Ideal for e-commerce checkout and subscription billing. Supports both direct-to-wallet and smart-contract collection, and ships with a buyer-facing payment page in English and Chinese.
+- **Deposits** — every user gets a dedicated deposit address. Users transfer in whenever they like and are credited after block confirmation, with no order to create. Ideal for wallets, trading platforms, and any business that maintains user balances.
 
 ![Xcash payment page](xcash/static/xcash-pay-page-en.png)
 
-## Features
-
-| Feature | Detail |
-|---------|--------|
-| Invoice payments | Fixed-amount, time-limited invoices for checkout, subscriptions and one-off charges |
-| Deposits | Dedicated per-user deposit addresses credited on confirmation — exchange-style UX |
-| Non-custodial | Collections flow through smart contracts straight to your wallet; Xcash never holds funds |
-| Zero platform fees | No transaction percentage when self-hosting; only small on-chain gas costs |
-| Multi-chain, multi-asset | Major EVM chains with any ERC-20 token; USDT and TRX on Tron |
-| Multi-merchant, multi-project | Isolated merchants and projects on a single instance, each with its own auth keys and collection address |
-| Contract invoices | Invoices can use addresses from the project's contract address pool, swept to your collection address after confirmation |
-| On-chain risk screening | Optional MistTrack risk scores for payer and deposit source addresses |
-| Webhook callbacks | Real-time payment and deposit events, automatic retries, nonce-based idempotency |
-| EasyPay compatibility | Standard EasyPay (易支付) V1 protocol for painless migration from legacy systems |
-| REST API | Clean RESTful endpoints with HMAC-SHA256 request signing |
-| Docker deployment | One-command production deployment with Docker Compose |
-
 ## Works with your existing stack
 
-Depending on what you run, you may not need to write integration code at all:
-
 - **WooCommerce** — the official **Xcash for WooCommerce** plugin adds USDT, USDC and other crypto checkout to a WordPress store in a few steps. [Download](https://xca.sh/#integration)
-- **EasyPay (易支付) ecosystem** — any system that already speaks the standard EasyPay V1 protocol plugs in without rewriting its existing integration: Xboard, V2board, New API, 独角数卡, 异次元发卡 (WHMCS in progress).
+- **EasyPay (易支付) ecosystem** — any system that speaks the standard EasyPay V1 protocol plugs in without code changes: Xboard, V2board, New API, 独角数卡, 异次元发卡 (WHMCS in progress).
+- **Everything else** — create invoices and hand out deposit addresses through the [REST API](API.md); webhooks push payment events in real time.
 
-Everything else integrates through the [REST API](API.md): a handful of HMAC-signed calls to create an invoice or hand out a deposit address, plus webhooks that push payment and deposit events in real time.
-
-## Chain support
+## Chain and token support
 
 | Feature | ETH | BNB Chain | Arbitrum | Base | Tron | Polygon | Optimism |
 |:--:|:---:|:---------:|:--------:|:----:|:----:|:-------:|:--------:|
 | Payments | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Deposits | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
-The mainnets above plus the Sepolia and Nile testnets are preloaded; Avalanche, Linea and Scroll are supported but must be added manually in the admin panel. Any other chain requires code changes and cannot be enabled through admin configuration alone.
+- **EVM** — any ERC-20 token; add the token contract address in the admin panel to start accepting it.
+- **Tron** — USDT and native TRX.
 
-## Token support
-
-| Chain type | Native assets | Token standard | Current scope | How to enable |
-|:------:|:--------:|:--------:|:------------|:---------|
-| EVM | ETH, BNB, POL, etc. (used for gas) | ERC-20 | Any ERC-20 token — add USDT, USDC, or whatever your business needs | Add the token contract address in the admin panel and enable the chain |
-| Tron | TRX | TRC-20 | USDT and native TRX; other TRC-20 tokens are not yet exposed for payments or deposits | Configure the Tron RPC / TronGrid key and enable the assets |
-
-## Gas costs and fund sweeping
-
-With contract collection enabled, invoices use a **contract address pool** and every deposit user gets a **dedicated contract address**. The obvious worry: with that many addresses, do you pay gas to sweep every single payment?
-
-**No.** Xcash gates sweeping behind two thresholds that keep the number of sweeps — and total gas — to a minimum:
-
-- **Sweep delay (periodic batching)** — confirmed funds are not swept immediately; the system waits for a configurable window (default **60 minutes** on EVM, **6 hours** on Tron). Multiple payments landing on the same address within the window are **merged into a single sweep** instead of paying gas per payment.
-- **Sweep value threshold** — when the delay expires, any address whose balance is worth less than the threshold (default **1 USD**) is **skipped and keeps accumulating**, so you never pay more in gas than the dust is worth.
-
-**A sweep fires only when both conditions — delay reached and value met — are satisfied.** Addresses below the threshold are not abandoned: new incoming funds re-trigger evaluation, and the sweep happens once the balance qualifies. The sweep delay is set per chain type (EVM / Tron) and the value threshold is global; both are adjusted under **System → Runtime Settings** in the admin panel.
-
-The collection contract stays minimal: a sweep is essentially a plain token transfer, with almost no extra contract overhead.
-
-Better still, sweeping is a **permissionless, safety-neutral** operation:
-
-- The collection contract's `collect()` has **no access control** — any account can trigger a sweep and merely pays the gas, because the destination is hard-coded to your collection address; it does not matter who calls it.
-- Besides the automatic gated sweeps, you can **trigger a manual sweep at any time**, bypassing delay and threshold.
-- Automatic or manual, whoever the caller — funds **only ever flow to your collection address**, and Xcash never touches them (see [Security](#security-why-a-compromised-server-cant-steal-your-funds)).
-
-So you only need to keep a small native-asset balance in the system wallet to pay for sweep gas (see [deployment step 6](#6-fund-the-system-wallet-with-gas)); your real gas spend is determined by the sweep frequency and threshold you choose.
-
-## Built-in risk screening
-
-Xcash ships risk query, caching, persistence and display capabilities; the actual risky-address intelligence comes from the external MistTrack (SlowMist) service — it is not an internally maintained blacklist or a home-grown on-chain risk model.
-
-Risk screening is off by default. Turn on *Enable AML Screening* under **System → Runtime Settings** in the admin panel and fill in a MistTrack OpenAPI API key (preferred) or a QuickNode MistTrack endpoint (used as a fallback when no API key is set). Only invoices and deposits worth more than the *AML Query Threshold (USD)* are screened.
-
-Once enabled, risk checks cover the two core fund entry points:
-
-- **Invoice payments** — once an invoice is confirmed as completed, the payer address is checked asynchronously and the risk level and score are stored on the invoice record.
-- **Deposits** — once a deposit is confirmed and credited, the source address is checked asynchronously and the risk level and score are stored on the deposit record.
-
-Results are also written to dedicated **risk assessment** records — query status, target type, source address, transaction hash, risk level, risk score — so operators can review, release or escalate from the admin panel. The invoice query API returns the latest `risk_level` and `risk_score`. Webhooks carry the same fields, but as a snapshot taken at send time: screening runs asynchronously after confirmation, so they are usually `null`, and no follow-up notification is sent once screening finishes. Deposits have no query API; refer to the risk assessment records in the admin panel.
-
-## Architecture
-
-```mermaid
-graph LR
-    Buyer["Buyer<br/>Payment page"]
-    Merchant["Merchant system"]
-
-    subgraph Xcash
-        API["Xcash API"]
-        Worker["Xcash Worker<br/>Tx monitoring · Sweeping · State transitions"]
-        Wallet["Xcash wallet engine<br/>Mnemonic custody · Address derivation · Tx signing"]
-        Webhook["Xcash Webhook<br/>Async notifications"]
-    end
-
-    Blockchain["Blockchain networks<br/>EVM · Tron"]
-
-    Buyer -->|Initiates payment| API
-    Merchant <-->|Create invoice / Query| API
-    API <--> Worker
-    Worker <--> Wallet
-    Worker <-->|Monitor · Broadcast| Blockchain
-    Webhook -->|Push events| Merchant
-```
+The mainnets above plus the Sepolia and Nile testnets are preloaded; Avalanche, Linea and Scroll must be added manually in the admin panel; any other chain requires code changes.
 
 ## Deployment guide
 
@@ -230,10 +109,9 @@ graph LR
 - Linux server, Ubuntu 22.04+ or Debian 12+ recommended
 - Docker and Docker Compose
 - A domain resolved to the server IP
-- RPC endpoints for the chains you want to enable
-- A TronGrid API key if you need Tron payments
+- RPC endpoints for the chains you want to enable; a TronGrid API key for Tron
 
-Recommended server profiles:
+Recommended server profiles (set `PERFORMANCE` in `.env`, default `low`):
 
 | Performance mode | Hardware | EVM chain capacity |
 |:-------:|:-------:|:-----------:|
@@ -241,43 +119,25 @@ Recommended server profiles:
 | medium | 4 CPU / 8 GB | 8 – 15 EVM chains |
 | high | 8 CPU / 16 GB | 15 – 30 EVM chains |
 
-`PERFORMANCE` can be set in `.env` to `low`, `medium` or `high`; it defaults to `low` when unset.
-
-EVM payments and deposits are both detected and confirmed through on-chain event scanning, are both enabled by default, and are monitored together. Actual chain capacity depends on RPC throughput, block speed and event volume, so pick a performance profile conservatively.
-
-### 1. Clone the repository
+### 1. Get the code and generate the config
 
 ```bash
 git clone https://github.com/xca-sh/xcash.git
 cd xcash
-```
-
-### 2. Initialize environment variables
-
-```bash
 ./scripts/init_env.sh
 ```
 
-This generates `.env` and fills in the random secrets and database password required at runtime.
-If `.env` already exists, the script refuses to overwrite it and exits; back up and remove the old file first if you need to regenerate.
+The script generates `.env` with random secrets and a database password; it refuses to overwrite an existing `.env`.
 
-### 3. Configure the access domain
+### 2. Set the domain and reverse proxy
 
-Edit `.env` and set `SITE_DOMAIN`:
+Edit `.env` to set the domain, and make sure its DNS resolves to the server:
 
 ```env
 SITE_DOMAIN=xcash.example.com
 ```
 
-Make sure the domain's DNS resolves to the server IP, and configure a reverse proxy such as Nginx or Caddy to forward traffic to `http://localhost:6688`.
-
-#### Your reverse proxy must forward the real client IP and protocol
-
-**This step is not optional.** The gateway's merchant IP allowlist, login throttling and all API rate limits are keyed on the real client IP, and HSTS plus Secure cookies depend on the request protocol. If your reverse proxy does not forward both, Xcash only ever sees the Docker gateway address, which means:
-
-- merchant IP allowlists reject every request;
-- all IP-based rate limits collapse into a single shared bucket, so anyone can exhaust the login limit and lock out every administrator;
-- Django always believes the request arrived over plain HTTP, so HSTS is never sent.
+Forward traffic to `http://127.0.0.1:6688` with Nginx or Caddy. **Your reverse proxy must forward the real client IP and request protocol**, otherwise merchant IP allowlists and rate limits stop working.
 
 **Nginx:**
 
@@ -285,16 +145,12 @@ Make sure the domain's DNS resolves to the server IP, and configure a reverse pr
 location / {
     proxy_pass http://127.0.0.1:6688;
     proxy_set_header Host $host;
-    # Real client IP. Must use $remote_addr, which overwrites the header
     proxy_set_header X-Real-IP $remote_addr;
-    # Original protocol; HSTS and Secure cookies depend on it
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
 
-> ⚠️ Do not rely on `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` as the only source. That **appends**, so the leftmost entry comes straight from the client request and can be forged. Xcash prefers `X-Real-IP`, so the configuration above is safe.
-
-**Caddy** (Caddy forwards `X-Forwarded-For` and `X-Forwarded-Proto` automatically, no extra headers needed):
+**Caddy** (forwards the required headers automatically):
 
 ```caddyfile
 xcash.example.com {
@@ -302,96 +158,60 @@ xcash.example.com {
 }
 ```
 
-**If you expose port 6688 beyond the host** (setting `LISTEN_TO=0.0.0.0` in `.env`, e.g. the reverse proxy runs on a separate machine), you must also narrow the trusted proxy range, otherwise anyone who can reach that port can forge the client IP:
+If the reverse proxy runs on another machine and you expose port 6688 with `LISTEN_TO=0.0.0.0`, also narrow the trusted proxies to that machine's IP:
 
 ```env
-# Defaults to private_ranges; set it to your reverse proxy's actual IP
 CADDY_TRUSTED_PROXIES=203.0.113.10
 ```
 
-Optional: set `ADMIN_PATH` to move the admin entrance to a custom path, for example:
+Setting `ADMIN_PATH` to move the admin panel to a custom path is recommended (it sits at the site root when unset):
 
 ```env
 ADMIN_PATH=secure-admin
 ```
 
-If unset, the admin panel stays at the site root and shows a security reminder in the top-right corner.
-
-### 4. Start the services
+### 3. Start the services
 
 ```bash
 docker compose up -d
 ```
 
-The application image is built by GitHub Actions and published to `ghcr.io/xca-sh/xcash` (a public image, no login needed). It is pulled automatically on first startup, so nothing is built on the server.
+The image is pulled from `ghcr.io/xca-sh/xcash` and database migrations run automatically at startup. First startup creates the admin account `admin` with the password from `DJANGO_DEFAULT_SUPERUSER_PASSWORD` in `.env`; in production, an empty password, one shorter than 12 characters, or the placeholder value makes it refuse to create the admin and abort startup.
 
-The startup script first applies database migrations and seeds default reference data such as chains and currencies. On first startup, if no admin account exists yet, the account `admin` is created using `DJANGO_DEFAULT_SUPERUSER_PASSWORD` from `.env` (randomly generated by `scripts/init_env.sh`, printed once when it ran).
+### 4. Configure chain RPC
 
-For safety, in production (`DEBUG=False`) the system **refuses to create the admin account and aborts the upgrade** if that password is empty, shorter than 12 characters, or equal to the placeholder value shipped in this repository — the admin panel sits at the site root unless `ADMIN_PATH` is set, so a weak password hands over superuser access.
+Log in to the admin panel, go to **Blockchain → Public chains**, and fill in RPC endpoints for the chains you want to use. Recommended providers: [QuickNode](https://www.quicknode.com/), [Alchemy](https://www.alchemy.com/) or [Infura](https://www.infura.io/); Tron needs an API key from [TronGrid](https://www.trongrid.io/).
 
-Setting `ADMIN_PATH` to move the panel off the default path is also recommended.
+### 5. Fund the system wallet
 
-### 5. Configure chain RPC
+Go to **System → System wallets** and copy the system wallet address:
 
-Basic information for mainstream chains is preloaded, but **RPC endpoints must be filled in manually** before the gateway can talk to the blockchains.
+- **EVM chains** — send a small amount of the native asset (ETH, BNB, POL, …) for gas.
+- **Tron** — provide energy (for example by staking TRX) and keep a small TRX balance for bandwidth.
 
-Log in to the admin panel, go to **Blockchain → Public chains**, and fill in RPC endpoints for the chains you want to use. Recommended providers include [QuickNode](https://www.quicknode.com/), [Alchemy](https://www.alchemy.com/) and [Infura](https://www.infura.io/). Tron payments require a [TronGrid](https://www.trongrid.io/) API key.
+The system wallet only pays for system operations such as contract deployment and sweeps; do not park business funds in it.
 
-### 6. Fund the system wallet with gas
+### 6. Configure a project
 
-Log in to the admin panel, go to **System → System wallets**, copy the system wallet address, and send a small amount of the native asset (ETH, BNB, POL, …) to it on each enabled EVM chain.
+Go to **Projects → Project list** and create a project; each one has its own `Appid` and `HMAC secret`. Then configure:
 
-The system wallet is only used for infrastructure transactions the system must initiate itself — contract deployment, contract sweeps and similar on-chain operations. Business funds still flow to your collection address per the contract rules. Do not park business funds here; keep just enough gas to cover recent operations so deployments and sweeps are never blocked. Sweeps are not per-payment — the delay and value gates batch them to keep gas low, see [Gas costs and fund sweeping](#gas-costs-and-fund-sweeping).
+- **IP whitelist** — merchant server IPs allowed to call the API; `*` is fine while testing, narrow it in production.
+- **Notification URL** — receives webhook events.
+- **Receiving addresses** — add your own *direct-to-wallet addresses* for direct-to-wallet collection; smart-contract invoices and deposits need a *collection address* for the matching chain type (EVM / Tron), which **cannot be changed once set** — a multisig wallet is recommended.
 
-On Tron, deployments and sweeps **consume only the system wallet's energy reserve**: when available energy is insufficient the task waits for it to be replenished instead of burning TRX for energy. Provide energy for the system wallet (for example by staking TRX) and keep a small TRX balance to pay for bandwidth when it runs short.
-
-### 7. Configure a project
-
-Log in to the admin panel, go to **Projects → Project list**, and create or edit a project. A project is the basic isolation unit for API integration; each one has its own `Appid` and `HMAC secret` for authentication and signing.
-
-Confirm at least the following:
-
-- **IP whitelist** — restricts which merchant server IPs may call the gateway API. `*` is fine while testing; narrow it to fixed egress IPs or CIDR ranges in production.
-- **Notification URL** — receives payment, deposit and other webhook events; the project shows as *not ready* until configured.
-- **Collection address** — the final destination of smart-contract collections, configured per chain type. Before enabling contract invoices or deposits you must configure a collection address for the matching chain type (EVM / Tron): a checksum address for EVM, a Base58 address for Tron. It is written into the contract rules and **cannot be changed once set** — a multisig wallet is strongly recommended.
-- **Direct-to-wallet addresses** — for direct-to-wallet collection, add your own receiving wallets per chain type under *Direct-to-wallet addresses* on the project page.
-
-A project is ready only when it has at least one enabled direct-to-wallet address or collection address, plus an IP whitelist and a notification URL; otherwise the API returns `1004`.
-
-## API integration
-
-After deployment, follow the [API documentation](https://xca.sh/docs/#api-base) to integrate payments, deposits and webhook callbacks. A machine-readable reference also lives in [API.md](API.md).
-
-Invoice creation accepts an invoice-level `notify_url` that overrides the project's default webhook; the EasyPay V1-compatible `submit.php` entry point maps `notify_url` to the invoice-level notification URL as well.
+The project is ready only once all of the above is in place; otherwise the API returns `1004`. Then follow the [API documentation](https://xca.sh/docs/#api-base) or [API.md](API.md) to integrate payments, deposits and webhooks.
 
 ## Backup and restore
 
-### Two things that must be backed up together
+The key that encrypts wallet mnemonics lives in `.env` as `WALLET_MNEMONIC_ENCRYPTION_KEY`, not in the database. **The database and `.env` must be backed up together** — neither one alone can restore a wallet.
 
-Xcash stores wallet mnemonics encrypted with AES-256-GCM. The encryption key does not live in the database — it lives in `.env` as `WALLET_MNEMONIC_ENCRYPTION_KEY`. Therefore:
-
-| What to back up | Where it lives | If you only have this |
-| --- | --- | --- |
-| Postgres data | `db` container / `db_data` volume | Mnemonics cannot be decrypted — no backup at all |
-| `.env` | Project root | No business data — no backup at all |
-
-**They must be captured as a pair, from the same point in time.** Neither half can restore a wallet on its own. Losing `WALLET_MNEMONIC_ENCRYPTION_KEY` is unrecoverable: hot wallet keys are gone for good and sweeping stops working permanently.
-
-> The dump that `scripts/upgrade.sh` creates for its migration rehearsal **is not a backup**: it is deleted as soon as the rehearsal succeeds, and kept only when the rehearsal fails, for debugging. Set up your own independent, scheduled backups.
-
-### Back up the database
+Back up the database (at least daily, encrypted together with `.env` and stored off this server):
 
 ```bash
 docker compose exec -T db sh -c 'pg_dump --format=custom --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > xcash-$(date +%Y%m%d-%H%M%S).dump
 ```
 
-Recommendations:
-
-- At least daily, and ship the dump plus `.env` encrypted to storage **off this server** (a backup on the same host survives neither disk failure nor host loss).
-- `.env` rarely changes, so one offline copy is enough (password manager or paper) — no need to re-upload it daily.
-- Rehearse a restore periodically. A backup you have never restored is not a backup.
-
-### Restore
+Restore:
 
 ```bash
 # 1. Stop application services, keep the database running
@@ -408,16 +228,9 @@ docker compose up -d
 
 ## Operations
 
-Show service status:
-
 ```bash
-docker compose ps
-```
-
-Stop the services (containers are removed, database volumes are kept):
-
-```bash
-docker compose down
+docker compose ps        # show service status
+docker compose down      # stop services (database volumes are kept)
 ```
 
 Upgrade to the latest version (make sure you are on `main`):
@@ -427,21 +240,15 @@ git pull
 ./scripts/upgrade.sh
 ```
 
-The script pulls images, rehearses migrations when needed, drains the old services, runs production migrations and starts the new version, reporting success only after every readiness check passes, and finally removes the replaced images (`docker image prune -f`, which removes every dangling image on the host). On failure it exits nonzero and leaves the services in place for diagnosis. Images are pulled before any service is stopped, so a network failure aborts the upgrade without touching the running services; just run it again. It requires a clean working tree; each readiness wait defaults to 360 seconds and can be changed with `APP_READY_TIMEOUT`; the image pull is limited to 1800 seconds by default and can be changed with `IMAGE_PULL_TIMEOUT`.
+The script pulls the new image, runs migrations and restarts the services, reporting success only once everything is ready; a failure leaves the running services untouched, so just run it again.
 
-> Application code ships inside the image, so editing the source on the server has no effect. To customize, fork the repository, publish your own image, and point the image in `docker-compose.yml` at it.
-
-### External monitoring
-
-The admin operational inspection page checks scanning and worker status live whenever it is opened. To get alerts while nobody is watching the admin panel, point an uptime monitor at these unauthenticated endpoints in production and alert on non-200 responses or timeouts:
+Point an uptime monitor at these unauthenticated endpoints and alert on non-200 responses:
 
 | Endpoint | Checks |
 | --- | --- |
-| `GET /health` | Service is up, PostgreSQL is queryable, Redis is readable and writable |
-| `GET /health/scanning` | Every active chain's scan keeps advancing without persistent errors |
-| `GET /health/workers` | Both worker pools have fresh scheduling and execution heartbeats |
-
-`/health/scanning` reacts to a single RPC hiccup, so configure a consecutive-failure threshold in your monitor. Right after first startup, `/health/workers` returns 503 until both worker pools run a heartbeat; that is expected.
+| `GET /health` | Service is up, PostgreSQL and Redis are healthy |
+| `GET /health/scanning` | Every active chain's scan keeps advancing |
+| `GET /health/workers` | Worker heartbeats are fresh |
 
 ## Tech stack
 
