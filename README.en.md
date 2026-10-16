@@ -230,19 +230,10 @@ docker compose down      # stop services (database volumes are kept)
 Upgrade to the latest version (make sure you are on `main`):
 
 ```bash
-git pull
-./scripts/upgrade.sh
+git pull && ./scripts/upgrade.sh
 ```
 
 The script pulls the new image, runs migrations and restarts the services, reporting success only once everything is ready; on failure it exits nonzero and prints troubleshooting hints.
-
-Point an uptime monitor at these unauthenticated endpoints and alert on non-200 responses:
-
-| Endpoint | Checks |
-| --- | --- |
-| `GET /health` | Service is up, PostgreSQL and Redis are healthy |
-| `GET /health/scanning` | Every active chain's scan keeps advancing |
-| `GET /health/workers` | Worker heartbeats are fresh |
 
 ## Tech stack
 
@@ -258,7 +249,7 @@ Point an uptime monitor at these unauthenticated endpoints and alert on non-200 
 
 - [x] Tron support
 - [ ] Solana support
-- [ ] Documentation site improvements
+- [x] Documentation site improvements
 
 ## Hosted cloud
 

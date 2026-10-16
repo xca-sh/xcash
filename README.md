@@ -229,19 +229,10 @@ docker compose down      # 停止服务（保留数据库数据卷）
 升级到最新版（确认位于 `main` 分支）：
 
 ```bash
-git pull
-./scripts/upgrade.sh
+git pull && ./scripts/upgrade.sh
 ```
 
 脚本会拉取新镜像、执行迁移并平滑重启，全部就绪才报告成功；失败时会返回非零状态并输出排查提示。
-
-建议在 uptime 监控中拉取以下免鉴权端点，非 200 即告警：
-
-| 端点 | 检查内容 |
-| --- | --- |
-| `GET /health` | 服务可用，Postgres 与 Redis 正常 |
-| `GET /health/scanning` | 各活跃链扫描正常推进 |
-| `GET /health/workers` | worker 心跳新鲜 |
 
 ## 技术栈
 
@@ -257,7 +248,7 @@ git pull
 
 - [x] Tron 链支持
 - [ ] Solana 链支持
-- [ ] 完善文档站
+- [x] 完善文档站
 
 ## 官方云服务
 
