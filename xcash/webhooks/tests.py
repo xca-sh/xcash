@@ -630,6 +630,10 @@ class WebhookResponseMatchingTests(TestCase):
     def test_empty_is_failure(self):
         self.assertFalse(self._run(""))
 
+    def test_leading_bom_is_ok(self):
+        # 带 BOM 保存的 PHP 文件输出的 success 前面有 BOM，str.strip() 去不掉 BOM。
+        self.assertTrue(self._run("\ufeffsuccess\r\n"))
+
     def test_response_truncated_to_max_bytes(self):
         """超大响应必须被截断到上限，避免恶意/异常商户回包撑爆 worker 内存。"""
         from webhooks.tasks import MAX_RESPONSE_BYTES
@@ -781,6 +785,52 @@ class RetryableStatusTests(TestCase):
     def test_403_remains_terminal(self, mock_http):
         """明确拒绝的 4xx 仍应终局，避免无意义重试。"""
         mock_http.return_value = (False, 403, {}, "forbidden", "", 50)
+        event = WebhookEvent.objects.create(
+            project=_make_project(), payload={"type": "test"}
+        )
+
+        deliver_event(event.pk)
+
+        event.refresh_from_db()
+        self.assertEqual(event.status, WebhookEvent.Status.FAILED)
+
+    def _create_epay_event(self):
+        return WebhookEvent.objects.create(
+            project=_make_project(),
+            payload={"trade_status": "TRADE_SUCCESS"},
+            delivery_url="https://93.184.216.34/notify",
+            delivery_method=WebhookEvent.DeliveryMethod.GET_QUERY,
+            expected_response_body="success",
+        )
+
+    @patch("webhooks.tasks._execute_http_delivery")
+    def test_epay_200_with_unexpected_body_is_retryable(self, mock_http):
+        """易支付约定商户回 success 才算收到，否则平台继续重发。"""
+        mock_http.return_value = (False, 200, {}, "fail", "", 50)
+        event = self._create_epay_event()
+
+        deliver_event(event.pk)
+
+        event.refresh_from_db()
+        self.assertEqual(event.status, WebhookEvent.Status.PENDING)
+        self.assertIsNotNone(event.schedule_locked_until)
+
+    @patch("webhooks.tasks._execute_http_delivery")
+    def test_epay_200_with_unexpected_body_fails_after_retry_budget(self, mock_http):
+        SystemSettings.objects.create(webhook_delivery_max_retries=1)
+        mock_http.return_value = (False, 200, {}, "fail", "", 50)
+        event = self._create_epay_event()
+
+        deliver_event(event.pk)
+
+        event.refresh_from_db()
+        self.assertEqual(event.status, WebhookEvent.Status.FAILED)
+
+    @patch("webhooks.tasks._execute_http_delivery")
+    def test_json_200_with_unexpected_body_remains_terminal(self, mock_http):
+        """原生 JSON 通知 200 但响应体不符仍终局：这类商户以前只收到一次，
+        改成重发可能让未做幂等的商户重复上账。"""
+        mock_http.return_value = (False, 200, {}, "received", "", 50)
         event = WebhookEvent.objects.create(
             project=_make_project(), payload={"type": "test"}
         )

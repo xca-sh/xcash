@@ -285,7 +285,9 @@ def _execute_http_delivery(
                         buf.extend(chunk[: MAX_RESPONSE_BYTES - len(buf)])
                         break
                     buf.extend(chunk)
-                resp_text = bytes(buf).decode("utf-8", errors="replace")
+                # utf-8-sig 去掉开头的 BOM：str.strip() 不会去 BOM，带 BOM 的 PHP 文件
+                # 输出的 "success" 前面带 BOM，会被误判为响应体不符。
+                resp_text = bytes(buf).decode("utf-8-sig", errors="replace")
             # 商户的 PHP/Java 框架 echo "success" 时常带回车 / BOM / 前后空白，
             # 严格相等会把这些合法响应判为失败、触发重试；strip 后精确匹配
             # 兼顾兼容性与匹配严格度（仍区分大小写、不允许中间夹杂内容）。
@@ -487,8 +489,18 @@ def deliver_event(event_pk):
         # 属于商户端明确拒绝，重试无意义。428/429/408 必须算可重试：商户端限流器
         # 或滚动发布期间返回 429 几分钟，一次就判终局会让这期间所有支付成功通知
         # 永久失败，商户不给用户上账，直接产生资金纠纷。
+        # 易支付（GET 查询串投递）约定商户回 "success" 才算收到，否则平台继续重发，
+        # 插件按此语义做了幂等，因此 200 但响应体不符也可重试。原生 JSON 通知不跟随：
+        # 这类商户以前只会收到一次，改成重发可能让未做幂等的商户重复上账。
+        epay_body_mismatch = (
+            status_code == 200
+            and event.delivery_method == WebhookEvent.DeliveryMethod.GET_QUERY
+        )
         retryable = (
-            status_code is None or status_code >= 500 or status_code in RETRYABLE_STATUS
+            status_code is None
+            or status_code >= 500
+            or status_code in RETRYABLE_STATUS
+            or epay_body_mismatch
         ) and try_number < get_webhook_delivery_max_retries()
         error_msg = err_text or f"status={status_code}"
         if retryable:
