@@ -36,6 +36,8 @@ TRON_BROADCAST_LOCK_TIMEOUT_SECONDS = 180
 TRON_SENDER_BROADCAST_LOCK_TIMEOUT_SECONDS = TRON_BROADCAST_LOCK_TIMEOUT_SECONDS
 TRON_RECEIPT_TX_TASK_TYPES = (TxTaskType.VaultSlotDeploy, TxTaskType.VaultSlotCollect)
 TRON_MISSING_TX_FINALITY_GRACE_MS = 5 * 60 * 1000
+# 同一任务两次广播尝试的最小间隔；dispatch 补偿与首播接力共用，避免反复投递刚失败的任务。
+TRON_BROADCAST_RETRY_AFTER_MINUTES = 2
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,7 @@ def broadcast_tron_task(pk: int) -> None:
             sender=tx_task.sender.address,
         )
         return
+    first_broadcast = False
     try:
         # 两条分支都必须先查链上回执再决定是否发交易。SUBMITTED 重播此前直接重签重播，
         # 而 Tron 的 expiration 只有 60s、固化却要约 57s，confirm_tron_receipt_tx_tasks
@@ -201,6 +204,7 @@ def broadcast_tron_task(pk: int) -> None:
             # 回执检查可能已推进状态（如失败终局但未收口成功），按最新状态决定后续动作。
             tx_task.base_task.refresh_from_db(fields=["status"])
         if tx_task.base_task.status == TxTaskStatus.QUEUED:
+            first_broadcast = True
             tx_task.broadcast()
         elif tx_task.base_task.status == TxTaskStatus.SUBMITTED:
             tx_task.rebroadcast_expired_submitted()
@@ -214,6 +218,43 @@ def broadcast_tron_task(pk: int) -> None:
     finally:
         cache.delete(lock_key)
 
+    # 接力必须放在释放发送地址锁之后：先投递再删锁，下一笔可能在删锁前被 worker 取走、
+    # 撞锁跳过，接力就断了。只在首播成功（QUEUED→SUBMITTED）后接力，与 EVM 一致；
+    # 失败的不接力，交给 dispatch 按尝试间隔补偿，避免节点故障时连环空打。
+    if first_broadcast:
+        tx_task.base_task.refresh_from_db(fields=["status"])
+        if tx_task.base_task.status == TxTaskStatus.SUBMITTED:
+            chain_dispatch_next_queued(tx_task)
+
+
+def broadcast_retry_due_q() -> Q:
+    """从未尝试过、或距上次尝试已超过重试间隔的任务。"""
+    return Q(last_attempt_at__isnull=True) | Q(
+        last_attempt_at__lt=ago(minutes=TRON_BROADCAST_RETRY_AFTER_MINUTES)
+    )
+
+
+def chain_dispatch_next_queued(completed_task: TronTxTask) -> None:
+    """首播成功后立即投递同发送地址最早的下一笔 QUEUED 任务，不等 dispatch 周期。
+
+    同批建出的任务在 schedule 提交时各自投递，但发送地址锁只放行一笔，其余撞锁跳过；
+    靠这里逐笔接力，积压才能按广播速度连续排空。沿用 dispatch 的尝试间隔过滤：
+    刚失败过的任务留给 dispatch 退避重试，不让它恒占接力队首、挡住后面的任务。
+    """
+    next_pk = (
+        TronTxTask.objects.filter(
+            broadcast_retry_due_q(),
+            chain_id=completed_task.chain_id,
+            sender_id=completed_task.sender_id,
+            base_task__status=TxTaskStatus.QUEUED,
+        )
+        .order_by("created_at")
+        .values_list("pk", flat=True)
+        .first()
+    )
+    if next_pk is not None:
+        broadcast_tron_task.delay(next_pk)
+
 
 @shared_task(
     ignore_result=True,
@@ -223,6 +264,11 @@ def broadcast_tron_task(pk: int) -> None:
 @singleton_task(timeout=64)
 @db_transaction.atomic
 def dispatch_tron_tx_tasks() -> None:
+    """周期补偿：重试首播失败或接力断开的 QUEUED 任务，并重播已过期的 SUBMITTED 任务。
+
+    首次广播由 TronTxTask.schedule 在提交后直接投递、并由 chain_dispatch_next_queued
+    逐笔接力；本任务每轮只放行最早一笔，同发送地址同时只有一笔能拿到广播锁。
+    """
     now_ms = int(time.time() * 1000)
     tasks = (
         TronTxTask.objects.select_for_update()
@@ -233,7 +279,7 @@ def dispatch_tron_tx_tasks() -> None:
                 base_task__status=TxTaskStatus.SUBMITTED,
                 expiration__lte=now_ms,
             ),
-            Q(last_attempt_at__isnull=True) | Q(last_attempt_at__lt=ago(minutes=2)),
+            broadcast_retry_due_q(),
             created_at__lt=ago(seconds=2),
         )
         .order_by("created_at")[:1]

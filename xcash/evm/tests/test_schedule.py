@@ -123,6 +123,37 @@ class EvmTxTaskScheduleTests(TestCase):
         self.assertEqual(TxTask.objects.count(), 0)
         self.assertEqual(EvmTxTask.objects.count(), 0)
 
+    @patch("evm.tasks._broadcast_evm_task.delay")
+    def test_schedule_delivers_first_broadcast_only_after_commit(self, delay_mock):
+        # 首播在事务提交后直接投递，不再等 dispatch 轮询；提交前投递会让 worker
+        # 读到尚未提交的任务（DoesNotExist），或在外层回滚后广播悬空任务。
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            task = EvmTxTask.schedule(self._intent())
+
+        delay_mock.assert_not_called()
+        for callback in callbacks:
+            callback()
+        delay_mock.assert_called_once_with(task.pk)
+
+    def test_direct_delivery_keeps_nonce_order_for_back_to_back_schedules(self):
+        # 同地址连续建两笔任务会各自投递；高 nonce 那笔必须被广播入口阻断，等低 nonce
+        # 首播成功后由链式接力放行，不能抢先进入 mempool。
+        from evm.tasks import _broadcast_evm_task
+
+        with patch("evm.tasks._broadcast_evm_task.delay") as delay_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                first = EvmTxTask.schedule(self._intent())
+            with self.captureOnCommitCallbacks(execute=True):
+                second = EvmTxTask.schedule(self._intent())
+
+        self.assertEqual(
+            [call.args[0] for call in delay_mock.call_args_list],
+            [first.pk, second.pk],
+        )
+        with patch.object(EvmTxTask, "broadcast") as broadcast_mock:
+            _broadcast_evm_task.run(second.pk)
+        broadcast_mock.assert_not_called()
+
     def test_schedule_rejects_non_zero_value(self):
         with self.assertRaisesRegex(ValueError, "value must be 0"):
             EvmTxTask.schedule(self._intent(value=1))

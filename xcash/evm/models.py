@@ -383,7 +383,14 @@ class EvmTxTask(UndeletableModel):
 
         首次签名和首个 tx_hash 生成延后到 broadcast()；内部稳定身份只依赖
         (sender, chain, nonce)。
+
+        事务提交后直接投递首次广播，不再等 dispatch_evm_tx_tasks 轮询。nonce 顺序与
+        pipeline 深度仍由广播任务入口复核：更低 nonce 尚未提交或 pipeline 已满时直接
+        返回，由前一笔广播成功后的链式接力或 dispatch 补偿放行。外层事务回滚时
+        on_commit 回调随之丢弃，不会投递悬空任务。
         """
+        from evm.tasks import _broadcast_evm_task  # noqa: PLC0415
+
         if intent.value != 0:
             raise ValueError("EVM task value must be 0")
 
@@ -404,7 +411,7 @@ class EvmTxTask(UndeletableModel):
                 status=TxTaskStatus.QUEUED,
             )
 
-            return EvmTxTask.objects.create(
+            task = EvmTxTask.objects.create(
                 base_task=base_task,
                 sender=intent.sender,
                 chain=intent.chain,
@@ -414,6 +421,8 @@ class EvmTxTask(UndeletableModel):
                 data=intent.data,
                 gas=intent.gas,
             )
+            db_transaction.on_commit(lambda pk=task.pk: _broadcast_evm_task.delay(pk))
+            return task
 
     @staticmethod
     def _next_nonce(address, chain) -> int:

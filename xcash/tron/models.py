@@ -475,6 +475,14 @@ class TronTxTask(UndeletableModel):
 
     @classmethod
     def schedule(cls, intent: TronTxIntent) -> TronTxTask:
+        """创建待执行的 Tron 主动交易任务，事务提交后直接投递首次广播。
+
+        不再等 dispatch_tron_tx_tasks 轮询。同发送地址的广播仍由广播任务里的发送地址锁
+        串行化：同批建出的任务各自投递后，除持锁者外都会撞锁跳过，由持锁者首播成功后
+        接力投递下一笔；接力断开的（广播失败、消息丢失）由 dispatch 周期补偿。
+        """
+        from tron.tasks import broadcast_tron_task  # noqa: PLC0415
+
         if intent.verify_fn is not None:
             intent.verify_fn()
         with db_transaction.atomic():
@@ -484,7 +492,7 @@ class TronTxTask(UndeletableModel):
                 tx_type=intent.tx_type,
                 status=TxTaskStatus.QUEUED,
             )
-            return cls.objects.create(
+            task = cls.objects.create(
                 base_task=base_task,
                 sender=intent.sender,
                 chain=intent.chain,
@@ -493,3 +501,5 @@ class TronTxTask(UndeletableModel):
                 parameter=intent.parameter,
                 fee_limit=intent.fee_limit,
             )
+            db_transaction.on_commit(lambda pk=task.pk: broadcast_tron_task.delay(pk))
+            return task

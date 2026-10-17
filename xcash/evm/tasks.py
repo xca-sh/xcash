@@ -81,7 +81,11 @@ def _chain_dispatch_next(completed_task: EvmTxTask) -> None:
 @singleton_task(timeout=64)
 @db_transaction.atomic
 def dispatch_evm_tx_tasks() -> None:
-    """定时调度 QUEUED 状态的 EVM 交易任务。
+    """周期补偿调度 QUEUED 状态的 EVM 交易任务。
+
+    首次广播已由 EvmTxTask.schedule 在事务提交后直接投递，同地址后续 nonce 由
+    _chain_dispatch_next 在前一笔广播成功后接力；本任务只兜底这两条路径放不出去的
+    任务：pre-flight 未过（gas 不足）、pipeline 满后又腾出名额、投递消息丢失等。
 
     调度规则：
     - 每个 (sender, chain) 只放行最低 nonce 的任务，保证 nonce 按顺序进入 mempool
@@ -95,7 +99,7 @@ def dispatch_evm_tx_tasks() -> None:
     若直接对全部 QUEUED 行做 select_for_update()+select_related()，PG 会把
     evm_evmtxtask 与 chains_txtask 两张表的命中行全部锁住，且循环内要逐行执行一次
     has_lower_queued_nonce() 的 EXISTS 查询。正常态队列只有个位数无感，但热钱包断
-    gas / 队首卡死这类事故下 QUEUED 会按入账速率堆积，届时每 2 秒一轮的派发会锁住
+    gas / 队首卡死这类事故下 QUEUED 会按入账速率堆积，届时每一轮派发都会锁住
     整个队列约一秒、并发出与积压量同阶的查询，而广播路径的 append_tx_hash 恰好需要
     同一批 TxTask 行锁——恢复期反被派发器自己拖住。
     """

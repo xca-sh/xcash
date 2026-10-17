@@ -12,6 +12,7 @@ import eth_abi
 import httpx
 from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.admin.sites import AdminSite
+from django.core.cache import cache
 from django.db import IntegrityError
 from django.test import SimpleTestCase
 from django.test import TestCase
@@ -837,16 +838,17 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
             address="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
         )
 
-    def make_task(self) -> TronTxTask:
+    def make_task(self, *, sender: Address | None = None) -> TronTxTask:
+        sender = sender or self.sender
         base_task = TxTask.objects.create(
             chain=self.chain,
-            sender=self.sender,
+            sender=sender,
             tx_type=TxTaskType.VaultSlotCollect,
             status=TxTaskStatus.QUEUED,
         )
         return TronTxTask.objects.create(
             base_task=base_task,
-            sender=self.sender,
+            sender=sender,
             chain=self.chain,
             to="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
             function_selector="collect(address)",
@@ -1412,6 +1414,102 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
             dispatch_tron_tx_tasks.run()
 
         delay_mock.assert_called_once_with(first.pk)
+
+    @patch("tron.tasks.broadcast_tron_task.delay")
+    def test_schedule_delivers_first_broadcast_only_after_commit(self, delay_mock):
+        # 首播在事务提交后直接投递，不再等 dispatch 轮询。
+        from tron.intents import TronTxIntent
+
+        intent = TronTxIntent(
+            sender=self.sender,
+            chain=self.chain,
+            to="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+            function_selector="collect(address)",
+            parameter="00" * 32,
+            fee_limit=5_000_000,
+            tx_type=TxTaskType.VaultSlotCollect,
+        )
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            task = TronTxTask.schedule(intent)
+
+        delay_mock.assert_not_called()
+        for callback in callbacks:
+            callback()
+        delay_mock.assert_called_once_with(task.pk)
+
+    @patch("tron.tasks.broadcast_tron_task.delay")
+    @patch("tron.models.TronTxTask.broadcast")
+    def test_broadcast_task_chains_next_queued_after_lock_release(
+        self,
+        broadcast,
+        delay_mock,
+    ):
+        # 同批任务除持锁者外都撞锁跳过，首播成功后必须接力同发送地址最早的可重试任务：
+        # 跳过刚失败过的（留给 dispatch 退避）与其他发送地址的任务，且投递时锁已释放，
+        # 否则接力的任务会撞上本任务尚未删除的锁而跳过。
+        from tron.tasks import sender_broadcast_lock_key
+
+        other_sender = Address.objects.create(
+            wallet=self.wallet,
+            chain_type=ChainType.TRON,
+            usage=AddressUsage.HotWallet,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
+            address_index=1,
+            address="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+        )
+        base_time = timezone.now() - timedelta(minutes=10)
+        other_sender_task = self.make_task(sender=other_sender)
+        current = self.make_task()
+        recently_failed = self.make_task()
+        expected_next = self.make_task()
+        later = self.make_task()
+        for offset, task in enumerate(
+            (other_sender_task, current, recently_failed, expected_next, later)
+        ):
+            TronTxTask.objects.filter(pk=task.pk).update(
+                created_at=base_time + timedelta(seconds=offset),
+            )
+        TronTxTask.objects.filter(pk=recently_failed.pk).update(
+            last_attempt_at=timezone.now(),
+        )
+        lock_key = sender_broadcast_lock_key(
+            chain_id=self.chain.pk,
+            sender_id=self.sender.pk,
+        )
+        lock_values_at_delay = []
+        delay_mock.side_effect = lambda pk: lock_values_at_delay.append(
+            cache.get(lock_key)
+        )
+
+        def mark_submitted():
+            TxTask.objects.filter(pk=current.base_task_id).update(
+                status=TxTaskStatus.SUBMITTED,
+            )
+
+        broadcast.side_effect = mark_submitted
+
+        broadcast_tron_task.run(current.pk)
+
+        delay_mock.assert_called_once_with(expected_next.pk)
+        self.assertEqual(lock_values_at_delay, [None])
+
+    @patch("tron.tasks.broadcast_tron_task.delay")
+    @patch("tron.models.TronTxTask.broadcast")
+    def test_broadcast_task_does_not_chain_when_first_broadcast_fails(
+        self,
+        broadcast,
+        delay_mock,
+    ):
+        # 首播失败（节点异常、资源不足）任务留在 QUEUED，不接力：交给 dispatch 按尝试
+        # 间隔补偿，避免节点故障时把整批任务连环空打一遍。
+        current = self.make_task()
+        self.make_task()
+        broadcast.side_effect = TronClientError("node unavailable")
+
+        broadcast_tron_task.run(current.pk)
+
+        broadcast.assert_called_once()
+        delay_mock.assert_not_called()
 
 
 class TronSimulationRevertClassificationTests(SimpleTestCase):

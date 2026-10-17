@@ -70,9 +70,12 @@ FALLBACK_PROCESS_TRANSFER_SCHEDULE_SECONDS = get_int_default(
     "CELERY_FALLBACK_PROCESS_TRANSFER_SCHEDULE_SECONDS",
     20,
 )
+# EVM / Tron 交易派发周期（两条链共用）。首播已在任务建好提交后直接投递、广播成功后
+# 链式接力，派发只做补偿重试与 Tron 过期重播，故不必高频轮询。Tron 派发每轮只放行
+# 一笔，周期决定其补偿吞吐，取区间下限 10s。
 EVM_BROADCAST_SCHEDULE_SECONDS = get_int_default(
     "CELERY_EVM_BROADCAST_SCHEDULE_SECONDS",
-    2,
+    10,
 )
 # 扫描调度器固定每 2 秒巡检一次活跃链；具体每条链多久扫一次由
 # ChainSpec.scan_interval_seconds 与 Chain.last_scanned_at 在任务内决定。
