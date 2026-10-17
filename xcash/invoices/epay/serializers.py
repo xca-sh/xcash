@@ -7,6 +7,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from currencies.models import Fiat
+from invoices.models import CALLBACK_URL_MAX_LENGTH
 from webhooks.service import delivery_url_scheme_allowed
 
 # EPay V1 协议文档原文是 "Amount in yuan with max 2 decimals"，即「最多」两位小数。
@@ -21,12 +22,18 @@ class EpaySubmitSerializer(serializers.Serializer):
         max_length=32, required=False, allow_blank=True, default=""
     )
     out_trade_no = serializers.CharField(max_length=64)
-    notify_url = serializers.URLField()
+    # 回调地址长度以入库列宽为上限：超长地址对外回 fail，而不是入库时 500。
+    notify_url = serializers.URLField(max_length=CALLBACK_URL_MAX_LENGTH)
     # EPay V1 协议中 return_url（同步跳转地址）与 param（业务扩展参数）均为可选字段，
     # typecho/wordpress/discuz 等主流商户插件经常完全不发送，DRF 默认 required=True 会
     # 直接 400 拒掉合规请求，因此显式 required=False + default=""。
     # 签名层 (epay.py:epay_v1_signing_string) 已经会跳过空值，"" 与「不发」在签名上等价。
-    return_url = serializers.URLField(required=False, allow_blank=True, default="")
+    return_url = serializers.URLField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=CALLBACK_URL_MAX_LENGTH,
+    )
     name = serializers.CharField(max_length=128)
     money = serializers.CharField()
     # currency 是 xcash 对 EPay V1 的扩展：标准协议没有该字段，默认按 CNY 元计价

@@ -409,6 +409,16 @@ class EpaySubmitServiceTests(TestCase):
 
         self.assertFalse(Invoice.objects.filter(project=self.project).exists())
 
+    @patch("invoices.epay.service.check_saas_permission")
+    def test_submit_rejects_callback_url_longer_than_column(self, _mock_check):
+        # 超长地址对外回 fail，而不是入库时 DataError 让插件拿到 500。
+        too_long = "https://merchant.example.com/notify?" + "a" * 200
+        for field in ("notify_url", "return_url"):
+            with self.subTest(field=field), self.assertRaises(EpaySubmitError):
+                EpaySubmitService.submit(self._signed_params(**{field: too_long}))
+
+        self.assertFalse(Invoice.objects.filter(project=self.project).exists())
+
     @patch("invoices.epay.service.InvoiceService.initialize_invoice")
     @patch("invoices.epay.service.check_saas_permission")
     def test_submit_creates_invoice_and_epay_order(self, mock_check, mock_initialize):

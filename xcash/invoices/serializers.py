@@ -21,6 +21,7 @@ from currencies.service import FiatService
 from projects.service import ProjectService
 from webhooks.service import delivery_url_scheme_allowed
 
+from .models import CALLBACK_URL_MAX_LENGTH
 from .models import Invoice
 from .models import InvoiceProtocol
 from .models import InvoiceStatus
@@ -87,8 +88,13 @@ class InvoiceCreateSerializer(Serializer):
         max_value=MAX_INVOICE_DURATION,
     )
     methods = serializers.JSONField(required=False, default=dict)
-    notify_url = serializers.URLField(required=False)
-    return_url = serializers.URLField(required=False)
+    # 回调地址长度以入库列宽为上限：超长地址在入口返回参数错误，而不是入库时 500。
+    notify_url = serializers.URLField(
+        required=False, max_length=CALLBACK_URL_MAX_LENGTH
+    )
+    return_url = serializers.URLField(
+        required=False, max_length=CALLBACK_URL_MAX_LENGTH
+    )
 
     def _get_project(self):
         # 缓存到实例，避免 validate_out_no / validate_methods / validate 三处重复查询。

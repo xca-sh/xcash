@@ -645,6 +645,10 @@ class Invoice(models.Model):
         self.refresh_from_db()
 
 
+# 账单、EPay 订单与投递记录的回调地址列宽一致（URLField 默认 200），录入入口以此限长。
+CALLBACK_URL_MAX_LENGTH = Invoice._meta.get_field("notify_url").max_length
+
+
 class EpayMerchant(models.Model):
     # pid 分配策略：从 1688 起步，避免与 EPay 生态中常见的小 pid 撞号；
     # 后续每次自动分配都基于当前最大 pid + 1，单调递增。

@@ -910,6 +910,16 @@ class InvoiceCreateNotifyUrlValidationTests(TestCase):
         self.assertEqual(InvoiceCreateSerializer().validate_notify_url(url), url)
 
 
+class InvoiceCreateCallbackUrlLengthTests(TestCase):
+    """回调地址超过入库列宽时在入口拒绝，而不是入库时 500。"""
+
+    def test_rejects_callback_url_longer_than_column(self):
+        too_long = "https://merchant.example.com/notify?" + "a" * 200
+        for field in ("notify_url", "return_url"):
+            with self.subTest(field=field), self.assertRaises(ValidationError):
+                InvoiceCreateSerializer().fields[field].run_validation(too_long)
+
+
 class InvoiceDuplicateOutNoTests(TestCase):
     def setUp(self):
         # 屏蔽 SaaS 权限回调，避免单测触发真实 HTTP 请求
