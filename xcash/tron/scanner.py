@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
+from functools import lru_cache
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
@@ -122,19 +123,13 @@ class TronScanner:
                     start_block + DEFAULT_TRON_SCAN_BATCH_SIZE - 1,
                 )
                 for block_number in range(start_block, end_block + 1):
-                    parsed_events = cls._collect_block_events(
+                    parsed_events = cls._collect_block_matched_events(
                         client=client,
                         chain=chain,
                         block_number=block_number,
                         tokens_by_address=tokens_by_address,
+                        native_on_chain=native_on_chain,
                     )
-                    if native_on_chain is not None:
-                        parsed_events += cls._collect_block_native_transfers(
-                            client=client,
-                            chain=chain,
-                            block_number=block_number,
-                            native_on_chain=native_on_chain,
-                        )
                     matched_addresses_seen.update(
                         event.observed.to_address for event in parsed_events
                     )
@@ -240,6 +235,49 @@ class TronScanner:
         )
 
     @classmethod
+    def _collect_block_matched_events(
+        cls,
+        *,
+        client: TronHttpClient,
+        chain: Chain,
+        block_number: int,
+        tokens_by_address: dict[str, CryptoOnChain],
+        native_on_chain: CryptoOnChain | None,
+    ) -> list[ParsedTronTransferEvent]:
+        """合并本块 TRC20 与原生 TRX 候选，只做一次收款地址匹配（每块 2 条查询而非 4 条）。"""
+        candidates = cls._collect_block_events(
+            client=client,
+            chain=chain,
+            block_number=block_number,
+            tokens_by_address=tokens_by_address,
+        )
+        if native_on_chain is not None:
+            candidates += cls._collect_block_native_transfers(
+                client=client,
+                chain=chain,
+                block_number=block_number,
+                native_on_chain=native_on_chain,
+            )
+        matched = cls.filter_matched_events(chain=chain, candidates=candidates)
+        if all(event.observed.block_hash for event in matched):
+            return matched
+        # TransactionInfo 不携带 blockID，只有确实命中系统收款地址的块才需要补拉。
+        # 必须放在地址过滤之后：注册 USDT 后主网几乎每块都有 Transfer 日志，过滤前的
+        # candidates 恒为非空，按"有候选就补拉"等于每块都多打一次请求。原生扫描开启时
+        # 整块已在客户端缓存，这里直接复用、不再发请求。
+        block_hash = client.get_solid_block_id(block_number=block_number)
+        return [
+            (
+                event
+                if event.observed.block_hash
+                else ParsedTronTransferEvent(
+                    observed=replace(event.observed, block_hash=block_hash)
+                )
+            )
+            for event in matched
+        ]
+
+    @classmethod
     def _collect_block_native_transfers(
         cls,
         *,
@@ -248,7 +286,7 @@ class TronScanner:
         block_number: int,
         native_on_chain: CryptoOnChain,
     ) -> list[ParsedTronTransferEvent]:
-        """扫描单块内的原生 TRX TransferContract，产出命中收款地址的入账事件。
+        """扫描单块内的原生 TRX TransferContract，产出入账候选（收款地址匹配由调用方统一做）。
 
         Tron 上原生 TRX 转账走 TransferContract、不进 TVM、不 emit 事件，无法复用 TRC20
         的事件接口，必须逐块读整块交易、按 to_address 匹配收款地址。成本为每块一次整块
@@ -280,7 +318,7 @@ class TronScanner:
                     decimals=native_on_chain.decimals,
                 )
             )
-        return cls.filter_matched_events(chain=chain, candidates=candidates)
+        return candidates
 
     @classmethod
     def _parse_native_transfers(
@@ -463,7 +501,7 @@ class TronScanner:
         block_number: int,
         tokens_by_address: dict[str, CryptoOnChain],
     ) -> list[ParsedTronTransferEvent]:
-        """逐块从 walletsolidity 读全部交易 receipt 的 raw log，解析注册代币的 Transfer。
+        """逐块从 walletsolidity 读全部交易 receipt 的 raw log，解析注册代币的 Transfer 候选。
 
         与固化头同一数据面：块已固化则 receipt 必可读，不存在 /v1 事件索引器
         滞后导致"未索引被当作无事件"而漏账的问题。每块一次整块 receipt 拉取，
@@ -500,19 +538,7 @@ class TronScanner:
                     tokens_by_address=tokens_by_address,
                 )
             )
-        matched = cls.filter_matched_events(chain=chain, candidates=candidates)
-        if not matched:
-            return []
-        # TransactionInfo 不携带 blockID，只有确实命中系统收款地址的块才需要补拉。
-        # 必须放在地址过滤之后：注册 USDT 后主网几乎每块都有 Transfer 日志，过滤前的
-        # candidates 恒为非空，按"有候选就补拉"等于每块都多打一次整块请求。
-        block_hash = client.get_solid_block_id(block_number=block_number)
-        return [
-            ParsedTronTransferEvent(
-                observed=replace(event.observed, block_hash=block_hash)
-            )
-            for event in matched
-        ]
+        return candidates
 
     @classmethod
     def _parse_transaction_info_events(
@@ -757,16 +783,25 @@ class TronScanner:
 
     @classmethod
     def _event_address_to_base58(cls, value: object) -> str:
-        raw_value = str(value or "").strip()
-        if not raw_value:
-            raise ValueError("empty tron event address")
-        if TronAddressCodec.is_valid_base58(raw_value):
-            return TronAddressCodec.normalize_base58(raw_value)
+        return event_address_to_base58(str(value or "").strip())
 
-        normalized = cls._normalize_hex(raw_value)
-        if len(normalized) == 40:
-            normalized = f"{TronAddressCodec.ADDRESS_HEX_PREFIX}{normalized}"
-        elif len(normalized) == 64:
-            normalized = f"{TronAddressCodec.ADDRESS_HEX_PREFIX}{normalized[-40:]}"
 
-        return TronAddressCodec.hex41_to_base58(normalized)
+@lru_cache(maxsize=65536)
+def event_address_to_base58(raw_value: str) -> str:
+    """把事件里的 hex / base58 地址统一成 base58；非法抛 ValueError（不会被缓存）。
+
+    base58check 要做两次 sha256，USDT 合约地址每条日志都要转一次，交易所等热门地址也
+    反复出现，按进程缓存后每个地址只算一次。
+    """
+    if not raw_value:
+        raise ValueError("empty tron event address")
+    if TronAddressCodec.is_valid_base58(raw_value):
+        return TronAddressCodec.normalize_base58(raw_value)
+
+    normalized = str(raw_value).strip().lower().removeprefix("0x")
+    if len(normalized) == 40:
+        normalized = f"{TronAddressCodec.ADDRESS_HEX_PREFIX}{normalized}"
+    elif len(normalized) == 64:
+        normalized = f"{TronAddressCodec.ADDRESS_HEX_PREFIX}{normalized[-40:]}"
+
+    return TronAddressCodec.hex41_to_base58(normalized)

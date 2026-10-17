@@ -2758,6 +2758,71 @@ class TronScannerTests(TestCase):
         self.assertEqual(transfer.amount, Decimal("1.234567"))
         enqueue_processing_mock.assert_called_once()
 
+    @patch("chains.service.TransferService.enqueue_processing")
+    @patch("tron.scanner.TronHttpClient")
+    def test_block_with_trc20_and_native_hits_matches_addresses_once(
+        self,
+        client_cls,
+        enqueue_processing_mock,
+    ):
+        # 同一块的 TRC20 与原生 TRX 候选合并后只做一次收款地址匹配；TRC20 事件的
+        # blockID 从已下载的整块补齐，两类入账都要落库。
+        from tron.scanner import TronScanner
+
+        from common.tron_codec import TronAddressCodec
+
+        DifferRecipientAddress.objects.create(
+            project=self.project,
+            chain_type=ChainType.TRON,
+            address=self.watch_address,
+        )
+        self._set_cursor_block(last_scanned_block=123455)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = 123456
+        client.get_solid_block_id.return_value = "1" * 64
+        client.get_transaction_infos_by_block.return_value = [
+            self._transaction_info(
+                tx_id="a" * 64,
+                logs=[
+                    self._trc20_transfer_log(
+                        to_address=self.watch_address,
+                        value=2_000_000,
+                    )
+                ],
+            )
+        ]
+        client.get_solid_block.return_value = {
+            "blockID": "1" * 64,
+            "block_header": {
+                "raw_data": {"number": 123456, "timestamp": 1_700_000_000_000}
+            },
+            "transactions": [
+                self._native_tx(
+                    to_hex=TronAddressCodec.base58_to_hex41(self.watch_address),
+                    from_hex=TronAddressCodec.base58_to_hex41(self.sender_address),
+                    tx_id="b" * 64,
+                )
+            ],
+        }
+
+        with patch.object(
+            TronScanner,
+            "filter_matched_events",
+            wraps=TronScanner.filter_matched_events,
+        ) as filter_mock:
+            summary = TronScanner.scan_chain(chain=self.chain)
+
+        self.assertEqual(filter_mock.call_count, 1)
+        self.assertEqual(summary.events_seen, 2)
+        self.assertEqual(
+            set(
+                Transfer.objects.filter(chain=self.chain).values_list(
+                    "hash", "block_hash"
+                )
+            ),
+            {("a" * 64, "1" * 64), ("b" * 64, "1" * 64)},
+        )
+
     def _native_tx(
         self,
         *,
