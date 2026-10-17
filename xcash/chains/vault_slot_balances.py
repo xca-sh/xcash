@@ -139,11 +139,14 @@ def refresh_vault_slot_balance_safely(
 
 
 def refresh_vault_slot_balance_for_transfer(transfer: Transfer) -> None:
-    """Transfer 确认后刷新命中的 VaultSlot 链上余额快照。"""
+    """Transfer 确认后刷新命中的 VaultSlot 链上余额快照。
+
+    两侧地址都经 AddressField 落库校验为规范形态（EVM checksum / Tron base58），
+    精确匹配即可命中 (chain, address) 唯一索引；iexact 会退化成按链全表扫描。
+    """
     slot = (
         VaultSlot.objects.select_related("chain")
-        .filter(chain=transfer.chain, address__iexact=transfer.to_address)
-        .order_by("pk")
+        .filter(chain=transfer.chain, address=transfer.to_address)
         .first()
     )
     if slot is None:

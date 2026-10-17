@@ -136,7 +136,7 @@ def vault_slot_collect_matcher(
         return None
     slot_address, token_address = collect_target
     slot = (
-        VaultSlot.objects.filter(chain=chain, address__iexact=slot_address)
+        VaultSlot.objects.filter(chain=chain, address=slot_address)
         .select_related("project")
         .first()
     )

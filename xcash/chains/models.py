@@ -1596,7 +1596,7 @@ class Transfer(models.Model):
             chain=self.chain,
             deploy_tx_task=tx_task,
             usage__in=[VaultSlotUsage.DEPOSIT, VaultSlotUsage.INVOICE],
-            address__iexact=self.to_address,
+            address=self.to_address,
         ).first()
 
     @db_transaction.atomic
