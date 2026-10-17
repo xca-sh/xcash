@@ -9,7 +9,6 @@ import structlog
 from celery.exceptions import SoftTimeLimitExceeded
 from web3 import Web3
 from web3.exceptions import ExtraDataLengthError
-from web3.middleware import ExtraDataToPOAMiddleware
 
 if TYPE_CHECKING:
     from chains.models import Chain
@@ -422,8 +421,8 @@ class EvmScannerRpcClient:
             )
 
     def _build_poa_retry_w3(self) -> Web3:
-        w3 = Web3(Web3.HTTPProvider(self.chain.rpc, request_kwargs={"timeout": 8}))
-        w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        # 复用链模型的构造逻辑，保证超时与重试策略与常规连接一致。
+        w3 = self.chain._build_w3(force_poa=True)  # noqa: SLF001
         self.chain.__dict__["w3"] = w3
         return w3
 

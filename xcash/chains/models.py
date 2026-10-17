@@ -246,7 +246,13 @@ class Chain(models.Model):
         if self.spec.type != ChainType.EVM or not self.active or not self.rpc:
             return
         try:
-            w3 = Web3(Web3.HTTPProvider(self.rpc, request_kwargs={"timeout": 8}))
+            w3 = Web3(
+                Web3.HTTPProvider(
+                    self.rpc,
+                    request_kwargs={"timeout": 8},
+                    exception_retry_configuration=None,
+                )
+            )
             actual_chain_id = w3.eth.chain_id
         except Exception as exc:
             raise ValidationError(
@@ -276,7 +282,16 @@ class Chain(models.Model):
         return self._build_w3()
 
     def _build_w3(self, *, force_poa: bool = False) -> Web3:
-        w3 = Web3(Web3.HTTPProvider(self.rpc, request_kwargs={"timeout": 8}))
+        # 关闭 web3 内置重试：web3 7.x 默认对 eth_getBalance / eth_call 等最多尝试 5 次、
+        # 每次超时 8s，单次调用最坏约 42s，节点挂起时单条归集计划即可耗尽任务软超时。
+        # 重试统一交给调用方：扫描器自带退避重试，其余路径由下一轮调度自然重试。
+        w3 = Web3(
+            Web3.HTTPProvider(
+                self.rpc,
+                request_kwargs={"timeout": 8},
+                exception_retry_configuration=None,
+            )
+        )
         if force_poa or self.is_poa:
             w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         return w3
@@ -1176,8 +1191,8 @@ class VaultSlotCollectSchedule(models.Model):
 
         execute_due 按 due_at 升序取批（limit 封顶），失败计划若不推迟会恒占
         批次头部；同因失败的计划一旦攒满 limit 个，所有链的归集调度都会被饿死。
-        调用发生在无锁的 RPC 前置检查之后，用条件更新只推迟仍未绑定任务的行，
-        避免覆盖并发路径刚完成绑定的计划。
+        execute_one_due 在 RPC 前置检查之前即调用本方法作为租约；用条件更新只推迟
+        仍未绑定任务的行，避免覆盖并发路径刚完成绑定的计划。
         """
         due_at = timezone.now() + self.RETRY_BACKOFF
         updated = (
@@ -1281,19 +1296,28 @@ class VaultSlotCollectSchedule(models.Model):
         )
         if schedule is None:
             return 0
+        # 租约：任何链上 RPC 之前先把 due_at 推后一个退避窗口。下面的部署判活、余额刷新、
+        # gas 估算在节点挂起时会耗尽任务软超时，而软超时必须原样上抛、来不及退避；
+        # 若不预先推后，该计划会恒占 execute_due 批次头部，每轮都卡在同一条挂起链上，
+        # 饿死所有链的归集。成功绑定任务后 due_at 不再有意义，零余额/粉尘按原逻辑删除
+        # 计划，其余提前返回都已处在退避窗口内，无需再逐个分支退避。
+        schedule.defer_retry()
+        was_deployed = schedule.vault_slot.is_deployed
         if not can_create_collect_tx_task(
             chain=schedule.chain,
             slot=schedule.vault_slot,
         ):
-            schedule.defer_retry()
             return 0
+        if not was_deployed:
+            # 部署闸门当场确认部署时会经 expedite_pending_collects 把本计划 due_at
+            # 拨回当前，其后还有余额刷新与 gas 估算两次 RPC，需续租。
+            schedule.defer_retry()
         balance = refresh_vault_slot_balance_safely(
             slot=schedule.vault_slot,
             crypto=schedule.crypto,
             reason="before_collect",
         )
         if balance is None:
-            schedule.defer_retry()
             return 0
         if balance.value <= 0:
             # 条件删除：仅在计划仍未绑定任务时释放该 pending 槽位。
@@ -1342,12 +1366,12 @@ class VaultSlotCollectSchedule(models.Model):
             # 那时 singleton 锁不走 finally 释放，只能等 TTL 过期。必须原样上抛。
             raise
         except Exception as exc:  # noqa: BLE001
+            # 租约已在 RPC 前把 due_at 推后，这里只需留痕。
             logger.warning(
                 "VaultSlot 归集计划创建或绑定任务失败,退避重试",
                 schedule_id=pk,
                 error=str(exc),
             )
-            schedule.defer_retry()
             return 0
         return 1
 

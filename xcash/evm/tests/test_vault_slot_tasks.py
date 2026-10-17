@@ -1881,6 +1881,72 @@ class VaultSlotAddressSchedulingTests(TestCase):
         # 失败计划必须退避，否则恒占 execute_due 批次头部。
         self.assertGreater(first.due_at, timezone.now())
 
+    def test_soft_timeout_mid_rpc_leases_schedule_and_unblocks_other_schedules(self):
+        # 节点挂起导致软超时会原样穿透上抛、来不及在失败分支退避；
+        # 计划必须在 RPC 前已按租约推后，否则恒占批次头部、饿死其它计划的归集。
+        from celery.exceptions import SoftTimeLimitExceeded
+
+        slot = self._create_vault_slot()
+        self._mark_vault_slot_deployed(slot)
+        self._ensure_native_crypto_mapping()
+        now = timezone.now()
+        stuck = VaultSlotCollectSchedule.objects.create(
+            chain=self.chain,
+            vault_slot=slot,
+            crypto=self.token,
+            due_at=now - timedelta(seconds=2),
+        )
+        healthy = VaultSlotCollectSchedule.objects.create(
+            chain=self.chain,
+            vault_slot=slot,
+            crypto=self.chain.native_coin,
+            due_at=now - timedelta(seconds=1),
+        )
+        address_patch = self.patch_address_derivation()
+
+        def refresh_balance(*, slot, crypto, reason):
+            if crypto == self.token:
+                raise SoftTimeLimitExceeded
+            return SimpleNamespace(value=1)
+
+        with (
+            address_patch,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                side_effect=refresh_balance,
+            ),
+        ):
+            with self.assertRaises(SoftTimeLimitExceeded):
+                VaultSlotCollectSchedule.execute_due()
+            stuck.refresh_from_db()
+            self.assertGreater(stuck.due_at, timezone.now())
+
+            created_count = VaultSlotCollectSchedule.execute_due()
+
+        self.assertEqual(created_count, 1)
+        stuck.refresh_from_db()
+        healthy.refresh_from_db()
+        self.assertIsNone(stuck.tx_task_id)
+        self.assertIsNotNone(healthy.tx_task_id)
+
+    def test_chain_rpc_does_not_retry_internally_on_timeout(self):
+        # web3 内置重试会把单次挂起调用放大到约 42s，足以单条耗尽归集任务软超时；
+        # 链连接必须一次失败即返回，由调用方决定是否重试。
+        import requests
+
+        with (
+            patch(
+                "web3._utils.http_session_manager.HTTPSessionManager.make_post_request",
+                side_effect=requests.Timeout("read timeout"),
+            ) as post_mock,
+            self.assertRaises(requests.Timeout),
+        ):
+            self.chain.w3.eth.get_balance(
+                Web3.to_checksum_address("0x0000000000000000000000000000000000000a11")
+            )
+
+        self.assertEqual(post_mock.call_count, 1)
+
     def test_due_collect_schedule_failure_backoff_frees_followup_batches(self):
         slot = self._create_vault_slot()
         self._mark_vault_slot_deployed(slot)
