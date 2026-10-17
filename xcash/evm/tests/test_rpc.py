@@ -231,6 +231,100 @@ class EvmScannerRpcClientTests(TestCase):
                 ),
             )
 
+    def test_native_single_block_overflow_falls_back_to_block_receipts(self):
+        # 原生币事件按 topic 全链查询，任何人都能刷同签名事件撑爆单块上限；
+        # 此时必须改用整块回执本地过滤，而不是让游标永久卡在该块。
+        native_topic = Web3.keccak(text="XcashNativeReceived(address,uint256)")
+        other_topic = Web3.keccak(text="Transfer(address,address,uint256)")
+        native_log = {
+            "address": "0x00000000000000000000000000000000000000aa",
+            "topics": [native_topic, bytes(12) + bytes.fromhex("bb" * 20)],
+            "data": "0x01",
+            "blockNumber": 100,
+            "logIndex": 1,
+            "transactionHash": bytes.fromhex("ab" * 32),
+        }
+        get_block_receipts = Mock(
+            return_value=[
+                {
+                    "transactionHash": bytes.fromhex("ab" * 32),
+                    "logs": [{"topics": [other_topic], "logIndex": 0}, native_log],
+                },
+                {"transactionHash": bytes.fromhex("cd" * 32), "logs": []},
+            ]
+        )
+        self.chain.__dict__["w3"] = SimpleNamespace(
+            eth=SimpleNamespace(
+                get_logs=Mock(
+                    side_effect=ValueError("query returned more than 10000 results")
+                ),
+                get_block_receipts=get_block_receipts,
+            )
+        )
+
+        logs = EvmScannerRpcClient(chain=self.chain).get_logs(
+            from_block=100,
+            to_block=100,
+            addresses=None,
+            topic0=Web3.to_hex(native_topic),
+        )
+
+        get_block_receipts.assert_called_once_with(100)
+        self.assertEqual(logs, [native_log])
+
+    def test_native_single_block_overflow_raises_without_block_receipts(self):
+        # 节点不支持整块回执时没有等价替代，仍须上抛、保住游标，绝不静默跳过。
+        self.chain.__dict__["w3"] = SimpleNamespace(
+            eth=SimpleNamespace(
+                get_logs=Mock(
+                    side_effect=ValueError("query returned more than 10000 results")
+                ),
+                get_block_receipts=Mock(
+                    side_effect=ValueError(
+                        "the method eth_getBlockReceipts does not exist"
+                    )
+                ),
+            )
+        )
+
+        with self.assertRaises(EvmScannerRpcError):
+            EvmScannerRpcClient(chain=self.chain).get_logs(
+                from_block=100,
+                to_block=100,
+                addresses=None,
+                topic0=Web3.to_hex(
+                    Web3.keccak(text="XcashNativeReceived(address,uint256)")
+                ),
+            )
+
+    def test_erc20_single_block_overflow_does_not_fall_back_to_block_receipts(self):
+        # 带合约地址过滤的 ERC20 查询结果集只取决于真实转账量，单块超限说明节点上限
+        # 配置过低，应上抛告警由运维处理，而不是每轮拉整块回执掩盖问题。
+        get_block_receipts = Mock(return_value=[])
+        self.chain.__dict__["w3"] = SimpleNamespace(
+            eth=SimpleNamespace(
+                get_logs=Mock(
+                    side_effect=ValueError("query returned more than 10000 results")
+                ),
+                get_block_receipts=get_block_receipts,
+            )
+        )
+
+        with self.assertRaises(EvmScannerRpcError):
+            EvmScannerRpcClient(chain=self.chain).get_logs(
+                from_block=100,
+                to_block=100,
+                addresses=[
+                    Web3.to_checksum_address(
+                        "0x00000000000000000000000000000000000000aa"
+                    )
+                ],
+                topic0=Web3.to_hex(
+                    Web3.keccak(text="Transfer(address,address,uint256)")
+                ),
+            )
+        get_block_receipts.assert_not_called()
+
     def test_get_logs_accepts_multiple_topic0_values(self):
         # native deposit + ERC20 Transfer 统一扫描时，topic0 第一位需要用 OR 查询。
         captured_filters: list[dict] = []

@@ -97,8 +97,15 @@ class EvmScannerRpcClient:
         eth_getLogs 只按代币合约地址过滤、不按收款地址过滤，主网高频稳定币在一个
         窗口内可能命中的日志数超过节点上限（如 "query returned more than 10000
         results"）。这类是确定性失败，盲目重试无用、只会让游标停在同一窗口反复超限
-        导致整链漏账；这里改为把区间二分递归下探，直到单块。单块仍超限则上抛告警，
-        绝不静默跳过（跳过等于永久漏账），由运维放宽节点上限或调小批次后自愈。
+        导致整链漏账；这里改为把区间二分递归下探，直到单块。
+
+        单块仍超限时分两种情况：
+        - 不带合约地址过滤的查询（原生币 XcashNativeReceived）：任何人都能部署合约
+          发出同签名事件，单块刷爆节点上限即可让扫描永久停在该块（整链入账 DoS）。
+          此时改用 eth_getBlockReceipts 取整块回执、本地按 topic0 抽取日志，结果与
+          eth_getLogs 等价，后续按自有地址过滤的流程不变。
+        - 带合约地址过滤的查询（ERC20），或节点不支持整块回执：上抛告警，绝不静默
+          跳过（跳过等于永久漏账），由运维放宽节点上限或调小批次后自愈。
         """
         try:
             return self._get_logs_single_range(
@@ -112,6 +119,19 @@ class EvmScannerRpcClient:
             if not self._is_result_too_large_error(exc):
                 raise
             if from_block >= to_block:
+                if addresses is None:
+                    receipt_logs = self.get_logs_from_block_receipts(
+                        block_number=from_block,
+                        topic0=topic0,
+                    )
+                    if receipt_logs is not None:
+                        logger.warning(
+                            "EVM eth_getLogs 单块结果超限，已改用整块回执本地过滤",
+                            chain=self.chain.code,
+                            block=from_block,
+                            matched_logs=len(receipt_logs),
+                        )
+                        return receipt_logs
                 raise EvmScannerRpcError(
                     self._format_rpc_error(
                         f"{summary}（单块日志数超过节点上限，无法继续二分）",
@@ -245,6 +265,41 @@ class EvmScannerRpcClient:
             if tx_hash:
                 result[tx_hash] = dict(item)
         return result
+
+    def get_logs_from_block_receipts(
+        self,
+        *,
+        block_number: int,
+        topic0: str | list[str],
+    ) -> list[dict[str, Any]] | None:
+        """从整块回执中抽取 topic0 命中的日志，作为单块 eth_getLogs 超限时的等价替代。
+
+        回执按交易顺序返回、每笔交易内日志按 logIndex 升序，故结果与 eth_getLogs
+        的块内顺序一致；失败交易的回执不带日志，天然被排除。节点不支持
+        eth_getBlockReceipts 时返回 None，由调用方决定是否上抛。
+        """
+        receipts = self.get_block_receipts(block_number=block_number)
+        if receipts is None:
+            return None
+        wanted_topics = {
+            self.normalize_topic_hex(topic)
+            for topic in (topic0 if isinstance(topic0, list) else [topic0])
+        }
+        logs: list[dict[str, Any]] = []
+        for receipt in receipts.values():
+            for log in receipt.get("logs") or []:
+                topics = list(log.get("topics") or [])
+                if topics and self.normalize_topic_hex(topics[0]) in wanted_topics:
+                    logs.append(dict(log))
+        return logs
+
+    @staticmethod
+    def normalize_topic_hex(value: Any) -> str:
+        """把 topic 统一为带 0x 前缀的小写十六进制串，兼容 bytes 与 str。"""
+        if isinstance(value, bytes):
+            return Web3.to_hex(value).lower()
+        text = str(value or "").lower()
+        return text if text.startswith("0x") else f"0x{text}"
 
     @staticmethod
     def _is_method_unavailable_error(exc: Exception) -> bool:
