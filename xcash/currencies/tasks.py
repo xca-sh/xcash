@@ -52,14 +52,13 @@ def refresh_crypto_prices():
 
     for crypto_id in crypto_ids:
         crypto = Crypto.objects.get(coingecko_id=crypto_id)
-        refreshed = False
+        fresh_prices = {}
         for fiat_code in fiat_codes:
             price = price_data.get(crypto_id, {}).get(fiat_code.lower(), None)
             if price:
-                crypto.prices[fiat_code] = price
-                refreshed = True
+                fresh_prices[fiat_code] = price
 
-        if not refreshed:
+        if not fresh_prices:
             # 本轮没拿到该币任何报价（行情源未覆盖或返回空），不推进时间戳，
             # 否则会把陈旧价格伪装成刚刷新过的，新鲜度校验形同虚设。
             logger.warning(
@@ -69,6 +68,9 @@ def refresh_crypto_prices():
             )
             continue
 
+        # 价格表只保留本轮拿到的报价：所有法币共用一个更新时间，若保留本轮缺失法币
+        # 的旧价，时间戳推进后旧价会被当成新鲜价格使用。缺失的法币按价格不可用处理。
+        crypto.prices = fresh_prices
         # 时间戳与价格必须同批写入：它是判断价格是否陈旧的唯一依据。
         crypto.prices_updated_at = timezone.now()
         # 价格刷新只更新这两个字段，避免把其他字段旧值随任务回写。

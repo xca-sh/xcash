@@ -503,3 +503,24 @@ class PriceRefreshTimestampTests(TestCase):
         )
         # 时间戳没被推进，因此该价格仍然会被判为陈旧。
         self.assertTrue(self.crypto.price_is_stale())
+
+    @patch("currencies.tasks.httpx.get")
+    def test_partial_result_drops_fiat_missing_this_round(self, mock_get):
+        """只拿到部分法币报价时，缺失法币的旧价不能借新时间戳被当成新鲜价格。"""
+        Fiat.objects.get_or_create(code="CNY")
+        Crypto.objects.filter(pk=self.crypto.pk).update(
+            prices={"USD": "3000", "CNY": "21000"},
+            prices_updated_at=timezone.now() - timedelta(hours=6),
+        )
+        mock_get.return_value = Mock(
+            raise_for_status=Mock(),
+            json=Mock(return_value={"ethereum": {"usd": 3200}}),
+        )
+
+        refresh_crypto_prices()
+
+        self.crypto.refresh_from_db()
+        self.assertEqual(self.crypto.prices, {"USD": 3200})
+        self.assertEqual(self.crypto.price("USD"), Decimal("3200"))
+        with self.assertRaises(PriceUnavailableError):
+            self.crypto.price("CNY")
