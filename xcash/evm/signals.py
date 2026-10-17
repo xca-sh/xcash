@@ -16,12 +16,12 @@ from evm.scanner.watchers import load_token_registry
 # 把整个 Crypto 对象一并放进缓存供扫描器引用（token.crypto → ParsedEvmTransferLog.crypto），
 # 所以除下列字段外一律按“可能相关”处理，新增字段默认走失效路径，不会因为漏改这里而读到脏对象。
 #
-# prices 是唯一被高频写入的字段：currencies.tasks.refresh_crypto_prices 每 60 秒对每个带
-# coingecko_id 的币执行 save(update_fields=["prices"])，而扫描链路从不读取 crypto.prices
-# （法币计价发生在账单侧且实时回源 DB）。若把它当作相关字段，N 个币 × M 条 EVM 链的代币表
-# 缓存每分钟都要清空重建一次，且 cache.delete 与 on_commit 重建之间的空窗还会被每 2 秒一轮的
-# 链扫描各自回源，纯属无谓抖动。
-CRYPTO_FIELDS_IRRELEVANT_TO_TOKEN_REGISTRY = frozenset({"prices"})
+# prices / prices_updated_at 是唯一被高频写入的字段：currencies.tasks.refresh_crypto_prices
+# 每 60 秒对每个带 coingecko_id 的币执行 save(update_fields=["prices", "prices_updated_at"])，
+# 而扫描链路从不读取这两个字段（法币计价发生在账单侧且实时回源 DB）。若把它们当作相关字段，
+# N 个币 × M 条 EVM 链的代币表缓存每分钟都要清空重建一次，且 cache.delete 与 on_commit 重建
+# 之间的空窗还会被每 2 秒一轮的链扫描各自回源，纯属无谓抖动。
+CRYPTO_FIELDS_IRRELEVANT_TO_TOKEN_REGISTRY = frozenset({"prices", "prices_updated_at"})
 
 
 def crypto_change_affects_token_registry(

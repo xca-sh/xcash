@@ -1,3 +1,4 @@
+from unittest.mock import Mock
 from unittest.mock import patch
 
 from django.core.cache import cache
@@ -220,6 +221,30 @@ class EvmTokenRegistryCacheTests(TestCase):
 
         token_registry = load_token_registry(chain=self.chain)
         self.assertIn(self.token_on_chain.address, token_registry)
+
+    @patch("currencies.tasks.httpx.get")
+    def test_price_refresh_task_keeps_cached_token_set(self, mock_get):
+        # 直接跑真实的行情刷新任务：任务写入的 update_fields 一旦超出豁免集（曾漏掉
+        # prices_updated_at），每分钟都会把所有 EVM 链的代币表缓存清空重建。
+        from currencies.models import Fiat
+        from currencies.tasks import refresh_crypto_prices
+
+        Fiat.objects.get_or_create(code="USD")
+        mock_get.return_value = Mock(
+            raise_for_status=Mock(),
+            json=Mock(return_value={"watcher-token": {"usd": 1.0001}}),
+        )
+        load_token_registry(chain=self.chain, refresh=True)
+        # 绕开信号把 DB 改脏：缓存一旦被重建就会读到新精度。
+        CryptoOnChain.objects.filter(pk=self.token_on_chain.pk).update(decimals=6)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            refresh_crypto_prices()
+
+        self.token.refresh_from_db()
+        self.assertIsNotNone(self.token.prices_updated_at)
+        token_registry = load_token_registry(chain=self.chain)
+        self.assertEqual(token_registry[self.token_on_chain.address].decimals, 18)
 
     def test_crypto_full_save_refreshes_cached_token_set_after_commit(self):
         # 全量 save 拿不到 update_fields，无法判断改了什么，必须按“可能相关”照常失效，
