@@ -9,8 +9,15 @@ eval "$(python /app/config/performance.py shell-env worker)"
 # 默认用 prefork 池：CELERY_WORKER_MAX_TASKS_PER_CHILD
 # 只对 prefork 生效，threads 池是单进程多线程、无 child 可回收，worker 内存只增不减。
 # 扫链/广播任务均为 RPC IO 密集，prefork + concurrency 控制完全够用。
+#
+# 关闭 gossip / mingle / heartbeat：三者只服务于 worker 之间互相感知（每 2 秒经 Redis
+# 广播一次心跳并消费对方心跳、启动时互相同步），本项目不依赖它们——worker 存活由真实
+# 任务回执判定（config/worker_health.py），inspect/control 走独立的 pidbox 通道不受影响。
 exec celery -A config.celery worker \
   -l WARNING \
   -Q "${CELERY_WORKER_QUEUES:-celery,scan}" \
   --pool="${CELERY_WORKER_POOL:-prefork}" \
-  --concurrency="${CELERY_WORKER_CONCURRENCY}"
+  --concurrency="${CELERY_WORKER_CONCURRENCY}" \
+  --without-gossip \
+  --without-mingle \
+  --without-heartbeat
