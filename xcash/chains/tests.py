@@ -14,6 +14,7 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from web3 import Web3
+from web3.middleware import ExtraDataToPOAMiddleware
 
 from chains.adapters import TxCheckStatus
 from chains.checks import chain_registry_check
@@ -44,6 +45,45 @@ from currencies.models import CryptoOnChain
 from deposits.models import Deposit
 from projects.models import Customer
 from projects.models import Project
+
+
+class SharedWeb3Tests(SimpleTestCase):
+    """每个任务都会重新查出 Chain 实例，Web3（及其 HTTP 会话）必须按 RPC 在进程内复用。"""
+
+    def setUp(self):
+        from chains import models as chain_models
+
+        self.chain_models = chain_models
+        chain_models._shared_web3_instances.clear()
+
+    def test_separately_loaded_chains_share_web3_for_same_rpc(self):
+        first = Chain(code=ChainCode.Ethereum, rpc="http://shared-w3.local")
+        second = Chain(code=ChainCode.Ethereum, rpc="http://shared-w3.local")
+
+        self.assertIs(first.w3, second.w3)
+
+    def test_rpc_change_and_poa_flag_get_distinct_web3(self):
+        ethereum = Chain(code=ChainCode.Ethereum, rpc="http://shared-w3.local")
+        moved = Chain(code=ChainCode.Ethereum, rpc="http://shared-w3-new.local")
+        bsc = Chain(code=ChainCode.BSC, rpc="http://shared-w3.local")
+
+        self.assertIsNot(ethereum.w3, moved.w3)
+        # BSC 是 PoA 链，必须拿到注入了 extraData 兼容中间件的实例，不能复用非 PoA 那份。
+        self.assertIsNot(ethereum.w3, bsc.w3)
+        self.assertIn(ExtraDataToPOAMiddleware, list(bsc.w3.middleware_onion))
+        self.assertNotIn(ExtraDataToPOAMiddleware, list(ethereum.w3.middleware_onion))
+
+    def test_web3_is_rebuilt_after_fork(self):
+        parent_w3 = Chain(code=ChainCode.Ethereum, rpc="http://shared-w3.local").w3
+
+        with patch.object(
+            self.chain_models.os,
+            "getpid",
+            return_value=self.chain_models.os.getpid() + 1,
+        ):
+            child_w3 = Chain(code=ChainCode.Ethereum, rpc="http://shared-w3.local").w3
+
+        self.assertIsNot(child_w3, parent_w3)
 
 
 class ChainDerivedFieldsSaveTests(TestCase):

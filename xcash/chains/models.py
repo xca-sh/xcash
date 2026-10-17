@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 from functools import cached_property
 from ipaddress import ip_address
@@ -45,6 +46,40 @@ if TYPE_CHECKING:
 
 env = environ.Env()
 logger = structlog.get_logger()
+
+
+# 进程级 Web3 复用表：(rpc, poa) -> Web3。每个 Celery 任务都会重新查出 Chain 实例，若
+# Web3 只缓存在实例上，每个任务都会新建 HTTPProvider（web3 7.x 的 requests.Session 按
+# provider 实例缓存）并重新 TCP+TLS 握手。按 RPC 地址在进程内复用，连接即可 keep-alive；
+# 运维改了 RPC 地址自然命中新键。按 pid 隔离：fork 出的子进程首次使用即重建，不跨进程共享连接。
+_shared_web3_instances: dict[tuple[str, bool], Web3] = {}
+_shared_web3_pid: int | None = None
+
+
+def shared_web3(*, rpc: str, poa: bool) -> Web3:
+    global _shared_web3_pid  # noqa: PLW0603
+    pid = os.getpid()
+    if _shared_web3_pid != pid:
+        _shared_web3_instances.clear()
+        _shared_web3_pid = pid
+    key = (rpc, poa)
+    w3 = _shared_web3_instances.get(key)
+    if w3 is None:
+        # 关闭 web3 内置重试：web3 7.x 默认对 eth_getBalance / eth_call 等最多尝试 5 次、
+        # 每次超时 8s，单次调用最坏约 42s，节点挂起时单条归集计划即可耗尽任务软超时。
+        # 重试统一交给调用方：扫描器自带退避重试，其余路径由下一轮调度自然重试。
+        w3 = Web3(
+            Web3.HTTPProvider(
+                rpc,
+                request_kwargs={"timeout": 8},
+                exception_retry_configuration=None,
+            )
+        )
+        if poa:
+            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        # 并发线程可能各建一份，后写者覆盖、旧实例随引用释放，不影响正确性。
+        _shared_web3_instances[key] = w3
+    return w3
 
 
 class Chain(models.Model):
@@ -282,19 +317,7 @@ class Chain(models.Model):
         return self._build_w3()
 
     def _build_w3(self, *, force_poa: bool = False) -> Web3:
-        # 关闭 web3 内置重试：web3 7.x 默认对 eth_getBalance / eth_call 等最多尝试 5 次、
-        # 每次超时 8s，单次调用最坏约 42s，节点挂起时单条归集计划即可耗尽任务软超时。
-        # 重试统一交给调用方：扫描器自带退避重试，其余路径由下一轮调度自然重试。
-        w3 = Web3(
-            Web3.HTTPProvider(
-                self.rpc,
-                request_kwargs={"timeout": 8},
-                exception_retry_configuration=None,
-            )
-        )
-        if force_poa or self.is_poa:
-            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-        return w3
+        return shared_web3(rpc=self.rpc, poa=bool(force_poa or self.is_poa))
 
     @property
     def adapter(self) -> AdapterInterface:  # noqa: F821

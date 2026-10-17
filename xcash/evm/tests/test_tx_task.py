@@ -1,8 +1,10 @@
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 from web3.exceptions import TransactionNotFound
@@ -1093,6 +1095,25 @@ class EvmTxTaskTests(TestCase):
         self.assertEqual(tx_hash, historical_hash)
         self.assertEqual(receipt, receipts[historical_hash])
         self.assertTrue(observed)
+
+    def test_poll_chain_queries_receipts_through_given_chain(self):
+        """轮询每条在途任务都复用传入的链实例，不再逐条懒加载出新的 Chain/Web3。"""
+        from evm.poller import EvmTaskPoller
+
+        chain = make_evm_chain(code=ChainCode.Ethereum)
+        base_task, tx_task = self._make_recover_task(
+            chain=chain, receipt_status=1, block_number=100
+        )
+        TxTask.objects.filter(pk=base_task.pk).update(status=TxTaskStatus.SUBMITTED)
+        EvmTxTask.objects.filter(pk=tx_task.pk).update(
+            last_attempt_at=timezone.now() - timedelta(seconds=60)
+        )
+        # 链高不足确认数：查到 receipt 后只等待，不进入收口。
+        chain.latest_block_number = 100
+
+        EvmTaskPoller.poll_chain(chain=chain)
+
+        chain.w3.eth.get_transaction_receipt.assert_called_once_with(base_task.tx_hash)
 
     def test_nonce_too_low_checks_existing_hash_before_reraising(self):
         """nonce too low 时若历史 hash 已有 receipt，应自动恢复而不是继续卡 QUEUED。"""

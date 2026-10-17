@@ -45,7 +45,9 @@ class EvmTaskPoller:
         )
 
         for evm_task in queryset:
-
+            # 复用本轮已加载的链：否则每条任务首次访问 evm_task.chain 都要多查一次库、
+            # 拿到新的 Chain 实例。确认数按本轮开始时的链高计算，只会偏保守、不会提前终局。
+            evm_task.chain = chain
             status, tx_hash, receipt, _ = cls._find_receipt_across_hashes(
                 evm_task=evm_task
             )
