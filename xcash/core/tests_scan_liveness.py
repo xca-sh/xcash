@@ -140,7 +140,7 @@ class ScanLivenessTests(TestCase):
         with self.assertRaises(SoftTimeLimitExceeded):
             task.run(chain.pk)
         dispatch.assert_called_once_with(chain.pk)
-        self.assert_scan_failed(chain=chain, cursor=cursor, scanned_block=108)
+        self.assert_scan_failed(chain=chain, cursor=cursor, scanned_block=106)
 
     @patch("chains.tasks.block_number_updated.delay")
     @patch("tron.scanner.TronHttpClient")

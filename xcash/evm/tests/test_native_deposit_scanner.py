@@ -42,7 +42,7 @@ class EvmNativeDepositScanWindowTests(SimpleTestCase):
             batch_size=100,
         )
 
-        self.assertEqual(from_block, 999)
+        self.assertEqual(from_block, 997)
         self.assertEqual(to_block, 1100)
 
 

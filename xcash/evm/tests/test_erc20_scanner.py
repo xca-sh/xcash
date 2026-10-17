@@ -68,7 +68,7 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
             batch_size=100,
         )
 
-        self.assertEqual(from_block, 999)
+        self.assertEqual(from_block, 997)
         self.assertEqual(to_block, 1100)
 
     def test_erc20_compute_scan_window_caps_to_latest_when_near_chain_head(self):
@@ -79,7 +79,7 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
             batch_size=100,
         )
 
-        self.assertEqual(from_block, 1989)
+        self.assertEqual(from_block, 1987)
         self.assertEqual(to_block, 1999)
 
     def test_erc20_compute_scan_window_replay_never_goes_below_first_block(self):
@@ -1101,9 +1101,9 @@ class EvmErc20ScannerTests(TestCase):
         EvmScanCursor.objects.create(chain=self.chain, last_scanned_block=100)
         get_latest_block_number_mock.return_value = 200
 
-        # 第三个 chunk（from_block=119 起）开始中断，前两段应已落盘。
+        # 第三个 chunk（from_block=117 起）开始中断，前两段应已落盘。
         def get_logs(*, from_block, **_kwargs):
-            if from_block >= 119:
+            if from_block >= 117:
                 raise SoftTimeLimitExceeded
             return []
 
@@ -1113,7 +1113,7 @@ class EvmErc20ScannerTests(TestCase):
             EvmLogScanner.scan_chain(chain=self.chain, batch_size=100)
 
         cursor = EvmScanCursor.objects.get(chain=self.chain)
-        self.assertEqual(cursor.last_scanned_block, 118)
+        self.assertEqual(cursor.last_scanned_block, 116)
         self.assertIsNotNone(cursor.last_error_at)
         self.assertIn("SoftTimeLimitExceeded", cursor.last_error)
 

@@ -25,7 +25,13 @@ from evm.scanner.watchers import load_token_registry
 
 logger = structlog.get_logger()
 
-LOG_SCAN_REPLAY_BLOCKS = 2
+# 每轮回头重扫的块数，用来兜住两类"已扫高度后来才出现数据"的漏账：
+# - 负载均衡下 latest 与 getLogs 落到不同节点：geth ≤1.15.0 及其分叉对超出本节点
+#   链头的 toBlock 静默返回部分结果，落后节点那几块的日志会被当作空块越过；
+# - 链重组把原分叉没有的入账交易带进已扫过的高度。
+# 扫描按 evm_log_max_block_range（默认 10 块）一段调用 getLogs，取 4 时各链每轮的
+# 分段数与取 2 相同、不增加 RPC 调用；若快链（BSC / Arbitrum）观察到漏账再调大。
+LOG_SCAN_REPLAY_BLOCKS = 4
 
 
 class EvmLogScanner:

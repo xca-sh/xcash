@@ -269,7 +269,7 @@ class EvmObservedTransferProcessor:
         这个持久幂等键稳定。
 
         receipt 暂不可见或 logIndex 无法在 receipt 中匹配时，绝不能跳过该条日志：
-        调用方会在本轮结束后把游标推进到 to_block（批次最多 100 块、只 replay 2 块），
+        调用方会在本轮结束后把游标推进到 to_block（批次最多 100 块、只回放 LOG_SCAN_REPLAY_BLOCKS 块），
         跳过等于把一笔真实入账永久静默丢弃——链上钱已进 VaultSlot、会被归集扫走，
         客户账上却没有 Deposit，且无任何自愈路径。故这里上抛 EvmScannerRpcError，
         让本轮扫描中断、游标停在原处、错误落到 EvmScanCursor.last_error 供运维观察，
