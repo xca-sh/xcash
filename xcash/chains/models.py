@@ -1514,9 +1514,8 @@ class Transfer(models.Model):
 
     @db_transaction.atomic
     def process(self):
-        # 先加行锁再刷新，防止两个 Celery worker 并发处理同一笔转账
-        Transfer.objects.select_for_update().get(pk=self.pk)
-        self.refresh_from_db()
+        # 加行锁的同时刷新（一次 SELECT ... FOR UPDATE），防止两个 Celery worker 并发处理同一笔转账
+        self.refresh_from_db(from_queryset=Transfer.objects.select_for_update())
         if self.processed_at:
             return
 
@@ -1601,9 +1600,8 @@ class Transfer(models.Model):
 
     @db_transaction.atomic
     def confirm(self):
-        # 修复：确认前先加行锁并刷新，避免多个 worker 对同一笔转账重复确认和重复计费。
-        Transfer.objects.select_for_update().get(pk=self.pk)
-        self.refresh_from_db()
+        # 确认前加行锁并刷新（一次 SELECT ... FOR UPDATE），避免多个 worker 对同一笔转账重复确认和重复计费。
+        self.refresh_from_db(from_queryset=Transfer.objects.select_for_update())
         if self.status == TransferStatus.CONFIRMED:
             return
 
@@ -1628,10 +1626,11 @@ class Transfer(models.Model):
         删除记录以释放唯一约束 (chain, hash, event_index),
         使 reorg 后同一笔 tx 被重新打包时, 扫描器可以自然重建 Transfer。
         """
-        # 先加行锁，防止并发处理；已删除的 Transfer 直接跳过。
-        if not Transfer.objects.select_for_update().filter(pk=self.pk).exists():
+        # 加行锁的同时刷新，防止并发处理；已删除的 Transfer 直接跳过。
+        try:
+            self.refresh_from_db(from_queryset=Transfer.objects.select_for_update())
+        except Transfer.DoesNotExist:
             return
-        self.refresh_from_db()
 
         self.delete()
 

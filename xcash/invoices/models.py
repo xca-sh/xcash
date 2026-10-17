@@ -552,9 +552,8 @@ class Invoice(models.Model):
                 f"project={self.project_id}, crypto={crypto.symbol}, chain={chain.code} 未开放账单收款"
             )
 
-        # 先锁账单行，保证同一账单的多次切链/切币只能留下一个当前支付指引。
-        Invoice.objects.select_for_update().get(pk=self.pk)
-        self.refresh_from_db()
+        # 锁账单行的同时刷新，保证同一账单的多次切链/切币只能留下一个当前支付指引。
+        self.refresh_from_db(from_queryset=Invoice.objects.select_for_update())
 
         # 调用方（viewset）的状态预检在锁外，与扫链绑定（try_match_invoice）存在
         # TOCTOU 窗口：预检通过后账单可能已绑定 Transfer 甚至已 COMPLETED。

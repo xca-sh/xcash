@@ -6,10 +6,12 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
+from django.db import connection
 from django.db import transaction
 from django.test import SimpleTestCase
 from django.test import TestCase
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from web3 import Web3
 
@@ -1624,6 +1626,14 @@ class VaultSlotReceivedFlagTests(TestCase):
         )
 
 
+def locked_transfer_row(queries) -> bool:
+    """本次调用是否对 chains_transfer 行发出了 SELECT ... FOR UPDATE。"""
+    return any(
+        "FOR UPDATE" in query["sql"] and '"chains_transfer"' in query["sql"]
+        for query in queries.captured_queries
+    )
+
+
 class TransferProcessQuickConfirmDispatchTests(TestCase):
     def setUp(self):
         self.crypto = Crypto.objects.create(
@@ -1694,6 +1704,46 @@ class TransferProcessQuickConfirmDispatchTests(TestCase):
 
         self.assertEqual(callbacks, [])
         confirm_delay_mock.assert_not_called()
+
+    @patch("invoices.service.InvoiceService.try_match_invoice")
+    def test_process_on_stale_instance_skips_row_already_processed(
+        self,
+        match_invoice_mock,
+    ):
+        # 另一个 worker 已处理完同一行：拿着旧快照的实例必须在加锁时读到最新
+        # processed_at，不能重新撮合业务。
+        transfer = self.create_quick_transfer()
+        Transfer.objects.filter(pk=transfer.pk).update(processed_at=timezone.now())
+
+        with CaptureQueriesContext(connection) as queries:
+            transfer.process()
+
+        match_invoice_mock.assert_not_called()
+        self.assertIsNotNone(transfer.processed_at)
+        self.assertTrue(locked_transfer_row(queries))
+
+    @patch("chains.models.Transfer._dispatch_business_confirm")
+    def test_confirm_on_stale_instance_skips_row_already_confirmed(
+        self,
+        dispatch_confirm_mock,
+    ):
+        transfer = self.create_quick_transfer()
+        Transfer.objects.filter(pk=transfer.pk).update(status=TransferStatus.CONFIRMED)
+
+        with CaptureQueriesContext(connection) as queries:
+            transfer.confirm()
+
+        dispatch_confirm_mock.assert_not_called()
+        self.assertEqual(transfer.status, TransferStatus.CONFIRMED)
+        self.assertTrue(locked_transfer_row(queries))
+
+    def test_drop_on_already_deleted_transfer_is_noop(self):
+        transfer = self.create_quick_transfer()
+        Transfer.objects.filter(pk=transfer.pk).delete()
+
+        transfer.drop()
+
+        self.assertFalse(Transfer.objects.filter(pk=transfer.pk).exists())
 
 
 class ConfirmTransferMissingReceiptTests(TestCase):
