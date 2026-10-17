@@ -22,34 +22,19 @@ class TxCheckStatus(StrEnum):
     MISSING = "missing"
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class TxCheckResult:
-    """链上交易状态及 receipt 位置元信息。
+    """链上交易状态及 receipt 位置元信息（MISSING 时位置为空）。
 
-    兼容旧代码中直接把 tx_result 返回值与 TxCheckStatus 比较的写法，同时让
-    确认任务能在 reorg 后发现 blockNumber / blockHash 变化并刷新确认起点。
+    让确认任务能在 reorg 后发现 blockNumber / blockHash 变化并刷新确认起点。
     """
 
     status: TxCheckStatus
     block_number: int | None = None
     block_hash: str | None = None
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, TxCheckStatus):
-            return self.status == other
-        if isinstance(other, str):
-            return self.status == other
-        if isinstance(other, TxCheckResult):
-            return (
-                self.status == other.status
-                and self.block_number == other.block_number
-                and self.block_hash == other.block_hash
-            )
-        return NotImplemented
 
-    def __hash__(self) -> int:
-        # 与 TxCheckStatus 的兼容相等比较保持一致；不同 receipt 元信息出现哈希碰撞可接受。
-        return hash(self.status)
+TX_MISSING = TxCheckResult(status=TxCheckStatus.MISSING)
 
 
 class AdapterInterface(ABC):
@@ -76,9 +61,7 @@ class AdapterInterface(ABC):
         pass
 
     @abstractmethod
-    def tx_result(
-        self, chain, tx_hash: str
-    ) -> TxCheckStatus | TxCheckResult | Exception:
+    def tx_result(self, chain, tx_hash: str) -> TxCheckResult | Exception:
         pass
 
 

@@ -98,9 +98,7 @@ def reap_stale_confirming_transfers(limit: int = 200) -> int:
                 error=str(raw_result),
             )
             continue
-        result = (
-            raw_result.status if isinstance(raw_result, TxCheckResult) else raw_result
-        )
+        result = raw_result.status
         if result == TxCheckStatus.MISSING:
             logger.warning(
                 "超龄 CONFIRMING 转账链上已无事实，清理释放确认批次",
@@ -227,12 +225,11 @@ def confirm_transfer(self, pk):
         # 指数退避：8s → 16s → 32s → 64s → 128s，避免节点抖动时密集重试。
         countdown = 8 * (2**self.request.retries)  # noqa
         raise self.retry(exc=raw_result, countdown=countdown)  # noqa
-    result_meta = raw_result if isinstance(raw_result, TxCheckResult) else None
-    result = result_meta.status if result_meta is not None else raw_result
+    result = raw_result.status
     if result == TxCheckStatus.SUCCEEDED:
         if _refresh_transfer_chain_position_from_receipt(
             transfer=transfer,
-            result=result_meta,
+            result=raw_result,
         ):
             return
         transfer.confirm()
@@ -273,16 +270,13 @@ def confirm_transfer(self, pk):
 def _refresh_transfer_chain_position_from_receipt(
     *,
     transfer: Transfer,
-    result: TxCheckResult | None,
+    result: TxCheckResult,
 ) -> bool:
     """receipt 的块位置变化时刷新转账，并重新等待确认窗口。
 
     reorg 后同一 tx_hash 可能被重新打包到不同块；若继续沿用旧 block 计算确认数，
     FULL 确认会被提前放行。block_hash 能覆盖“同一高度但不同块”的场景。
     """
-    if result is None:
-        return False
-
     updates: dict[str, object] = {}
     if result.block_number is not None and int(result.block_number) != transfer.block:
         updates["block"] = int(result.block_number)

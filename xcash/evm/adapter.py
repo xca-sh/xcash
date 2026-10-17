@@ -5,6 +5,7 @@ from eth_typing import ChecksumAddress
 from web3.exceptions import TransactionNotFound
 from web3.types import HexBytes
 
+from chains.adapters import TX_MISSING
 from chains.adapters import AdapterInterface
 from chains.adapters import TxCheckResult
 from chains.adapters import TxCheckStatus
@@ -66,22 +67,20 @@ class EvmAdapter(AdapterInterface):
         return int(contract.functions.balanceOf(checksum_address).call())
 
     @classmethod
-    def tx_result(
-        cls, chain: Chain, tx_hash: str
-    ) -> TxCheckStatus | TxCheckResult | Exception:
+    def tx_result(cls, chain: Chain, tx_hash: str) -> TxCheckResult | Exception:
         """查询交易哈希的链上状态，返回交易检查结果或异常。"""
         try:
             receipt = chain.w3.eth.get_transaction_receipt(tx_hash)  # noqa: SLF001
         except TransactionNotFound:
             # 负载均衡 RPC 滞后、索引延迟或 pending 交易都可能暂时查不到 receipt。
             # 这里返回 MISSING，由调用侧按自身确认/重播策略处理。
-            return TxCheckStatus.MISSING
+            return TX_MISSING
         except Exception as exc:  # noqa: BLE001
             return exc
 
         if receipt is None:
             # 有些节点对 pending tx 返回 None，不能直接视为 reorg/drop。
-            return TxCheckStatus.MISSING
+            return TX_MISSING
 
         status = receipt.get("status")
         result_meta = {

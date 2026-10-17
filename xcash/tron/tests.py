@@ -282,7 +282,7 @@ class TronAdapterTests(SimpleTestCase):
 
         result = TronAdapter().tx_result(SimpleNamespace(code="tron"), "a" * 64)
 
-        self.assertEqual(result, TxCheckStatus.MISSING)
+        self.assertEqual(result.status, TxCheckStatus.MISSING)
 
     def trc20_get_balance_with(self, payload: dict) -> int:
         """走 TRC20 分支查询余额：crypto 与 chain.native_coin 非同一对象。"""
@@ -3481,7 +3481,7 @@ class TronReceiptConfirmTaskTests(TestCase):
 
         def tx_result(*, chain, tx_hash):
             if tx_hash == new_hash:
-                return TxCheckStatus.MISSING
+                return TxCheckResult(status=TxCheckStatus.MISSING)
             if tx_hash == old_hash:
                 return TxCheckResult(
                     status=TxCheckStatus.SUCCEEDED,
@@ -3533,7 +3533,7 @@ class TronReceiptConfirmTaskTests(TestCase):
                     block_hash="f" * 64,
                 )
             if tx_hash == old_hash:
-                return TxCheckStatus.MISSING
+                return TxCheckResult(status=TxCheckStatus.MISSING)
             raise AssertionError(f"unexpected tx_hash={tx_hash}")
 
         adapter.tx_result.side_effect = tx_result
@@ -3563,7 +3563,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         expired_ms = int((timezone.now() - timedelta(minutes=10)).timestamp() * 1000)
         self.fill_hash_limit(base_task=base_task, expires_at_ms=expired_ms)
         adapter = Mock()
-        adapter.tx_result.return_value = TxCheckStatus.MISSING
+        adapter.tx_result.return_value = TxCheckResult(status=TxCheckStatus.MISSING)
         get_adapter.return_value = adapter
         solid_timestamp_ms = int(timezone.now().timestamp() * 1000)
         client_cls.return_value.get_latest_solid_block_number.return_value = 123
@@ -3594,7 +3594,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         expired_ms = int((timezone.now() - timedelta(minutes=10)).timestamp() * 1000)
         self.fill_hash_limit(base_task=base_task, expires_at_ms=expired_ms)
         adapter = Mock()
-        adapter.tx_result.return_value = TxCheckStatus.MISSING
+        adapter.tx_result.return_value = TxCheckResult(status=TxCheckStatus.MISSING)
         get_adapter.return_value = adapter
         client_cls.return_value.get_latest_solid_block_number.return_value = 123
         client_cls.return_value.get_solid_block.return_value = {
@@ -3622,7 +3622,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         expired_ms = int((timezone.now() - timedelta(minutes=1)).timestamp() * 1000)
         self.fill_hash_limit(base_task=base_task, expires_at_ms=expired_ms)
         adapter = Mock()
-        adapter.tx_result.return_value = TxCheckStatus.MISSING
+        adapter.tx_result.return_value = TxCheckResult(status=TxCheckStatus.MISSING)
         get_adapter.return_value = adapter
 
         confirm_tron_receipt_tx_tasks()
@@ -3663,7 +3663,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         stale_updated_at = timezone.now() - timedelta(hours=1)
         TxTask.objects.filter(pk=base_task.pk).update(updated_at=stale_updated_at)
         adapter = Mock()
-        adapter.tx_result.return_value = TxCheckStatus.MISSING
+        adapter.tx_result.return_value = TxCheckResult(status=TxCheckStatus.MISSING)
         get_adapter.return_value = adapter
 
         confirm_tron_receipt_tx_tasks()
@@ -3688,7 +3688,7 @@ class TronReceiptConfirmTaskTests(TestCase):
             task.append_tx_hash(f"{index + 100:064x}")
             tasks.append(task)
         adapter = Mock()
-        adapter.tx_result.return_value = TxCheckStatus.MISSING
+        adapter.tx_result.return_value = TxCheckResult(status=TxCheckStatus.MISSING)
         get_adapter.return_value = adapter
 
         confirm_tron_receipt_tx_tasks()

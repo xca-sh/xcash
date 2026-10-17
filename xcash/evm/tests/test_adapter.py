@@ -61,7 +61,7 @@ class EvmAdapterTests(TestCase):
         from evm.adapter import EvmAdapter
 
         result = EvmAdapter.tx_result(chain, "0x" + "ab" * 32)
-        self.assertEqual(result, TxCheckStatus.SUCCEEDED)
+        self.assertEqual(result.status, TxCheckStatus.SUCCEEDED)
 
     def test_tx_result_returns_failed_when_status_is_zero(self):
         # 链上执行失败（revert）应返回 FAILED，而不是和 pending / not found 混为一类。
@@ -78,7 +78,7 @@ class EvmAdapterTests(TestCase):
         from evm.adapter import EvmAdapter
 
         result = EvmAdapter.tx_result(chain, "0x" + "ab" * 32)
-        self.assertEqual(result, TxCheckStatus.FAILED)
+        self.assertEqual(result.status, TxCheckStatus.FAILED)
 
     def test_tx_result_returns_missing_when_transaction_not_found(self):
         from web3.exceptions import TransactionNotFound
@@ -98,7 +98,7 @@ class EvmAdapterTests(TestCase):
         from evm.adapter import EvmAdapter
 
         result = EvmAdapter.tx_result(chain, "0x" + "ab" * 32)
-        self.assertEqual(result, TxCheckStatus.MISSING)
+        self.assertEqual(result.status, TxCheckStatus.MISSING)
 
     def test_tx_result_returns_missing_when_receipt_is_none(self):
         chain = Chain(
@@ -114,7 +114,7 @@ class EvmAdapterTests(TestCase):
         from evm.adapter import EvmAdapter
 
         result = EvmAdapter.tx_result(chain, "0x" + "ab" * 32)
-        self.assertEqual(result, TxCheckStatus.MISSING)
+        self.assertEqual(result.status, TxCheckStatus.MISSING)
 
     def test_tx_result_returns_exception_when_receipt_missing_status(self):
         chain = Chain(

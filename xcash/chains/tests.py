@@ -16,6 +16,7 @@ from django.utils import timezone
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 
+from chains.adapters import TxCheckResult
 from chains.adapters import TxCheckStatus
 from chains.checks import chain_registry_check
 from chains.constants import ChainCode
@@ -1816,7 +1817,7 @@ class ConfirmTransferMissingReceiptTests(TestCase):
         class MissingAdapter:
             @staticmethod
             def tx_result(*, chain, tx_hash):
-                return TxCheckStatus.MISSING
+                return TxCheckResult(status=TxCheckStatus.MISSING)
 
         with (
             patch(
@@ -1842,7 +1843,7 @@ class ConfirmTransferMissingReceiptTests(TestCase):
         class FailedAdapter:
             @staticmethod
             def tx_result(*, chain, tx_hash):
-                return TxCheckStatus.FAILED
+                return TxCheckResult(status=TxCheckStatus.FAILED)
 
         with patch(
             "chains.tasks.AdapterFactory.get_adapter",
@@ -2030,7 +2031,7 @@ class ReapStaleConfirmingTransfersTests(TestCase):
     def test_reaps_stale_transfer_when_chain_fact_is_missing(self):
         transfer = self.make_confirming_transfer(suffix="1a")
 
-        reaped = self.reap_with_tx_result(TxCheckStatus.MISSING)
+        reaped = self.reap_with_tx_result(TxCheckResult(status=TxCheckStatus.MISSING))
 
         self.assertEqual(reaped, 1)
         self.assertFalse(Transfer.objects.filter(pk=transfer.pk).exists())
@@ -2041,7 +2042,9 @@ class ReapStaleConfirmingTransfersTests(TestCase):
         Transfer.objects.filter(pk=transfer.pk).update(processed_at=timezone.now())
 
         with patch("chains.tasks.confirm_transfer.delay") as confirm_delay:
-            reaped = self.reap_with_tx_result(TxCheckStatus.SUCCEEDED)
+            reaped = self.reap_with_tx_result(
+                TxCheckResult(status=TxCheckStatus.SUCCEEDED)
+            )
 
         self.assertEqual(reaped, 0)
         self.assertTrue(Transfer.objects.filter(pk=transfer.pk).exists())
@@ -2057,7 +2060,9 @@ class ReapStaleConfirmingTransfersTests(TestCase):
             patch("chains.tasks.confirm_transfer.delay") as confirm_delay,
             patch("chains.tasks.process_transfer.delay") as process_delay,
         ):
-            reaped = self.reap_with_tx_result(TxCheckStatus.SUCCEEDED)
+            reaped = self.reap_with_tx_result(
+                TxCheckResult(status=TxCheckStatus.SUCCEEDED)
+            )
 
         self.assertEqual(reaped, 0)
         self.assertTrue(Transfer.objects.filter(pk=transfer.pk).exists())
@@ -2075,7 +2080,7 @@ class ReapStaleConfirmingTransfersTests(TestCase):
     def test_keeps_stale_transfer_when_chain_fact_is_failed(self):
         transfer = self.make_confirming_transfer(suffix="4a")
 
-        reaped = self.reap_with_tx_result(TxCheckStatus.FAILED)
+        reaped = self.reap_with_tx_result(TxCheckResult(status=TxCheckStatus.FAILED))
 
         self.assertEqual(reaped, 0)
         self.assertTrue(Transfer.objects.filter(pk=transfer.pk).exists())
@@ -2099,7 +2104,7 @@ class ReapStaleConfirmingTransfersTests(TestCase):
         transfer = self.make_confirming_transfer(suffix="6a")
         Transfer.objects.filter(pk=transfer.pk).update(status=TransferStatus.CONFIRMED)
 
-        reaped = self.reap_with_tx_result(TxCheckStatus.MISSING)
+        reaped = self.reap_with_tx_result(TxCheckResult(status=TxCheckStatus.MISSING))
 
         self.assertEqual(reaped, 0)
         self.assertTrue(Transfer.objects.filter(pk=transfer.pk).exists())

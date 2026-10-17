@@ -5,6 +5,7 @@ from tron.client import TronHttpClient
 from tron.intents import trc20_balance_of_parameter
 from tron.resources import decode_hex_text
 
+from chains.adapters import TX_MISSING
 from chains.adapters import AdapterInterface
 from chains.adapters import TxCheckResult
 from chains.adapters import TxCheckStatus
@@ -88,9 +89,7 @@ class TronAdapter(AdapterInterface):
             )
         return int(str(constant_result[0]), 16)
 
-    def tx_result(
-        self, chain, tx_hash: str
-    ) -> TxCheckStatus | TxCheckResult | Exception:
+    def tx_result(self, chain, tx_hash: str) -> TxCheckResult | Exception:
         try:
             client = TronHttpClient(chain=chain)
             payload = client.get_transaction_info_by_id(tx_hash)
@@ -98,7 +97,7 @@ class TronAdapter(AdapterInterface):
             return exc
 
         if not payload or payload.get("id") != tx_hash:
-            return TxCheckStatus.MISSING
+            return TX_MISSING
 
         receipt = payload.get("receipt") or {}
         block_number = self.receipt_block_number(payload)
@@ -121,7 +120,7 @@ class TronAdapter(AdapterInterface):
         # 原生 TRX TransferContract 成功回执可能没有 result；tx 已入块即视为成功。
         if result in (None, "", "SUCCESS"):
             if block_number is None:
-                return TxCheckStatus.MISSING
+                return TX_MISSING
             return TxCheckResult(
                 status=TxCheckStatus.SUCCEEDED,
                 block_number=block_number,
@@ -133,7 +132,7 @@ class TronAdapter(AdapterInterface):
                 block_number=block_number,
                 block_hash=block_hash,
             )
-        return TxCheckStatus.MISSING
+        return TX_MISSING
 
     @staticmethod
     def receipt_block_number(payload: dict) -> int | None:

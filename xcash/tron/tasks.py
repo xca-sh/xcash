@@ -15,6 +15,7 @@ from tron.saas_gas_billing import notify_vault_slot_collect_gas_fee
 from tron.saas_gas_billing import notify_vault_slot_deploy_gas_fee
 from tron.scanner import TronScanner
 
+from chains.adapters import TX_MISSING
 from chains.adapters import AdapterFactory
 from chains.adapters import TxCheckResult
 from chains.adapters import TxCheckStatus
@@ -43,12 +44,8 @@ class KnownTronTxHash:
     expires_at_ms: int | None
 
 
-def tx_check_status(result: TxCheckStatus | TxCheckResult) -> TxCheckStatus:
-    return result.status if isinstance(result, TxCheckResult) else result
-
-
-def has_required_confirmations(*, chain: Chain, result: TxCheckResult | None) -> bool:
-    if result is None or result.block_number is None:
+def has_required_confirmations(*, chain: Chain, result: TxCheckResult) -> bool:
+    if result.block_number is None:
         return False
     confirmed_at_or_before = chain.latest_block_number - chain.confirm_block_count
     return int(result.block_number) <= confirmed_at_or_before
@@ -108,14 +105,14 @@ def find_tron_receipt_across_hashes(
     adapter,
     task: TxTask,
     records: tuple[KnownTronTxHash, ...],
-) -> tuple[TxCheckStatus | TxCheckResult | Exception, str | None]:
+) -> tuple[TxCheckResult | Exception, str | None]:
     """按所有历史 hash 查询 Tron 主动交易结果。
 
     Tron 过期重签会产生多个 txID；任一历史 hash 成功都足以把幂等 deploy/collect
     任务收口。全部 hash 明确失败时直接返回 FAILED；含 missing 时仅在达到重签
     上限且 expiration、本地宽限与 solid-head 链上时间均越过后返回 FAILED。
     """
-    failed_result: TxCheckStatus | TxCheckResult | None = None
+    failed_result: TxCheckResult | None = None
     failed_hash: str | None = None
     missing_records: list[KnownTronTxHash] = []
     now_ms = int(time.time() * 1000)
@@ -124,7 +121,7 @@ def find_tron_receipt_across_hashes(
         raw_result = adapter.tx_result(chain=task.chain, tx_hash=record.hash)
         if isinstance(raw_result, Exception):
             return raw_result, None
-        status = tx_check_status(raw_result)
+        status = raw_result.status
         if status == TxCheckStatus.SUCCEEDED:
             return raw_result, record.hash
         if status == TxCheckStatus.FAILED:
@@ -155,8 +152,11 @@ def find_tron_receipt_across_hashes(
             except TronClientError as exc:
                 return exc, None
             if solid_head_past_deadline:
-                return failed_result or TxCheckStatus.FAILED, failed_hash
-    return TxCheckStatus.MISSING, None
+                return (
+                    failed_result or TxCheckResult(status=TxCheckStatus.FAILED),
+                    failed_hash,
+                )
+    return TX_MISSING, None
 
 
 def tron_hash_snapshot(task: TxTask) -> tuple[KnownTronTxHash, ...]:
@@ -270,8 +270,7 @@ def process_tron_receipt_task(task: TxTask) -> bool:
         )
         return False
 
-    result_meta = raw_result if isinstance(raw_result, TxCheckResult) else None
-    status = tx_check_status(raw_result)
+    status = raw_result.status
     if status == TxCheckStatus.SUCCEEDED:
         if matched_tx_hash is None:
             return False
@@ -279,7 +278,7 @@ def process_tron_receipt_task(task: TxTask) -> bool:
             TxTask.mark_submitted(task_id=task.pk)
             task.status = TxTaskStatus.SUBMITTED
             task.tx_hash = matched_tx_hash
-        if not has_required_confirmations(chain=task.chain, result=result_meta):
+        if not has_required_confirmations(chain=task.chain, result=raw_result):
             return True
         updated = TxTask.mark_finalized_success(
             chain=task.chain,
