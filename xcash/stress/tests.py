@@ -1615,3 +1615,26 @@ class StressInvoiceReceivingProvisioningTests(TestCase):
                 address=invoice.pay_address,
             ).exists()
         )
+
+
+class StressTaskRoutingTests(SimpleTestCase):
+    """压测任务必须全部进入独立的 stress 队列，不得挤占业务 worker。"""
+
+    def test_every_stress_task_routes_to_stress_queue(self):
+        import stress.tasks  # noqa: F401  确保任务已注册
+        from celery import current_app
+
+        router = current_app.amqp.router
+        stress_tasks = sorted(
+            name for name in current_app.tasks if name.startswith("stress.tasks.")
+        )
+        self.assertGreaterEqual(len(stress_tasks), 10)
+        for name in stress_tasks:
+            with self.subTest(task=name):
+                self.assertEqual(router.route({}, name)["queue"].name, "stress")
+
+    def test_business_task_is_not_routed_to_stress_queue(self):
+        from celery import current_app
+
+        route = current_app.amqp.router.route({}, "chains.tasks.process_transfer")
+        self.assertEqual(route["queue"].name, "celery")

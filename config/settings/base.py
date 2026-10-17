@@ -461,16 +461,8 @@ CELERY_TASK_ROUTES = {
     "evm.tasks._scan_evm_chain": {"queue": "scan"},
     "tron.tasks.scan_tron_chain": {"queue": "scan"},
     **{task: {"queue": queue} for task, queue in PERIODIC_TASK_QUEUES.items()},
-    "stress.tasks.prepare_stress": {"queue": "stress"},
-    "stress.tasks.execute_stress_case": {"queue": "stress"},
-    "stress.tasks.execute_stress_case_payment": {"queue": "stress"},
-    "stress.tasks.execute_deposit_case": {"queue": "stress"},
-    "stress.tasks.execute_deposit_case_payment": {"queue": "stress"},
-    "stress.tasks.check_webhook_timeout": {"queue": "stress"},
-    "stress.tasks.check_deposit_webhook_timeout": {"queue": "stress"},
-    "stress.tasks.finalize_stress_timeout": {"queue": "stress"},
-    "stress.tasks.verify_deposit_collection": {"queue": "stress"},
-    "stress.tasks.verify_invoice_collection": {"queue": "stress"},
+    # stress 模块的全部任务都走独立的 stress 队列（Celery 路由键支持 glob）。
+    "stress.tasks.*": {"queue": "stress"},
 }
 
 # -------------------------------------------------------------------------------
