@@ -523,7 +523,8 @@ class TronHttpClientTests(SimpleTestCase):
                     TronHttpClient(chain=chain).get_latest_solid_block_number()
 
     @patch("tron.client.http_client.post")
-    def test_get_solid_block_id_posts_block_number(self, post_mock):
+    def test_get_solid_block_id_fetches_header_only(self, post_mock):
+        # 只要 blockID 时请求不带交易的块头（主网整块约 440KB，块头约 0.5KB）。
         post_mock.return_value.json.return_value = {"blockID": "A" * 64}
         post_mock.return_value.raise_for_status.return_value = None
 
@@ -539,9 +540,27 @@ class TronHttpClientTests(SimpleTestCase):
         call_args, call_kwargs = post_mock.call_args
         self.assertEqual(
             call_args[0],
-            "https://api.trongrid.io/walletsolidity/getblockbynum",
+            "https://api.trongrid.io/walletsolidity/getblock",
         )
-        self.assertEqual(call_kwargs["json"], {"num": 123456})
+        self.assertEqual(call_kwargs["json"], {"id_or_num": "123456", "detail": False})
+
+    @patch("tron.client.http_client.post")
+    def test_get_solid_block_id_reuses_cached_full_block(self, post_mock):
+        # 同一客户端已为原生扫描下载过整块时，取 blockID 不再发请求。
+        post_mock.return_value.json.return_value = {
+            "blockID": "B" * 64,
+            "transactions": [],
+        }
+        post_mock.return_value.raise_for_status.return_value = None
+        client = TronHttpClient(
+            chain=SimpleNamespace(code="tron-mainnet", tron_api_key="")
+        )
+
+        client.get_solid_block(block_number=123456)
+        block_id = client.get_solid_block_id(block_number=123456)
+
+        self.assertEqual(block_id, "b" * 64)
+        self.assertEqual(post_mock.call_count, 1)
 
     @patch("tron.client.http_client.post")
     def test_get_solid_block_id_rejects_invalid_block_id(self, post_mock):
@@ -3483,7 +3502,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         get_adapter.return_value = adapter
         solid_timestamp_ms = int(timezone.now().timestamp() * 1000)
         client_cls.return_value.get_latest_solid_block_number.return_value = 123
-        client_cls.return_value.get_solid_block.return_value = {
+        client_cls.return_value.get_solid_block_header.return_value = {
             "block_header": {
                 "raw_data": {
                     "number": 123,

@@ -89,7 +89,7 @@ def solid_head_reached_timestamp(*, chain: Chain, timestamp_ms: int) -> bool:
     """仅当最新 solid block 的链上时间越过阈值才返回真，异常一律交给下轮重试。"""
     client = TronHttpClient(chain=chain)
     block_number = client.get_latest_solid_block_number()
-    payload = client.get_solid_block(block_number=block_number)
+    payload = client.get_solid_block_header(block_number=block_number)
     if not isinstance(payload, dict):
         raise TronClientError(f"invalid latest solid block from {chain.code}")
     try:

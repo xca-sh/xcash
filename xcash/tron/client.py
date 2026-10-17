@@ -192,13 +192,30 @@ class TronHttpClient:
         return block_number
 
     def get_solid_block_id(self, *, block_number: int) -> str:
-        payload = self.get_solid_block(block_number=block_number)
+        payload = self.get_solid_block_header(block_number=block_number)
         block_id = ""
         if isinstance(payload, dict):
             block_id = str(payload.get("blockID") or "").strip().lower()
         if len(block_id) != 64:
             raise TronClientError(f"invalid solid block id from {self.chain.code}")
         return block_id
+
+    def get_solid_block_header(self, *, block_number: int) -> dict:
+        """拉取已固化块的 blockID 与块头，不含交易。
+
+        主网整块约 440KB，只取块头约 0.5KB；回执确认、命中块补 blockID 这些只要
+        blockID / 时间戳的场景不必下载整块。本实例已缓存同块号整块时直接复用。
+        """
+        if self._cached_block is not None and self._cached_block[0] == block_number:
+            return self._cached_block[1]
+        response = self._request_with_retry(
+            method="POST",
+            url=f"{self.base_url}/walletsolidity/getblock",
+            request_label="failed to fetch solid block header",
+            json_body={"id_or_num": str(block_number), "detail": False},
+        )
+        # 节点对尚未固化的块返回 {}，由调用方按「拿不到 blockID」报错。
+        return response.json()
 
     def get_solid_block(self, *, block_number: int) -> dict:
         """拉取已固化（BFT 不可逆）整块，含 transactions，用于原生 TRX TransferContract 扫描。

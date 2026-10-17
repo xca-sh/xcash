@@ -482,8 +482,8 @@ class TronScanner:
             # 条数严格相等），块内有交易而 infos 为空说明 infos 来自落后节点，抛错中断
             # 本轮、游标停在该块之前由下一轮重扫。整块在客户端内按块号缓存，blockID
             # 校验与读取交易只发一次请求；Tron 主网几乎无空块，正常路径基本不触发。
-            client.get_solid_block_id(block_number=block_number)
             payload = client.get_solid_block(block_number=block_number)
+            client.get_solid_block_id(block_number=block_number)
             if isinstance(payload, dict) and payload.get("transactions"):
                 raise TronClientError(
                     f"solid block {block_number} has transactions but no "
