@@ -2022,6 +2022,58 @@ class TronScannerTests(TestCase):
         self.assertEqual(cursor.last_scanned_block, 123455)
         self.assertEqual(cursor.last_error, "block not finalized")
 
+    @override_settings(DEBUG=False)
+    @patch("tron.scanner.TronHttpClient")
+    def test_scan_chain_aborts_when_infos_empty_but_block_has_transactions(
+        self, client_cls
+    ):
+        # infos 来自固化头落后的节点、blockID 校验却被负载均衡到已固化该块的节点时，
+        # 仅凭 blockID 可读会把未固化块误当空块越过；块内有交易就必须中断本轮。
+        from tron.scanner import TronScanner
+
+        self._set_cursor_block(last_scanned_block=123455)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = 123456
+        client.get_transaction_infos_by_block.return_value = []
+        client.get_solid_block_id.return_value = "0" * 64
+        client.get_solid_block.return_value = {
+            "blockID": "0" * 64,
+            "block_header": {"raw_data": {"timestamp": 1_700_000_000_000}},
+            "transactions": [
+                {
+                    "txID": "a" * 64,
+                    "raw_data": {"contract": [{"type": "TriggerSmartContract"}]},
+                }
+            ],
+        }
+
+        with self.assertRaises(TronClientError):
+            TronScanner.scan_chain(chain=self.chain)
+
+        cursor = TronWatchCursor.objects.get(chain=self.chain)
+        self.assertEqual(cursor.last_scanned_block, 123455)
+
+    @override_settings(DEBUG=False)
+    @patch("tron.scanner.TronHttpClient")
+    def test_scan_chain_advances_over_truly_empty_block(self, client_cls):
+        from tron.scanner import TronScanner
+
+        self._set_cursor_block(last_scanned_block=123455)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = 123456
+        client.get_transaction_infos_by_block.return_value = []
+        client.get_solid_block_id.return_value = "0" * 64
+        client.get_solid_block.return_value = {
+            "blockID": "0" * 64,
+            "block_header": {"raw_data": {"timestamp": 1_700_000_000_000}},
+        }
+
+        summary = TronScanner.scan_chain(chain=self.chain)
+
+        self.assertEqual(summary.blocks_scanned, 1)
+        cursor = TronWatchCursor.objects.get(chain=self.chain)
+        self.assertEqual(cursor.last_scanned_block, 123456)
+
     @override_settings(TRON_SCAN_SAFE_LAG_BLOCKS=4)
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")
@@ -2793,7 +2845,10 @@ class TronScannerTests(TestCase):
         client = client_cls.return_value
         client.get_latest_solid_block_number.return_value = 123456
         client.get_solid_block_id.return_value = "0" * 64
-        client.get_transaction_infos_by_block.return_value = []
+        # 真实链上每笔交易都有一条 TransactionInfo（TransferContract 也不例外）。
+        client.get_transaction_infos_by_block.return_value = [
+            {"id": "f" * 64, "blockNumber": 123456, "blockTimeStamp": 1_700_000_000_000}
+        ]
         client.get_solid_block.return_value = {
             "blockID": "a" * 64,
             "block_header": {"raw_data": {"timestamp": 1_700_000_000_000}},
@@ -2839,7 +2894,9 @@ class TronScannerTests(TestCase):
         client = client_cls.return_value
         client.get_latest_solid_block_number.return_value = 123456
         client.get_solid_block_id.return_value = "0" * 64
-        client.get_transaction_infos_by_block.return_value = []
+        client.get_transaction_infos_by_block.return_value = [
+            {"id": "2" * 64, "blockNumber": 123456, "blockTimeStamp": 1_700_000_000_000}
+        ]
         client.get_solid_block.return_value = {
             "blockID": "a" * 64,
             "block_header": {"raw_data": {"timestamp": 1_700_000_000_000}},
@@ -2884,7 +2941,7 @@ class TronScannerTests(TestCase):
         client_cls,
         _enqueue_processing_mock,
     ):
-        # 停用原生币 CryptoOnChain → 关闭原生扫描，不再逐块拉整块。
+        # 停用原生币 CryptoOnChain → 关闭原生扫描，常规（infos 非空）块不再拉整块。
         from tron.scanner import TronScanner
 
         CryptoOnChain.objects.filter(chain=self.chain, crypto=self.trx).update(
@@ -2894,7 +2951,9 @@ class TronScannerTests(TestCase):
         client = client_cls.return_value
         client.get_latest_solid_block_number.return_value = 123456
         client.get_solid_block_id.return_value = "0" * 64
-        client.get_transaction_infos_by_block.return_value = []
+        client.get_transaction_infos_by_block.return_value = [
+            {"id": "3" * 64, "blockNumber": 123456, "blockTimeStamp": 1_700_000_000_000}
+        ]
 
         TronScanner.scan_chain(chain=self.chain)
 
