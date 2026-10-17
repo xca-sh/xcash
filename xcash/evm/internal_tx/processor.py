@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
-
 import structlog
 from django.db import transaction as db_transaction
-from web3 import Web3
 
 from chains.models import Chain
 from chains.models import TxTask
@@ -14,6 +11,9 @@ from chains.vault_slot_balances import refresh_vault_slot_balance_for_collect_ta
 from chains.vault_slots import get_backend
 from chains.vault_slots import mark_deployed_by_task
 from chains.vault_slots import mark_deployed_if_on_chain_for_task
+from evm.hexutil import checksum_address
+from evm.hexutil import parse_int
+from evm.hexutil import required_hash
 from evm.internal_tx.routing import UnknownInternalBroadcastError
 from evm.internal_tx.routing import get_matcher
 from evm.internal_tx.vault_slot_deploy import confirm_initial_native_balance_transfer
@@ -22,26 +22,6 @@ from evm.saas_gas_billing import notify_vault_slot_collect_gas_fee
 from evm.saas_gas_billing import notify_vault_slot_deploy_gas_fee
 
 logger = structlog.get_logger()
-
-
-def _normalize_tx_hash(value: Any) -> str:
-    """转成带 0x 前缀的小写哈希。"""
-    raw = value.hex() if hasattr(value, "hex") else str(value)
-    raw = raw.removeprefix("0x").lower()
-    return f"0x{raw}"
-
-
-def _normalize_address(value: Any) -> str:
-    """转 checksum 地址。"""
-    return Web3.to_checksum_address(str(value))
-
-
-def _receipt_status(receipt: dict) -> int:
-    """读取 receipt.status，兼容 int / 十进制串 / 0x 十六进制串。"""
-    raw = receipt.get("status", 0)
-    if isinstance(raw, str):
-        return int(raw, 16) if raw.startswith("0x") else int(raw)
-    return int(raw)
 
 
 def _finalize_failed(*, tx_task: TxTask) -> None:
@@ -179,8 +159,8 @@ def process_internal_transaction(
     receipt: dict,
 ) -> bool:
     """处理 tx.from 已识别为系统地址的 EVM 交易。"""
-    tx_hash = _normalize_tx_hash(tx["hash"])
-    from_address = _normalize_address(tx["from"])
+    tx_hash = required_hash(tx["hash"])
+    from_address = checksum_address(str(tx["from"]))
 
     tx_task = TxTask.resolve_by_hash(chain=chain, tx_hash=tx_hash)
     if tx_task is None:
@@ -190,7 +170,7 @@ def process_internal_transaction(
             from_address=from_address,
         )
 
-    status = _receipt_status(receipt)
+    status = parse_int(receipt.get("status", 0))
     if status == 0:
         _finalize_failed(tx_task=tx_task)
         return True

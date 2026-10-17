@@ -3,7 +3,6 @@ from __future__ import annotations
 import binascii
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
 
 import eth_abi
 from eth_abi.exceptions import DecodingError
@@ -15,24 +14,15 @@ from chains.models import TxTask
 from chains.models import VaultSlot
 from currencies.models import Crypto
 from currencies.models import CryptoOnChain
+from evm.hexutil import hex_lower
+from evm.hexutil import parse_int
+from evm.hexutil import topic_to_address
 from evm.internal_tx.facts import MatchedTransferFact
 from evm.internal_tx.log_utils import matches_transfer_log
-from evm.internal_tx.log_utils import normalize_log_index
 
 _COLLECT_SELECTOR = "0x06ec16f8"
 _XCASH_COLLECTED_TOPIC0 = Web3.keccak(text="XcashCollected(address,uint256)").hex()
 _ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
-
-
-def _hex_lower(value: Any) -> str:
-    """提取去掉 0x 前缀的小写十六进制串。"""
-    raw = value.hex() if hasattr(value, "hex") else str(value)
-    return raw.removeprefix("0x").lower()
-
-
-def _topic_to_address(topic: Any) -> str:
-    """从 32 字节 topic 取后 20 字节作为 checksum 地址。"""
-    return Web3.to_checksum_address(f"0x{_hex_lower(topic)[-40:]}")
 
 
 def _decode_collect_token(data: str) -> str | None:
@@ -97,14 +87,14 @@ def _find_collected_log(
         if Web3.to_checksum_address(str(log.get("address") or "")) != slot_address:
             continue
         topics = list(log.get("topics") or [])
-        if len(topics) < 2 or _hex_lower(topics[0]) != _hex_lower(
+        if len(topics) < 2 or hex_lower(topics[0]) != hex_lower(
             _XCASH_COLLECTED_TOPIC0
         ):
             continue
-        emitted_token = _topic_to_address(topics[1])
+        emitted_token = topic_to_address(topics[1])
         if emitted_token != token_address:
             continue
-        raw_data = _hex_lower(log.get("data", "0x0"))
+        raw_data = hex_lower(log.get("data", "0x0"))
         if not raw_data:
             return None
         value = Decimal(int(raw_data, 16))
@@ -113,7 +103,7 @@ def _find_collected_log(
         return _CollectedLog(
             token_address=emitted_token,
             value=value,
-            log_index=normalize_log_index(log.get("logIndex")),
+            log_index=parse_int(log.get("logIndex")),
         )
     return None
 

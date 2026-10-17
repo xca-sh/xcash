@@ -7,10 +7,13 @@ from typing import Any
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
-from web3 import Web3
 from web3.exceptions import ExtraDataLengthError
 
+from evm.hexutil import prefixed_hex
+
 if TYPE_CHECKING:
+    from web3 import Web3
+
     from chains.models import Chain
 
 
@@ -239,7 +242,7 @@ class EvmScannerRpcClient:
         self._block_receipts_supported = True
         result: dict[str, dict] = {}
         for item in receipts or []:
-            tx_hash = self._normalize_receipt_hash(item.get("transactionHash"))
+            tx_hash = prefixed_hex(item.get("transactionHash"))
             if tx_hash:
                 result[tx_hash] = dict(item)
         return result
@@ -260,24 +263,16 @@ class EvmScannerRpcClient:
         if receipts is None:
             return None
         wanted_topics = {
-            self.normalize_topic_hex(topic)
+            prefixed_hex(topic)
             for topic in (topic0 if isinstance(topic0, list) else [topic0])
         }
         logs: list[dict[str, Any]] = []
         for receipt in receipts.values():
             for log in receipt.get("logs") or []:
                 topics = list(log.get("topics") or [])
-                if topics and self.normalize_topic_hex(topics[0]) in wanted_topics:
+                if topics and prefixed_hex(topics[0]) in wanted_topics:
                     logs.append(dict(log))
         return logs
-
-    @staticmethod
-    def normalize_topic_hex(value: Any) -> str:
-        """把 topic 统一为带 0x 前缀的小写十六进制串，兼容 bytes 与 str。"""
-        if isinstance(value, bytes):
-            return Web3.to_hex(value).lower()
-        text = str(value or "").lower()
-        return text if text.startswith("0x") else f"0x{text}"
 
     @staticmethod
     def _is_method_unavailable_error(exc: Exception) -> bool:
@@ -290,20 +285,6 @@ class EvmScannerRpcClient:
             or "not available" in msg
             or "-32601" in msg
         )
-
-    @staticmethod
-    def _normalize_receipt_hash(value: Any) -> str:
-        if value is None:
-            return ""
-        if hasattr(value, "hex"):
-            hex_value = value.hex()
-        else:
-            hex_value = str(value)
-        if not hex_value:
-            return ""
-        if not hex_value.startswith("0x"):
-            hex_value = f"0x{hex_value}"
-        return hex_value.lower()
 
     def get_transaction(self, *, tx_hash: str) -> dict[str, Any] | None:
         tx: dict[str, Any] | None = self._call_with_retry(

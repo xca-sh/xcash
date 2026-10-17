@@ -35,3 +35,35 @@ def topic_to_address(topic: Any) -> str:
     if len(raw) < 40:
         raise ValueError(f"topic too short for address: {topic!r}")
     return checksum_address(f"0x{raw[-40:]}")
+
+
+def prefixed_hex(value: Any) -> str | None:
+    """带 0x 前缀的小写十六进制串（哈希 / topic）；None 或空值返回 None。"""
+    if value is None:
+        return None
+    raw = hex_lower(value)
+    return f"0x{raw}" if raw else None
+
+
+def required_hash(value: Any) -> str:
+    """prefixed_hex 的必填变体：空值抛 ValueError。"""
+    normalized = prefixed_hex(value)
+    if normalized is None:
+        raise ValueError("hash is empty")
+    return normalized
+
+
+def parse_int(value: Any) -> int:
+    """兼容 int / 0x 十六进制串 / 十进制串的整数解析；空串按 0。"""
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if text.startswith(("0x", "0X")):
+        return int(text, 16)
+    return int(text) if text else 0
+
+
+def parse_optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    return parse_int(value)

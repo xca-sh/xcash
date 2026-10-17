@@ -13,6 +13,7 @@ from chains.vault_slots import mark_deployed_if_on_chain_for_task
 from common.time import ago
 from evm.constants import EVM_PENDING_REBROADCAST_TIMEOUT
 from evm.constants import EVM_PENDING_RECEIPT_POLL_DELAY
+from evm.hexutil import hex_lower
 from evm.models import EvmTxTask
 
 logger = structlog.get_logger()
@@ -212,14 +213,7 @@ class EvmTaskPoller:
         canonical_block_hash = canonical_block.get("hash")
         if canonical_block_hash is None:
             raise RuntimeError("EVM canonical block hash missing")
-        return EvmTaskPoller.normalize_hash(
-            receipt_block_hash
-        ) == EvmTaskPoller.normalize_hash(canonical_block_hash)
-
-    @staticmethod
-    def normalize_hash(value: object) -> str:
-        raw = value.hex() if hasattr(value, "hex") else str(value)
-        return raw.removeprefix("0x").lower()
+        return hex_lower(receipt_block_hash) == hex_lower(canonical_block_hash)
 
     @staticmethod
     def _has_required_confirmations(*, chain: Chain, receipt: dict) -> bool:

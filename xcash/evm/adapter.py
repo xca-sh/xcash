@@ -11,6 +11,7 @@ from chains.adapters import TxCheckStatus
 from chains.models import Chain
 from chains.types import AddressStr
 from currencies.models import Crypto
+from evm.hexutil import prefixed_hex
 
 
 class EvmAdapter(AdapterInterface):
@@ -85,7 +86,7 @@ class EvmAdapter(AdapterInterface):
         status = receipt.get("status")
         result_meta = {
             "block_number": cls._receipt_block_number(receipt),
-            "block_hash": cls._receipt_block_hash(receipt),
+            "block_hash": prefixed_hex(receipt.get("blockHash")),
         }
         if status == 1:
             return TxCheckResult(status=TxCheckStatus.SUCCEEDED, **result_meta)
@@ -107,19 +108,6 @@ class EvmAdapter(AdapterInterface):
         if block_number is None:
             return None
         return int(block_number)
-
-    @staticmethod
-    def _receipt_block_hash(receipt: dict) -> str | None:
-        block_hash = receipt.get("blockHash")
-        if block_hash is None:
-            return None
-        if hasattr(block_hash, "hex"):
-            value = block_hash.hex()
-        else:
-            value = str(block_hash)
-        if not value:
-            return None
-        return value.lower() if value.startswith("0x") else f"0x{value.lower()}"
 
     @classmethod
     def _is_contract_code_empty(cls, chain: Chain, address: AddressStr) -> bool:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
 
 import structlog
 from web3 import Web3
@@ -17,6 +16,10 @@ from chains.models import VaultSlotUsage
 from chains.service import MAX_TRANSFER_VALUE
 from chains.service import ObservedTransferPayload
 from chains.service import TransferService
+from evm.hexutil import hex_lower
+from evm.hexutil import parse_int
+from evm.hexutil import required_hash
+from evm.hexutil import topic_to_address
 
 logger = structlog.get_logger()
 
@@ -72,7 +75,7 @@ def process_vault_slot_initial_native_balance(
         return None
 
     block_number = parse_int(receipt["blockNumber"])
-    block_hash = normalize_required_hash(receipt["blockHash"])
+    block_hash = required_hash(receipt["blockHash"])
     payment_datetime = tx_task.created_at
     timestamp = int(payment_datetime.timestamp())
     native_crypto = chain.native_coin
@@ -177,28 +180,3 @@ def find_initial_native_balance_log(
             event_index=event_index,
         )
     return None
-
-
-def topic_to_address(topic: Any) -> str:
-    return Web3.to_checksum_address(f"0x{hex_lower(topic)[-40:]}")
-
-
-def hex_lower(value: Any) -> str:
-    raw = value.hex() if hasattr(value, "hex") else str(value)
-    return raw.removeprefix("0x").lower()
-
-
-def normalize_required_hash(value: object) -> str:
-    raw = hex_lower(value)
-    if not raw:
-        raise ValueError("hash is empty")
-    return f"0x{raw.lower()}"
-
-
-def parse_int(raw_value: Any) -> int:
-    if isinstance(raw_value, int):
-        return raw_value
-    value = str(raw_value).strip()
-    if value.startswith(("0x", "0X")):
-        return int(value, 16)
-    return int(value) if value else 0

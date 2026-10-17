@@ -18,6 +18,11 @@ from chains.service import ObservedTransferPayload
 from chains.service import TransferService
 from currencies.models import CryptoOnChain
 from evm.hexutil import checksum_address
+from evm.hexutil import hex_lower
+from evm.hexutil import parse_int
+from evm.hexutil import parse_optional_int
+from evm.hexutil import prefixed_hex
+from evm.hexutil import required_hash
 from evm.hexutil import topic_to_address
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 from evm.scanner.constants import XCASH_NATIVE_RECEIVED_TOPIC0
@@ -115,7 +120,7 @@ class EvmObservedTransferProcessor:
         if not topics:
             return None
 
-        topic0 = cls._normalize_hash(topics[0])
+        topic0 = prefixed_hex(topics[0])
         if topic0 == XCASH_NATIVE_RECEIVED_TOPIC0.lower():
             return cls._parse_native_log(
                 log=log, chain=chain, owned_addresses=owned_addresses
@@ -145,11 +150,11 @@ class EvmObservedTransferProcessor:
         try:
             slot_address = checksum_address(str(log.get("address", "")))
             payer = topic_to_address(topics[1])
-            value = Decimal(int(cls._to_hex(log.get("data", "0x0")), 16))
-            block_number = cls._parse_int(log["blockNumber"])
-            block_hash = cls._normalize_required_hash(log["blockHash"])
-            tx_hash = cls._normalize_required_hash(log["transactionHash"])
-            block_log_index = cls._parse_optional_int(log.get("logIndex"))
+            value = Decimal(int(hex_lower(log.get("data", "0x0")), 16))
+            block_number = parse_int(log["blockNumber"])
+            block_hash = required_hash(log["blockHash"])
+            tx_hash = required_hash(log["transactionHash"])
+            block_log_index = parse_optional_int(log.get("logIndex"))
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             logger.warning(
                 "EVM 原生币充值日志解析失败，已跳过",
@@ -213,14 +218,14 @@ class EvmObservedTransferProcessor:
             if from_address in owned_addresses:
                 return None
 
-            raw_hex = cls._to_hex(log.get("data", "0x0"))
+            raw_hex = hex_lower(log.get("data", "0x0"))
             if not raw_hex:
                 return None
             value = Decimal(int(raw_hex, 16))
-            block_number = cls._parse_int(log["blockNumber"])
-            block_hash = cls._normalize_required_hash(log["blockHash"])
-            tx_hash = cls._normalize_required_hash(log["transactionHash"])
-            block_log_index = cls._parse_optional_int(log.get("logIndex"))
+            block_number = parse_int(log["blockNumber"])
+            block_hash = required_hash(log["blockHash"])
+            tx_hash = required_hash(log["transactionHash"])
+            block_log_index = parse_optional_int(log.get("logIndex"))
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             logger.warning(
                 "EVM ERC20 Transfer 日志解析失败，已跳过",
@@ -365,7 +370,7 @@ class EvmObservedTransferProcessor:
         if block_log_index is None:
             return None
         for index, receipt_log in enumerate(receipt.get("logs") or []):
-            if cls._parse_optional_int(receipt_log.get("logIndex")) == block_log_index:
+            if parse_optional_int(receipt_log.get("logIndex")) == block_log_index:
                 return index
         return None
 
@@ -400,44 +405,3 @@ class EvmObservedTransferProcessor:
                 amount=str(observed.amount),
                 error=str(exc),
             )
-
-    @staticmethod
-    def _to_hex(value: Any) -> str:
-        """提取原始十六进制字面（无 0x 前缀），兼容 bytes 与 str。"""
-        if hasattr(value, "hex"):
-            hex_value = value.hex()
-        else:
-            hex_value = str(value)
-        return hex_value[2:] if hex_value.startswith("0x") else hex_value
-
-    @classmethod
-    def _normalize_hash(cls, value: object | None) -> str | None:
-        """转成带 0x 前缀的小写哈希串，空值返回 None。"""
-        if value is None:
-            return None
-        raw_hex = cls._to_hex(value)
-        return f"0x{raw_hex.lower()}" if raw_hex else None
-
-    @classmethod
-    def _normalize_required_hash(cls, value: object) -> str:
-        """要求哈希必填的归一化变体，空值直接抛错。"""
-        normalized = cls._normalize_hash(value)
-        if normalized is None:
-            raise ValueError("hash is empty")
-        return normalized
-
-    @staticmethod
-    def _parse_int(raw_value: Any) -> int:
-        """兼容十进制 / 0x 十六进制 / int 的整数解析。"""
-        if isinstance(raw_value, int):
-            return raw_value
-        value = str(raw_value).strip()
-        if value.startswith(("0x", "0X")):
-            return int(value, 16)
-        return int(value) if value else 0
-
-    @classmethod
-    def _parse_optional_int(cls, raw_value: Any) -> int | None:
-        if raw_value in (None, ""):
-            return None
-        return cls._parse_int(raw_value)

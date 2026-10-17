@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
 
-from web3 import Web3
-
+from evm.hexutil import checksum_address
+from evm.hexutil import hex_lower
+from evm.hexutil import topic_to_address
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 
 
@@ -20,36 +20,23 @@ def matches_transfer_log(
     address = str(log.get("address") or "")
     if not address:
         return False
-    if Web3.to_checksum_address(address) != Web3.to_checksum_address(token):
+    if checksum_address(address) != checksum_address(token):
         return False
 
     topics = list(log.get("topics") or [])
     if len(topics) < 3:
         return False
-    if _hex_lower(topics[0]) != ERC20_TRANSFER_TOPIC0.removeprefix("0x").lower():
+    if hex_lower(topics[0]) != ERC20_TRANSFER_TOPIC0.removeprefix("0x").lower():
         return False
 
-    log_from = Web3.to_checksum_address(f"0x{_hex_lower(topics[1])[-40:]}")
-    log_to = Web3.to_checksum_address(f"0x{_hex_lower(topics[2])[-40:]}")
-    if log_from != Web3.to_checksum_address(from_address):
+    log_from = topic_to_address(topics[1])
+    log_to = topic_to_address(topics[2])
+    if log_from != checksum_address(from_address):
         return False
-    if log_to != Web3.to_checksum_address(to_address):
+    if log_to != checksum_address(to_address):
         return False
 
-    raw_data = _hex_lower(log.get("data", "0x0"))
+    raw_data = hex_lower(log.get("data", "0x0"))
     if not raw_data:
         return False
     return Decimal(int(raw_data, 16)) == value
-
-
-def normalize_log_index(value: Any) -> int:
-    """把 logIndex 解析为 int，兼容十进制 / 0x 十六进制 / int。"""
-    if isinstance(value, str):
-        return int(value, 16) if value.startswith("0x") else int(value)
-    return int(value)
-
-
-def _hex_lower(value: Any) -> str:
-    """提取去掉 0x 前缀的小写十六进制串。"""
-    raw = value.hex() if hasattr(value, "hex") else str(value)
-    return raw.removeprefix("0x").lower()
