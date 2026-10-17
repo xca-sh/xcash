@@ -9,7 +9,6 @@ import structlog
 from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.db import Error as DatabaseLayerError
-from django.db import transaction
 from django.db.models import F
 from django.db.models.functions import Greatest
 from django.utils import timezone
@@ -414,14 +413,14 @@ class TronScanner:
 
     @classmethod
     def _get_or_create_cursor(cls, *, chain: Chain) -> TronWatchCursor:
-        with transaction.atomic():
-            cursor, _ = TronWatchCursor.objects.select_for_update().get_or_create(
-                chain=chain,
-                defaults={
-                    "last_scanned_block": 0,
-                    "enabled": True,
-                },
-            )
+        """取出或新建本链的扫描游标；不加行锁的理由同 EvmLogScanner._get_or_create_cursor。"""
+        cursor, _ = TronWatchCursor.objects.get_or_create(
+            chain=chain,
+            defaults={
+                "last_scanned_block": 0,
+                "enabled": True,
+            },
+        )
         return cursor
 
     @classmethod

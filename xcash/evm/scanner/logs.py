@@ -4,7 +4,6 @@ from typing import Any
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
-from django.db import transaction
 from django.db.models import F
 from django.db.models.functions import Greatest
 from django.utils import timezone
@@ -250,12 +249,15 @@ class EvmLogScanner:
 
     @classmethod
     def _get_or_create_cursor(cls, *, chain: Chain) -> EvmScanCursor:
-        """加锁取出或新建本链的扫描游标，避免并发扫描争抢。"""
-        with transaction.atomic():
-            cursor, _ = EvmScanCursor.objects.select_for_update().get_or_create(
-                chain=chain,
-                defaults={"last_scanned_block": 0, "enabled": True},
-            )
+        """取出或新建本链的扫描游标。
+
+        不加行锁：同链扫描已由 _scan_evm_chain 的 per-chain 互斥锁串行化，游标推进全部
+        是带 Greatest 的条件 UPDATE；并发新建由 chain 唯一约束收口（get_or_create 撞约束后回查）。
+        """
+        cursor, _ = EvmScanCursor.objects.get_or_create(
+            chain=chain,
+            defaults={"last_scanned_block": 0, "enabled": True},
+        )
         return cursor
 
     @staticmethod
