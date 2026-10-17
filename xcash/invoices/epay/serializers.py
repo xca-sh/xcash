@@ -7,6 +7,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from currencies.models import Fiat
+from webhooks.service import delivery_url_scheme_allowed
 
 # EPay V1 协议文档原文是 "Amount in yuan with max 2 decimals"，即「最多」两位小数。
 # 真实 typecho/wordpress/discuz 等商户插件经常发送 "18" 或 "18.5"，因此放宽校验：
@@ -39,6 +40,13 @@ class EpaySubmitSerializer(serializers.Serializer):
     )
     sign = serializers.CharField(max_length=128)
     sign_type = serializers.CharField(max_length=16)
+
+    def validate_notify_url(self, value: str) -> str:
+        # 投递只接受 https；http 地址要到付款后投递时才失败，商户收不到支付通知。
+        # 在建单时拒绝（对外回 fail），商户接入阶段就能发现。
+        if not delivery_url_scheme_allowed(value):
+            raise serializers.ValidationError("notify_url must use https.")
+        return value
 
     def validate_sign_type(self, value: str) -> str:
         normalized = value.upper()

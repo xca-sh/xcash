@@ -11,6 +11,7 @@
 from decimal import Decimal
 
 import pytest
+from django.test import override_settings
 
 from chains.models import ChainType
 from projects.models import InvoiceReceivingMode
@@ -170,10 +171,25 @@ class TestWebhookValidation:
         # URLField 的内置校验或自定义 scheme 校验都会阻止；接受任一 400。
         assert response.status_code == 400
 
-    def test_accepts_http_url(self, client, project):
+    @override_settings(WEBHOOK_ALLOW_INTERNAL_TARGETS=False)
+    def test_rejects_http_url(self, client, project):
+        # 投递只接受 https；放行 http 会让付款后的通知直接投递失败。
         response = client.patch(
             _url(project),
             data={"webhook": "http://example.com/cb"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+        assert response.status_code == 400
+        project.refresh_from_db()
+        assert project.webhook != "http://example.com/cb"
+
+    @override_settings(WEBHOOK_ALLOW_INTERNAL_TARGETS=True)
+    def test_accepts_http_url_when_internal_targets_allowed(self, client, project):
+        # 本地联调 / 压测的内网放行模式下投递接受 http，入口保持同一口径。
+        response = client.patch(
+            _url(project),
+            data={"webhook": "http://localhost:8000/cb"},
             content_type="application/json",
             HTTP_AUTHORIZATION=AUTH_HEADER,
         )

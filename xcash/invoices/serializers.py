@@ -19,6 +19,7 @@ from common.serializers import StrippedDecimalField
 from currencies.service import CryptoService
 from currencies.service import FiatService
 from projects.service import ProjectService
+from webhooks.service import delivery_url_scheme_allowed
 
 from .models import Invoice
 from .models import InvoiceProtocol
@@ -97,6 +98,12 @@ class InvoiceCreateSerializer(Serializer):
                 request.headers.get(APPID_HEADER)
             )
         return self._project
+
+    def validate_notify_url(self, value):  # noqa
+        # 投递只接受 https；http 地址要到付款后投递时才失败，商户收不到支付通知。
+        if not delivery_url_scheme_allowed(value):
+            raise ValidationError("notify_url 必须使用 https 地址")
+        return value
 
     def validate_currency(self, value):  # noqa
         # 计价货币恒为法币：收款加密货币改由 methods 表达，二者职责彻底分离。

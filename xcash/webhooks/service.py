@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
+from django.conf import settings
 from django.db import transaction
 
 from webhooks.models import WebhookEvent
+
+
+def delivery_url_scheme_allowed(url: str) -> bool:
+    """回调地址能否被投递，供各录入入口提前拒绝。
+
+    投递只接受 https（见 webhooks.tasks.safe_delivery_target）：入口若放行 http，
+    要等到付款后真正投递时才判为失败，商户收不到支付通知。内网放行模式（本地联调、
+    压测）下投递也接受 http，入口保持同一口径。
+    """
+    if getattr(settings, "WEBHOOK_ALLOW_INTERNAL_TARGETS", False):
+        return True
+    return urlsplit(url).scheme == "https"
 
 
 class WebhookService:

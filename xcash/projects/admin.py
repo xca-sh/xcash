@@ -21,6 +21,7 @@ from invoices.models import DifferRecipientAddress
 from invoices.models import EpayMerchant
 from projects.models import Customer
 from projects.models import Project
+from webhooks.service import delivery_url_scheme_allowed
 
 # Register your models here.
 
@@ -74,6 +75,13 @@ class ProjectForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if "ip_white_list" in self.fields:
             self.fields["ip_white_list"].help_text = IP_WHITE_LIST_HELP_TEXT
+
+    def clean_webhook(self):
+        # 投递只接受 https，入口放行 http 会让付款后的通知直接投递失败。
+        webhook = self.cleaned_data.get("webhook", "")
+        if webhook and not delivery_url_scheme_allowed(webhook):
+            raise forms.ValidationError(_("通知地址必须使用 https。"))
+        return webhook
 
     def clean_ip_white_list(self):
         """

@@ -398,6 +398,17 @@ class EpaySubmitServiceTests(TestCase):
         params["sign"] = build_epay_v1_sign(params, self.merchant.signing_key)
         return params
 
+    @override_settings(WEBHOOK_ALLOW_INTERNAL_TARGETS=False)
+    @patch("invoices.epay.service.check_saas_permission")
+    def test_submit_rejects_http_notify_url(self, _mock_check):
+        # 投递只接受 https；建单时就拒绝（对外回 fail），而不是付款后通知直接投递失败。
+        with self.assertRaises(EpaySubmitError):
+            EpaySubmitService.submit(
+                self._signed_params(notify_url="http://merchant.example.com/notify")
+            )
+
+        self.assertFalse(Invoice.objects.filter(project=self.project).exists())
+
     @patch("invoices.epay.service.InvoiceService.initialize_invoice")
     @patch("invoices.epay.service.check_saas_permission")
     def test_submit_creates_invoice_and_epay_order(self, mock_check, mock_initialize):

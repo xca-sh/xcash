@@ -894,6 +894,22 @@ class InvoiceCreateAmountValidationTests(TestCase):
             self.validate_amount("0.00")
 
 
+@override_settings(WEBHOOK_ALLOW_INTERNAL_TARGETS=False)
+class InvoiceCreateNotifyUrlValidationTests(TestCase):
+    """notify_url 只接受投递时能送达的地址。"""
+
+    def test_rejects_http_notify_url(self):
+        # 投递只接受 https；建单时放行 http，付款后的通知会直接投递失败。
+        with self.assertRaises(ValidationError):
+            InvoiceCreateSerializer().validate_notify_url(
+                "http://merchant.example.com/notify"
+            )
+
+    def test_accepts_https_notify_url(self):
+        url = "https://merchant.example.com/notify"
+        self.assertEqual(InvoiceCreateSerializer().validate_notify_url(url), url)
+
+
 class InvoiceDuplicateOutNoTests(TestCase):
     def setUp(self):
         # 屏蔽 SaaS 权限回调，避免单测触发真实 HTTP 请求

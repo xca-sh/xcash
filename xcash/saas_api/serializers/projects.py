@@ -6,6 +6,7 @@ from rest_framework import serializers
 
 from chains.models import ChainType
 from projects.models import Project
+from webhooks.service import delivery_url_scheme_allowed
 
 # 业务校验上下界，集中声明便于审计与调整。
 HMAC_KEY_MIN_LENGTH = 16
@@ -15,11 +16,24 @@ HMAC_KEY_MAX_LENGTH = 32
 IP_WHITE_LIST_MAX_ENTRIES = 100
 
 
+def validate_webhook_url(value: str) -> str:
+    # URLField 已校验格式；这里只放行可投递的地址：https，内网放行模式下另放行 http。
+    if not value:
+        return value
+    is_http_url = value.startswith(("http://", "https://"))
+    if not is_http_url or not delivery_url_scheme_allowed(value):
+        raise serializers.ValidationError("webhook 必须使用 https 地址")
+    return value
+
+
 class ProjectCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = ["name", "webhook"]
         extra_kwargs = {"webhook": {"required": False}}
+
+    def validate_webhook(self, value: str) -> str:
+        return validate_webhook_url(value)
 
     def create(self, validated_data):
         if settings.DEBUG:
@@ -52,10 +66,7 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
         extra_kwargs = {field: {"required": False} for field in fields}
 
     def validate_webhook(self, value: str) -> str:
-        # URLField 已校验 URL 格式；此处额外要求必须 http/https（避免 ftp/javascript 等）。
-        if value and not value.startswith(("http://", "https://")):
-            raise serializers.ValidationError("webhook 必须以 http:// 或 https:// 开头")
-        return value
+        return validate_webhook_url(value)
 
     def validate_hmac_key(self, value: str) -> str:
         if len(value) < HMAC_KEY_MIN_LENGTH or len(value) > HMAC_KEY_MAX_LENGTH:
