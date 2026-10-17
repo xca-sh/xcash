@@ -33,6 +33,8 @@ from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.models import Wallet
 from chains.vault_slots import create_collect_tx_task_for_slot
+from chains.vault_slots import ensure_deposit_address
+from chains.vault_slots import schedule_deploy
 from core.models import SystemSettings
 from core.models import SystemWallet
 from currencies.models import Crypto
@@ -180,7 +182,7 @@ def test_concurrent_schedule_deploy_reuses_single_task_for_same_slot():
         connections.close_all()
         try:
             barrier.wait(timeout=10)
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
             with lock:
                 results.append(None if task is None else task.pk)
         except Exception as exc:  # pragma: no cover - 失败时由断言展示异常
@@ -310,7 +312,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         """
         return patch(
             "chains.tasks.schedule_vault_slot_deploy.delay",
-            side_effect=VaultSlot.schedule_deploy,
+            side_effect=schedule_deploy,
         )
 
     def test_first_ensure_deposit_address_delays_deploy_for_token(self):
@@ -325,7 +327,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            address = VaultSlot.ensure_deposit_address(
+            address = ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.token,
@@ -350,7 +352,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             self.patch_deploy_task_delay() as deploy_delay,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            address = VaultSlot.ensure_deposit_address(
+            address = ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.chain.native_coin,
@@ -375,7 +377,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch.object(EvmTxTask, "schedule"),
             self.captureOnCommitCallbacks(execute=True),
         ):
-            VaultSlot.ensure_deposit_address(
+            ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.token,
@@ -421,7 +423,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
 
         slot.refresh_from_db()
         self.assertEqual(slot.deploy_tx_task, task)
@@ -431,7 +433,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
 
         self.assertEqual(task.sender, self.system_sender)
 
@@ -474,7 +476,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch("evm.vault_slots.is_deployed_on_chain", return_value=True),
             patch.object(EvmTxTask, "schedule") as schedule,
         ):
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
 
         self.assertIsNone(task)
         schedule.assert_not_called()
@@ -487,10 +489,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            existing_task = VaultSlot.schedule_deploy(slot.pk)
+            existing_task = schedule_deploy(slot.pk)
 
         with address_patch, patch.object(EvmTxTask, "schedule") as schedule:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
 
         self.assertEqual(task.pk, existing_task.pk)
         schedule.assert_not_called()
@@ -500,13 +502,13 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            existing_task = VaultSlot.schedule_deploy(slot.pk)
+            existing_task = schedule_deploy(slot.pk)
         existing_task.status = TxTaskStatus.SUCCEEDED
         existing_task.save(update_fields=["status", "updated_at"])
         VaultSlot.objects.filter(pk=slot.pk).update(is_deployed=True)
 
         with address_patch, patch.object(EvmTxTask, "schedule") as schedule:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
 
         self.assertIsNone(task)
         schedule.assert_not_called()
@@ -516,12 +518,12 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            failed_task = VaultSlot.schedule_deploy(slot.pk)
+            failed_task = schedule_deploy(slot.pk)
         failed_task.status = TxTaskStatus.FAILED
         failed_task.save(update_fields=["status", "updated_at"])
 
         with address_patch:
-            new_task = VaultSlot.schedule_deploy(slot.pk)
+            new_task = schedule_deploy(slot.pk)
 
         slot.refresh_from_db()
         self.assertNotEqual(new_task.pk, failed_task.pk)
@@ -532,7 +534,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            failed_task = VaultSlot.schedule_deploy(slot.pk)
+            failed_task = schedule_deploy(slot.pk)
         failed_task.status = TxTaskStatus.FAILED
         failed_task.save(update_fields=["status", "updated_at"])
 
@@ -541,7 +543,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch("evm.vault_slots.is_deployed_on_chain", return_value=True),
             patch.object(EvmTxTask, "schedule") as schedule,
         ):
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
 
         self.assertIsNone(task)
         slot.refresh_from_db()
@@ -563,7 +565,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.chain.refresh_from_db()
 
         with address_patch:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
         task.append_tx_hash(tx_hash)
         TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.SUBMITTED)
 
@@ -606,7 +608,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.chain.refresh_from_db()
 
         with address_patch:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
         task.append_tx_hash(tx_hash)
         TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.SUBMITTED)
 
@@ -645,7 +647,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.chain.refresh_from_db()
 
         with address_patch:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
         task.append_tx_hash(tx_hash)
         TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.SUBMITTED)
 
@@ -742,7 +744,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.chain.refresh_from_db()
 
         with address_patch:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
         task.append_tx_hash(tx_hash)
         TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.SUBMITTED)
 
@@ -834,7 +836,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.chain.refresh_from_db()
 
         with address_patch:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
         task.append_tx_hash(tx_hash)
         TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.SUBMITTED)
         task.refresh_from_db()
@@ -1090,7 +1092,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         tx_hash = "0x" + "ac" * 32
 
         with address_patch:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
         task.append_tx_hash(tx_hash)
         TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.SUBMITTED)
 
@@ -1131,7 +1133,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         )
 
         with address_patch:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
         task.tx_hash = tx_hash
         task.save(update_fields=["tx_hash", "updated_at"])
 
@@ -1168,7 +1170,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         slot = self._create_vault_slot()
         address_patch = self.patch_address_derivation()
         with address_patch:
-            task = VaultSlot.schedule_deploy(slot.pk)
+            task = schedule_deploy(slot.pk)
         task.tx_hash = "0x" + "ef" * 32
         task.save(update_fields=["tx_hash", "updated_at"])
 
@@ -1187,7 +1189,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch.object(EvmTxTask, "schedule") as schedule,
             self.assertRaisesRegex(RuntimeError, "智能合约收款归集地址未配置"),
         ):
-            VaultSlot.ensure_deposit_address(
+            ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.token,
@@ -1210,12 +1212,12 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch.object(EvmTxTask, "schedule"),
             self.captureOnCommitCallbacks(execute=True),
         ):
-            first_address = VaultSlot.ensure_deposit_address(
+            first_address = ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.token,
             )
-            second_address = VaultSlot.ensure_deposit_address(
+            second_address = ensure_deposit_address(
                 chain=second_chain,
                 customer=self.customer,
                 crypto=self.token,
@@ -1246,7 +1248,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             self.patch_deploy_task_delay(),
             self.captureOnCommitCallbacks(execute=True),
         ):
-            address = VaultSlot.ensure_deposit_address(
+            address = ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.chain.native_coin,
@@ -1264,14 +1266,14 @@ class VaultSlotAddressSchedulingTests(TestCase):
         address_patch = self.patch_address_derivation()
 
         with address_patch:
-            existing_task = VaultSlot.schedule_deploy(slot.pk)
+            existing_task = schedule_deploy(slot.pk)
 
         with (
             address_patch,
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            address = VaultSlot.ensure_deposit_address(
+            address = ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.token,
@@ -1293,7 +1295,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             address_patch,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            first_address = VaultSlot.ensure_deposit_address(
+            first_address = ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.token,
@@ -1304,7 +1306,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            second_address = VaultSlot.ensure_deposit_address(
+            second_address = ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.token,
@@ -1341,7 +1343,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch.object(EvmTxTask, "schedule") as schedule,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            address = VaultSlot.ensure_deposit_address(
+            address = ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.token,
@@ -1373,7 +1375,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ),
             self.assertRaises(IntegrityError) as raised,
         ):
-            VaultSlot.ensure_deposit_address(
+            ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.token,
@@ -1621,7 +1623,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         schedule.save(update_fields=["due_at", "updated_at"])
 
         with address_patch:
-            deploy_task = VaultSlot.schedule_deploy(slot.pk)
+            deploy_task = schedule_deploy(slot.pk)
         self.assertIsNotNone(deploy_task)
 
         marked = mark_deployed_by_task(deploy_task)

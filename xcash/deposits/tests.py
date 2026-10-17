@@ -595,9 +595,7 @@ class DepositAddressValidationTests(TestCase):
             active=False,
         )
 
-        with patch(
-            "deposits.service.VaultSlot.ensure_deposit_address"
-        ) as ensure_address:
+        with patch("deposits.service.ensure_deposit_address") as ensure_address:
             response = self.call_address(project=project, chain=chain, crypto=crypto)
 
         self.assertEqual(
@@ -670,7 +668,7 @@ class DepositCustomerLimitTests(TestCase):
                 return_value=True,
             ),
             patch(
-                "deposits.service.VaultSlot.ensure_deposit_address",
+                "deposits.service.ensure_deposit_address",
                 return_value="0x000000000000000000000000000000000000dEaD",
             ),
         ):

@@ -18,6 +18,7 @@ from chains.models import TransferType
 from chains.models import VaultSlot
 from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
+from chains.vault_slots import ensure_deposit_address
 from chains.vault_slots import schedule_collect_for_slot
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
@@ -105,9 +106,9 @@ class DepositService:
                 raise APIError(ErrorCode.DEPOSIT_CUSTOMER_LIMIT_REACHED)
         customer, _ = Customer.objects.get_or_create(project=project, uid=uid)
 
-        deposit_address = VaultSlot.ensure_deposit_address(
-            chain,
-            customer,
+        deposit_address = ensure_deposit_address(
+            chain=chain,
+            customer=customer,
             crypto=crypto,
         )
         return deposit_address, chain, crypto

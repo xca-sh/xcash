@@ -146,10 +146,10 @@ def schedule_vault_slot_deploy(self, slot_pk: int) -> None:
     此前这一步同步跑在请求线程的 on_commit 回调里，RPC 抖动会把已经落库的下单请求
     打成 500；挪到这里后请求不再内联链上调用，失败按指数退避重试，最终一致。
     """
-    from chains.models import VaultSlot  # noqa: PLC0415
+    from chains.vault_slots import schedule_deploy  # noqa: PLC0415
 
     try:
-        VaultSlot.schedule_deploy(slot_pk)
+        schedule_deploy(slot_pk)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "VaultSlot 预部署调度失败，退避重试",

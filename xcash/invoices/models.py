@@ -339,6 +339,7 @@ class Invoice(models.Model):
         crypto_amount: Decimal,
     ) -> tuple[str, Decimal]:
         """智能合约收款：选择或创建本次账单可使用的 INVOICE VaultSlot。"""
+        from chains.vault_slots import ensure_invoice_address
         from common.permission_check import get_saas_invoice_vault_slot_limit
         from core.runtime_settings import get_invoice_vault_slot_limit_per_project_chain
 
@@ -371,6 +372,7 @@ class Invoice(models.Model):
                 chain=chain,
                 crypto_amount=crypto_amount,
             ):
+                from chains.vault_slots import schedule_deploy
                 from chains.vault_slots import should_predeploy_on_address_exposure
 
                 if not slot.is_deployed and should_predeploy_on_address_exposure(
@@ -378,7 +380,7 @@ class Invoice(models.Model):
                     crypto=crypto,
                 ):
                     db_transaction.on_commit(
-                        lambda slot_pk=slot.pk: VaultSlot.schedule_deploy(slot_pk)
+                        lambda slot_pk=slot.pk: schedule_deploy(slot_pk)
                     )
                 return slot.address, crypto_amount
 
@@ -396,7 +398,7 @@ class Invoice(models.Model):
                     f"账单 VaultSlot 数量已达上限({slot_limit})"
                 )
             try:
-                VaultSlot.ensure_invoice_address(
+                ensure_invoice_address(
                     project=self.project,
                     chain=chain,
                     invoice_index=invoice_index,

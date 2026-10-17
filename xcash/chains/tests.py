@@ -878,7 +878,7 @@ class TransferServiceCreateObservedTests(TestCase):
         )
 
         with (
-            patch.object(VaultSlot, "schedule_deploy") as schedule_deploy,
+            patch("chains.vault_slots.schedule_deploy") as schedule_deploy,
             self.captureOnCommitCallbacks(execute=True),
         ):
             result = TransferService.create_observed_transfer(observed=current)
@@ -921,7 +921,7 @@ class TransferServiceCreateObservedTests(TestCase):
         )
 
         with (
-            patch.object(VaultSlot, "schedule_deploy") as schedule_deploy,
+            patch("chains.vault_slots.schedule_deploy") as schedule_deploy,
             self.captureOnCommitCallbacks(execute=True),
         ):
             result = TransferService.create_observed_transfer(observed=current)

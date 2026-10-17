@@ -999,52 +999,6 @@ class VaultSlot(models.Model):
         raise ValueError(f"unsupported VaultSlot usage: {usage}")
 
     @staticmethod
-    def ensure_deposit_address(
-        chain: Chain,
-        customer,
-        *,
-        crypto,
-    ) -> str:
-        from chains.vault_slots import ensure_deposit_address
-
-        return ensure_deposit_address(
-            chain=chain,
-            customer=customer,
-            crypto=crypto,
-        )
-
-    @staticmethod
-    def ensure_invoice_address(
-        *,
-        project,
-        chain: Chain,
-        invoice_index: int,
-        crypto,
-    ) -> str:
-        from chains.vault_slots import ensure_invoice_address
-
-        return ensure_invoice_address(
-            project=project,
-            chain=chain,
-            invoice_index=invoice_index,
-            crypto=crypto,
-        )
-
-    @staticmethod
-    def schedule_deploy(slot_pk: int) -> TxTask | None:
-        from chains.vault_slots import schedule_deploy
-
-        return schedule_deploy(slot_pk)
-
-    @staticmethod
-    def schedule_collect_for_slot(
-        *, chain: Chain, crypto, slot
-    ) -> VaultSlotCollectSchedule | None:
-        from chains.vault_slots import schedule_collect_for_slot
-
-        return schedule_collect_for_slot(chain=chain, crypto=crypto, slot=slot)
-
-    @staticmethod
     def matched_addresses_for_candidates(
         *, chain: Chain, candidates: set[str]
     ) -> set[str]:

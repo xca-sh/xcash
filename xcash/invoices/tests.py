@@ -32,6 +32,7 @@ from chains.models import TransferStatus
 from chains.models import TransferType
 from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
+from chains.vault_slots import ensure_invoice_address
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
@@ -68,7 +69,7 @@ def create_active_evm_test_chain(*, code=ChainCode.Ethereum) -> Chain:
 
 
 def disable_vault_slot_deploy_schedule(test_case) -> None:
-    patcher = patch("chains.models.VaultSlot.schedule_deploy", return_value=None)
+    patcher = patch("chains.vault_slots.schedule_deploy", return_value=None)
     patcher.start()
     test_case.addCleanup(patcher.stop)
 
@@ -2503,7 +2504,7 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         invoice = self.create_test_invoice(out_no="contract-token-lazy-deploy")
 
         with (
-            patch.object(VaultSlot, "schedule_deploy") as schedule_deploy,
+            patch("chains.vault_slots.schedule_deploy") as schedule_deploy,
             self.captureOnCommitCallbacks(execute=True),
         ):
             selected_address, selected_amount = invoice._allocate_contract_slot(
@@ -2535,7 +2536,7 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         invoice = self.create_test_invoice(out_no="contract-native-predeploy")
 
         with (
-            patch.object(VaultSlot, "schedule_deploy") as schedule_deploy,
+            patch("chains.vault_slots.schedule_deploy") as schedule_deploy,
             self.captureOnCommitCallbacks(execute=True),
         ):
             selected_address, selected_amount = invoice._allocate_contract_slot(
@@ -2936,13 +2937,13 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
             out_no="contract-retry-reselect",
         )
         with self.captureOnCommitCallbacks(execute=False):
-            VaultSlot.ensure_invoice_address(
+            ensure_invoice_address(
                 project=self.project,
                 chain=self.chain,
                 invoice_index=0,
                 crypto=self.crypto,
             )
-            VaultSlot.ensure_invoice_address(
+            ensure_invoice_address(
                 project=self.project,
                 chain=self.chain,
                 invoice_index=1,
