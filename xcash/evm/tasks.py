@@ -31,18 +31,20 @@ def _broadcast_evm_task(pk: int) -> None:
     # poller 在超时与查 receipt 后触发，避免重复消息绕过重播间隔。
     if tx_task.base_task.status != TxTaskStatus.QUEUED:
         return
-    if tx_task.has_lower_queued_nonce() or tx_task.is_pipeline_full():
+    if tx_task.has_lower_queued_nonce():
+        blocked_reason = "lower_queued_nonce"
+    elif tx_task.is_pipeline_full():
+        blocked_reason = "pipeline_full"
+    else:
+        blocked_reason = None
+    if blocked_reason is not None:
         logger.info(
             "EVM 广播被阻断",
             task_pk=tx_task.pk,
             sender=tx_task.sender.address,
             chain=tx_task.chain.code,
             nonce=tx_task.nonce,
-            reason=(
-                "lower_queued_nonce"
-                if tx_task.has_lower_queued_nonce()
-                else "pipeline_full"
-            ),
+            reason=blocked_reason,
         )
         return
     tx_task.broadcast()
@@ -115,10 +117,11 @@ def dispatch_evm_tx_tasks() -> None:
         .order_by("sender_id", "nonce", "created_at")
     )
 
+    # 不再逐条查 has_lower_queued_nonce()：tasks 只含 DISTINCT ON 选出的各 (sender, chain)
+    # 最低 QUEUED nonce，而新任务恒取 max(nonce)+1、也没有任何状态会退回 QUEUED，
+    # 同一事务内不可能冒出更低的 QUEUED nonce，那条 EXISTS 恒为假。
     selected: list[EvmTxTask] = []
     for task in tasks:
-        if task.has_lower_queued_nonce():
-            continue
         if task.is_pipeline_full():
             continue
         selected.append(task)
