@@ -112,6 +112,23 @@ class DifferRecipientAddressAdmin(ModelAdmin):
         ),
     )
 
+    def get_readonly_fields(self, request, obj=None):
+        # 创建后地址、链类型与归属项目不可修改，见 DifferRecipientAddress.IMMUTABLE_FIELDS。
+        if obj is not None:
+            return ("project", "chain_type", "address", "created_at")
+        return self.readonly_fields
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and obj.has_unfinished_invoices():
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def get_actions(self, request):
+        # 批量删除走 QuerySet.delete()，会绕过逐条的未完结账单检查，因此关闭。
+        actions = super().get_actions(request)
+        actions.pop("delete_selected", None)
+        return actions
+
     @display(description=_("收款地址"), ordering="address")
     def display_address(self, obj: DifferRecipientAddress):
         return fmt.truncated(obj.address)

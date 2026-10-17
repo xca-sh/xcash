@@ -1,3 +1,5 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 from saas_api.authentication import SaasTokenAuthentication
@@ -21,6 +23,7 @@ class SaasDifferRecipientAddressViewSet(ModelViewSet):
     serializer_class = DifferRecipientAddressSerializer
     pagination_class = None
     # 显式方法白名单：禁用 PUT（避免整体替换语义），仅 list/create/patch/delete。
+    # PATCH 只能改启用状态与排序；地址、链类型创建后不可修改，删除需无未完结账单。
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_project(self) -> Project:
@@ -49,3 +52,10 @@ class SaasDifferRecipientAddressViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(project=self.get_project())
+
+    def perform_destroy(self, instance):
+        # 仍有未完结账单引用该地址时模型拒绝删除，翻译成 400 而不是 500。
+        try:
+            instance.delete()
+        except DjangoValidationError as exc:
+            raise ValidationError({"detail": exc.messages}) from exc

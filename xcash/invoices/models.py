@@ -80,12 +80,44 @@ class DifferRecipientAddress(models.Model):
     def __str__(self):
         return self.address
 
+    # 账单支付指引按地址字符串引用本行，扫描也只识别现存行的地址：改地址、链类型或
+    # 归属项目，会让引用旧值的未完结账单收不到款。因此创建后只允许改启用状态与排序，
+    # 要换地址就新增一条，再删除旧地址。
+    IMMUTABLE_FIELDS = ("project_id", "chain_type", "address")
+
     def save(self, *args, **kwargs):
         self.full_clean()
         return super().save(*args, **kwargs)
 
+    @db_transaction.atomic
+    def delete(self, *args, **kwargs):
+        # 先锁住本行再检查：账单分配钱包直收地址时会锁定候选地址行，二者串行后，
+        # 不会出现“检查时没有未完结账单、删除前又被分配了新账单”的竞态。
+        DifferRecipientAddress.objects.select_for_update().filter(pk=self.pk).exists()
+        if self.has_unfinished_invoices():
+            raise ValidationError(
+                _("该地址仍有未完结的账单，请先停用，待账单完结后再删除")
+            )
+        return super().delete(*args, **kwargs)
+
+    def has_unfinished_invoices(self) -> bool:
+        """是否仍有账单以本地址为当前支付指引且未完结。
+
+        未完结指：待支付（含已观察到付款、等待区块确认），或已过期但已绑定链上付款
+        （确认后仍会转为已完成）。地址删除后扫描不再识别它的入账，这些账单的付款将
+        无法入账。
+        """
+        return Invoice.objects.filter(
+            Q(status=InvoiceStatus.WAITING)
+            | Q(status=InvoiceStatus.EXPIRED, transfer__isnull=False),
+            project_id=self.project_id,
+            chain__type=self.chain_type,
+            pay_address=self.address,
+        ).exists()
+
     def clean(self) -> None:
         super().clean()
+        self.validate_immutable_fields()
         if self.chain_type == ChainType.EVM and not Web3.is_checksum_address(
             self.address
         ):
@@ -100,6 +132,26 @@ class DifferRecipientAddress(models.Model):
             Q(evm_vault=self.address) | Q(tron_vault=self.address)
         ).exists():
             raise ValidationError({"address": _("钱包直收地址已被收款归集地址占用")})
+
+    def validate_immutable_fields(self) -> None:
+        if self._state.adding or self.pk is None:
+            return
+        stored = (
+            DifferRecipientAddress.objects.filter(pk=self.pk)
+            .values(*self.IMMUTABLE_FIELDS)
+            .first()
+        )
+        if stored is None:
+            return
+        errors = {
+            field.removesuffix("_id"): _(
+                "钱包直收地址创建后不可修改，如需更换请新增地址后删除旧地址"
+            )
+            for field in self.IMMUTABLE_FIELDS
+            if getattr(self, field) != stored[field]
+        }
+        if errors:
+            raise ValidationError(errors)
 
     @staticmethod
     def matched_addresses_for_candidates(*, chain, candidates: set[str]) -> set[str]:
@@ -434,15 +486,21 @@ class Invoice(models.Model):
             )
 
         base_amount = crypto_amount.quantize(self.DIFFER_AMOUNT_STEP, rounding=ROUND_UP)
-        recipient_addresses = list(
-            DifferRecipientAddress.objects.filter(
+        # 锁定候选地址行，与 DifferRecipientAddress.delete 的行锁互斥，地址不会在分配
+        # 途中被删除。同一项目的并发分配会因此短暂串行，锁随本次分配事务释放。
+        recipient_addresses = [
+            recipient.address
+            for recipient in DifferRecipientAddress.objects.select_for_update(
+                no_key=True
+            )
+            .filter(
                 project=self.project,
                 chain_type=chain.type,
                 active=True,
             )
             .order_by("sort_order", "pk")
-            .values_list("address", flat=True)
-        )
+            .only("address")
+        ]
         if recipient_addresses:
             # 一次查出候选区间内已被占用的组合，在内存里挑选，避免地址数 × 偏移档数次查询。
             occupied = set(

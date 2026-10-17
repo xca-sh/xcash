@@ -1,4 +1,5 @@
 import threading
+import time
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ from unittest.mock import Mock
 from unittest.mock import patch
 
 from django.core.cache import cache
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.db import close_old_connections
 from django.db import connection
@@ -777,6 +779,98 @@ class InvoicePaymentSelectionConcurrencyTests(TransactionTestCase):
         self.assertFalse(errors)
         self.assertEqual(len(results), 2)
         self.assertEqual(len({(address, amount) for _, address, amount in results}), 2)
+
+
+class DifferRecipientAddressDeleteConcurrencyTests(TransactionTestCase):
+    def setUp(self):
+        self.project = Project.objects.create(
+            name="DifferDeleteRace",
+            evm_invoice_receiving_mode=InvoiceReceivingMode.Differ,
+        )
+        self.crypto = Crypto.objects.create(
+            name="Tether Race",
+            symbol="USDTR",
+            prices={"USD": "1"},
+            coingecko_id="tether-differ-delete-race",
+        )
+        self.chain = create_active_evm_test_chain(code=ChainCode.Ethereum)
+        CryptoOnChain.objects.create(
+            crypto=self.crypto,
+            chain=self.chain,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000C21"
+            ),
+            decimals=6,
+        )
+        Fiat.objects.get_or_create(code="USD")
+        self.recipient = DifferRecipientAddress.objects.create(
+            project=self.project,
+            chain_type=ChainType.EVM,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000D21"
+            ),
+        )
+
+    def test_delete_waits_for_inflight_allocation_and_is_rejected(self):
+        # 分配事务尚未提交时发起删除：删除必须等分配提交后再检查，从而看到新的
+        # 待支付账单并拒绝；否则地址会被删掉，这张账单的付款将无法入账。
+        invoice = Invoice.objects.create(
+            project=self.project,
+            out_no="race-1",
+            title="Race",
+            currency_id="USD",
+            amount=Decimal("10"),
+            methods={"USDTR": [ChainCode.Ethereum]},
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+        allocated = threading.Event()
+        release = threading.Event()
+        delete_errors: list[Exception] = []
+        allocate_errors: list[Exception] = []
+
+        def allocate() -> None:
+            close_old_connections()
+            try:
+                with db_transaction.atomic():
+                    Invoice.objects.get(pk=invoice.pk).select_method(
+                        self.crypto, self.chain
+                    )
+                    allocated.set()
+                    release.wait(timeout=10)
+            except Exception as exc:  # noqa: BLE001
+                allocate_errors.append(exc)
+                allocated.set()
+            finally:
+                connections.close_all()
+
+        def delete() -> None:
+            close_old_connections()
+            try:
+                DifferRecipientAddress.objects.get(pk=self.recipient.pk).delete()
+            except Exception as exc:  # noqa: BLE001
+                delete_errors.append(exc)
+            finally:
+                connections.close_all()
+
+        allocator = threading.Thread(target=allocate)
+        allocator.start()
+        self.assertTrue(allocated.wait(timeout=10))
+        deleter = threading.Thread(target=delete)
+        deleter.start()
+        # 给删除留出时间：若没有行锁互斥，它会在分配提交前完成删除。
+        time.sleep(0.5)
+        release.set()
+        allocator.join()
+        deleter.join()
+
+        self.assertFalse(allocate_errors)
+        self.assertEqual(len(delete_errors), 1)
+        self.assertIsInstance(delete_errors[0], DjangoValidationError)
+        self.assertTrue(
+            DifferRecipientAddress.objects.filter(pk=self.recipient.pk).exists()
+        )
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.pay_address, self.recipient.address)
 
 
 class InvoiceCreateAmountValidationTests(TestCase):
