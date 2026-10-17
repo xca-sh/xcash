@@ -9,7 +9,6 @@ import structlog
 from celery.exceptions import SoftTimeLimitExceeded
 from django.db import Error as DatabaseLayerError
 from django.utils import timezone
-from web3 import Web3
 from web3.exceptions import TransactionNotFound
 
 from chains.models import Chain
@@ -18,6 +17,8 @@ from chains.service import MAX_TRANSFER_VALUE
 from chains.service import ObservedTransferPayload
 from chains.service import TransferService
 from currencies.models import CryptoOnChain
+from evm.hexutil import checksum_address
+from evm.hexutil import topic_to_address
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 from evm.scanner.constants import XCASH_NATIVE_RECEIVED_TOPIC0
 from evm.scanner.rpc import EvmScannerRpcClient
@@ -142,8 +143,8 @@ class EvmObservedTransferProcessor:
             return None
 
         try:
-            slot_address = Web3.to_checksum_address(str(log.get("address", "")))
-            payer = cls._topic_to_address(topics[1])
+            slot_address = checksum_address(str(log.get("address", "")))
+            payer = topic_to_address(topics[1])
             value = Decimal(int(cls._to_hex(log.get("data", "0x0")), 16))
             block_number = cls._parse_int(log["blockNumber"])
             block_hash = cls._normalize_required_hash(log["blockHash"])
@@ -197,17 +198,18 @@ class EvmObservedTransferProcessor:
             return None
 
         try:
-            token_address = Web3.to_checksum_address(str(log.get("address", "")))
+            token_address = checksum_address(str(log.get("address", "")))
             token = token_registry.get(token_address)
             if token is None:
                 return None
 
-            from_address = cls._topic_to_address(topics[1])
-            to_address = cls._topic_to_address(topics[2])
             # 只观察外部地址打入系统观察地址的入账事实；
             # 系统地址或 VaultSlot 发出的资产移动由 internal_tx receipt 路径收口。
+            # 先判收款方：窗口内绝大多数日志与本系统无关，不必再解码付款方。
+            to_address = topic_to_address(topics[2])
             if to_address not in owned_addresses:
                 return None
+            from_address = topic_to_address(topics[1])
             if from_address in owned_addresses:
                 return None
 
@@ -439,18 +441,3 @@ class EvmObservedTransferProcessor:
         if raw_value in (None, ""):
             return None
         return cls._parse_int(raw_value)
-
-    @staticmethod
-    def _normalize_address(value: Any) -> str | None:
-        if value is None:
-            return None
-        try:
-            return Web3.to_checksum_address(str(value))
-        except ValueError:
-            return None
-
-    @staticmethod
-    def _topic_to_address(topic: object) -> str:
-        """从 32 字节 topic 取后 20 字节作为 checksum 地址。"""
-        raw_hex = EvmObservedTransferProcessor._to_hex(topic)
-        return Web3.to_checksum_address(f"0x{raw_hex[-40:]}")

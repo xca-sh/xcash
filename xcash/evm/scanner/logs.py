@@ -7,11 +7,13 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.db.models import F
 from django.db.models.functions import Greatest
 from django.utils import timezone
-from web3 import Web3
 
 from chains.models import Chain
 from chains.models import ChainType
 from currencies.models import CryptoOnChain
+from evm.hexutil import checksum_address
+from evm.hexutil import hex_lower
+from evm.hexutil import topic_to_address
 from evm.models import EvmScanCursor
 from evm.scanner.constants import DEFAULT_LOG_SCAN_BATCH_SIZE
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
@@ -31,6 +33,9 @@ logger = structlog.get_logger()
 # 扫描按 evm_log_max_block_range（默认 10 块）一段调用 getLogs，取 4 时各链每轮的
 # 分段数与取 2 相同、不增加 RPC 调用；若快链（BSC / Arbitrum）观察到漏账再调大。
 LOG_SCAN_REPLAY_BLOCKS = 4
+
+XCASH_NATIVE_RECEIVED_TOPIC0_HEX = hex_lower(XCASH_NATIVE_RECEIVED_TOPIC0)
+ERC20_TRANSFER_TOPIC0_HEX = hex_lower(ERC20_TRANSFER_TOPIC0)
 
 
 class EvmLogScanner:
@@ -140,12 +145,29 @@ class EvmLogScanner:
         """把外部入账日志交给 Transfer 落库。
 
         代币表（token_registry）决定关注哪些代币与如何解码；本轮命中的系统自有
-        收款地址（owned_addresses）由本窗口日志候选地址即时匹配得出，二者各自传入。
+        地址（owned_addresses）由本窗口日志即时匹配得出，分两段：
+        1. 只用收款方（ERC20 的 to、原生事件的槽位地址）查库。主网一个窗口有数千条
+           代币转账，几乎都与本系统无关，这一步就把它们全部排除。
+        2. 只对收款方命中的日志，再查付款方是否也是自有地址：自有地址之间的转移不是
+           外部入账（由内部交易路径收口），处理器据此跳过。
+        处理器只在收款方命中时才看付款方，所以两段的并集与把全部地址一次查完等价，
+        候选集与 address__in 查询却小得多。
         """
+        parties = cls._transfer_parties_from_logs(logs=logs)
         owned_addresses = load_owned_addresses_for_candidates(
             chain=chain,
-            addresses=cls._watched_address_candidates_from_logs(logs=logs),
+            addresses={recipient for recipient, _ in parties},
         )
+        owned_senders = {
+            sender
+            for recipient, sender in parties
+            if recipient in owned_addresses and sender is not None
+        } - owned_addresses
+        if owned_senders:
+            owned_addresses |= load_owned_addresses_for_candidates(
+                chain=chain,
+                addresses=owned_senders,
+            )
         EvmObservedTransferProcessor.process(
             chain=chain,
             rpc_client=rpc_client,
@@ -195,55 +217,47 @@ class EvmLogScanner:
         return sorted(token_registry.keys())
 
     @classmethod
-    def _watched_address_candidates_from_logs(
+    def _transfer_parties_from_logs(
         cls,
         *,
         logs: list[dict[str, Any]],
-    ) -> set[str]:
-        """从本轮日志里抽出可能命中观察集的地址，供后续批量精确匹配。"""
-        candidates: set[str] = set()
+    ) -> list[tuple[str, str | None]]:
+        """从本轮日志里抽出每笔转账的 (收款方, 付款方)，地址非法的一侧记为 None。"""
+        parties: list[tuple[str, str | None]] = []
         for log in logs:
             if log.get("removed"):
                 continue
             topics = list(log.get("topics") or [])
             if not topics:
                 continue
-            topic0 = cls._normalize_topic(topics[0])
-            if topic0 == XCASH_NATIVE_RECEIVED_TOPIC0.lower():
-                if address := cls._normalize_address(log.get("address")):
-                    candidates.add(address)
-                if len(topics) >= 2 and (payer := cls._topic_to_address(topics[1])):
-                    candidates.add(payer)
+            topic0 = hex_lower(topics[0])
+            if topic0 == XCASH_NATIVE_RECEIVED_TOPIC0_HEX:
+                recipient = cls._safe_address(log.get("address"))
+                sender = (
+                    cls._safe_topic_address(topics[1]) if len(topics) >= 2 else None
+                )
+            elif topic0 == ERC20_TRANSFER_TOPIC0_HEX and len(topics) >= 3:
+                recipient = cls._safe_topic_address(topics[2])
+                sender = cls._safe_topic_address(topics[1])
+            else:
                 continue
-            if topic0 == ERC20_TRANSFER_TOPIC0.lower() and len(topics) >= 3:
-                for topic in topics[1:3]:
-                    if address := cls._topic_to_address(topic):
-                        candidates.add(address)
-        return candidates
+            if recipient is not None:
+                parties.append((recipient, sender))
+        return parties
 
     @staticmethod
-    def _normalize_topic(value: Any) -> str:
-        """把 topic 统一成小写十六进制串，方便比较。"""
-        if isinstance(value, bytes):
-            return Web3.to_hex(value).lower()
-        return str(value or "").lower()
-
-    @staticmethod
-    def _normalize_address(value: Any) -> str | None:
+    def _safe_address(value: Any) -> str | None:
         """转 checksum 地址，非法地址返回 None 而不是抛错。"""
         try:
-            return Web3.to_checksum_address(str(value or ""))
+            return checksum_address(str(value or ""))
         except ValueError:
             return None
 
-    @classmethod
-    def _topic_to_address(cls, topic: Any) -> str | None:
-        """从 32 字节 topic 取最后 20 字节作为地址。"""
+    @staticmethod
+    def _safe_topic_address(topic: Any) -> str | None:
+        """从 32 字节 topic 取最后 20 字节作为地址，非法返回 None。"""
         try:
-            topic_hex = cls._normalize_topic(topic)
-            if len(topic_hex) < 42:
-                return None
-            return Web3.to_checksum_address("0x" + topic_hex[-40:])
+            return topic_to_address(topic)
         except ValueError:
             return None
 

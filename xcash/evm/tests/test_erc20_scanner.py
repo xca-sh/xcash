@@ -1314,6 +1314,59 @@ class EvmErc20ScannerTests(TestCase):
             last_scanned_at=timezone.now() - timedelta(hours=1)
         )
 
+    @patch("evm.scanner.logs.EvmObservedTransferProcessor.process")
+    def test_owned_matching_queries_recipients_first_then_senders_of_hits(
+        self,
+        process_mock,
+    ):
+        # 第一段只拿收款方查库，与本系统无关的转账（两端都是外部地址）不进候选；
+        # 第二段只对收款方命中的日志查付款方，自有地址之间的转移仍能被识别并跳过。
+        other_slot = VaultSlot.objects.create(
+            customer=Customer.objects.create(project=self.project, uid="scanner-b"),
+            usage=VaultSlotUsage.DEPOSIT,
+            chain=self.chain,
+            address=Web3.to_checksum_address("0x" + "bd" * 20),
+            salt=b"\x02" * 32,
+        )
+        external_payer = Web3.to_checksum_address("0x" + "e1" * 20)
+        unrelated_from = Web3.to_checksum_address("0x" + "e2" * 20)
+        unrelated_to = Web3.to_checksum_address("0x" + "e3" * 20)
+        logs = [
+            self._build_transfer_log(
+                from_address=external_payer, to_address=self.vault_slot.address
+            ),
+            self._build_transfer_log(
+                from_address=other_slot.address,
+                to_address=self.vault_slot.address,
+                log_index=6,
+            ),
+            self._build_transfer_log(
+                from_address=unrelated_from, to_address=unrelated_to, log_index=7
+            ),
+        ]
+
+        with patch(
+            "evm.scanner.logs.load_owned_addresses_for_candidates",
+            wraps=load_owned_addresses_for_candidates,
+        ) as lookup_mock:
+            EvmLogScanner._process_logs(
+                chain=self.chain,
+                logs=logs,
+                rpc_client=Mock(),
+                token_registry={self.token_on_chain.address: self.token_on_chain},
+            )
+
+        queried = [call.kwargs["addresses"] for call in lookup_mock.call_args_list]
+        self.assertEqual(
+            queried,
+            [
+                {self.vault_slot.address, unrelated_to},
+                {external_payer, other_slot.address},
+            ],
+        )
+        owned = process_mock.call_args.kwargs["owned_addresses"]
+        self.assertEqual(owned, {self.vault_slot.address, other_slot.address})
+
     def test_candidate_lookup_includes_vault_slots_and_excludes_system_addresses(self):
         # scanner 只观察本轮日志候选中的 VaultSlot 等入账地址，热钱包 Address 不承接外部入账。
         owned_addresses = load_owned_addresses_for_candidates(
