@@ -1,6 +1,5 @@
 from decimal import Decimal
 
-from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.urls import reverse
 from rest_framework import serializers
@@ -124,13 +123,7 @@ class InvoiceCreateSerializer(Serializer):
     def validate(self, attrs):
         project = self._get_project()
 
-        if not settings.DEBUG and (
-            Invoice.objects.filter(
-                project=project, status=InvoiceStatus.WAITING
-            ).count()
-            >= 100
-        ):
-            raise APIError(ErrorCode.TOO_MANY_WAITING)
+        InvoiceService.ensure_waiting_capacity(project)
 
         attrs["methods"] = InvoiceService.finalize_methods(
             project=project,

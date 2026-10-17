@@ -45,6 +45,7 @@ from invoices.models import Invoice
 from invoices.models import InvoiceProtocol
 from invoices.models import InvoiceStatus
 from invoices.serializers import InvoiceCreateSerializer
+from invoices.service import MAX_WAITING_INVOICES_PER_PROJECT
 from invoices.service import InvoiceService
 from invoices.tasks import check_expired
 from invoices.tasks import fallback_invoice_expired
@@ -908,6 +909,46 @@ class InvoiceCreateNotifyUrlValidationTests(TestCase):
     def test_accepts_https_notify_url(self):
         url = "https://merchant.example.com/notify"
         self.assertEqual(InvoiceCreateSerializer().validate_notify_url(url), url)
+
+
+class InvoiceWaitingCapacityTests(TestCase):
+    """项目待支付账单达到上限后拒绝建单；原生与 EPay 建单共用这一判据。"""
+
+    def setUp(self):
+        Fiat.objects.get_or_create(code="USD")
+        self.project = Project.objects.create(name="WaitingCapacity")
+
+    def create_invoices(self, count, *, status=InvoiceStatus.WAITING, prefix="w"):
+        Invoice.objects.bulk_create(
+            [
+                Invoice(
+                    project=self.project,
+                    out_no=f"{prefix}-{index}",
+                    title="t",
+                    currency_id="USD",
+                    amount=Decimal("1"),
+                    methods={},
+                    status=status,
+                    expires_at=timezone.now() + timedelta(minutes=10),
+                )
+                for index in range(count)
+            ]
+        )
+
+    def test_rejects_when_waiting_reaches_cap(self):
+        self.create_invoices(MAX_WAITING_INVOICES_PER_PROJECT)
+
+        with self.assertRaises(APIError) as ctx:
+            InvoiceService.ensure_waiting_capacity(self.project)
+
+        self.assertEqual(ctx.exception.error_code, ErrorCode.TOO_MANY_WAITING)
+
+    def test_finished_invoices_do_not_count(self):
+        self.create_invoices(MAX_WAITING_INVOICES_PER_PROJECT - 1)
+        self.create_invoices(5, status=InvoiceStatus.COMPLETED, prefix="c")
+        self.create_invoices(5, status=InvoiceStatus.EXPIRED, prefix="e")
+
+        InvoiceService.ensure_waiting_capacity(self.project)
 
 
 class InvoiceCreateCallbackUrlLengthTests(TestCase):

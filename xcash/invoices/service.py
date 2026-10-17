@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import structlog
 from aml.service import AmlScreeningService
 from aml.tasks import screen_transfer_aml
+from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
@@ -48,6 +49,10 @@ logger = structlog.get_logger()
 # TRC20 转账 feeLimit 上限（单位 sun，100 TRX），够付绝大多数 TRC20 转账所需的能量/带宽。
 TRON_TRC20_FEE_LIMIT_SUN = 100_000_000
 
+# 单个项目同时处于待支付的账单上限：每张待支付账单都占着一个收款组合（直收的
+# 地址+金额档位、合约收款的槽位），不设上限时刷单可以占满它们。
+MAX_WAITING_INVOICES_PER_PROJECT = 100
+
 INVOICE_PUBLIC_CACHE_KEY_PREFIX = "invoice:public:v1"
 INVOICE_PUBLIC_WAITING_CACHE_TTL = 2
 INVOICE_PUBLIC_NON_WAITING_CACHE_TTL = 60 * 60
@@ -74,6 +79,17 @@ def expire_invoice_public_cache_on_commit(sys_no: str) -> None:
 
 
 class InvoiceService:
+    @staticmethod
+    def ensure_waiting_capacity(project) -> None:
+        """项目待支付账单达到上限时拒绝建单，原生与 EPay 建单共用。"""
+        if settings.DEBUG:
+            return
+        waiting_count = Invoice.objects.filter(
+            project=project, status=InvoiceStatus.WAITING
+        ).count()
+        if waiting_count >= MAX_WAITING_INVOICES_PER_PROJECT:
+            raise APIError(ErrorCode.TOO_MANY_WAITING)
+
     @staticmethod
     def finalize_methods(
         *,

@@ -31,6 +31,7 @@ from invoices.models import EpayOrder
 from invoices.models import Invoice
 from invoices.models import InvoiceProtocol
 from invoices.models import InvoiceStatus
+from invoices.service import MAX_WAITING_INVOICES_PER_PROJECT
 from projects.models import InvoiceReceivingMode
 from projects.models import Project
 
@@ -418,6 +419,46 @@ class EpaySubmitServiceTests(TestCase):
                 EpaySubmitService.submit(self._signed_params(**{field: too_long}))
 
         self.assertFalse(Invoice.objects.filter(project=self.project).exists())
+
+    def create_waiting_invoices(self, count):
+        Invoice.objects.bulk_create(
+            [
+                Invoice(
+                    project=self.project,
+                    out_no=f"waiting-{index}",
+                    title="t",
+                    currency_id="CNY",
+                    amount=Decimal("1"),
+                    methods={},
+                    expires_at=timezone.now() + timedelta(minutes=10),
+                )
+                for index in range(count)
+            ]
+        )
+
+    @patch("invoices.epay.service.check_saas_permission")
+    def test_submit_rejected_when_waiting_invoices_reach_cap(self, _mock_check):
+        # 易支付每次结账都会建单，访客可以反复触发，与原生建单同样受上限约束。
+        self.create_waiting_invoices(MAX_WAITING_INVOICES_PER_PROJECT)
+
+        with self.assertRaises(EpaySubmitError):
+            EpaySubmitService.submit(self._signed_params())
+
+        self.assertFalse(EpayOrder.objects.filter(merchant=self.merchant).exists())
+
+    @patch("invoices.epay.service.InvoiceService.initialize_invoice")
+    @patch("invoices.epay.service.check_saas_permission")
+    def test_resubmit_of_existing_order_not_blocked_by_cap(
+        self, _mock_check, mock_initialize
+    ):
+        # 已建过的订单重复提交走幂等返回，不新建账单，不受上限影响。
+        mock_initialize.side_effect = lambda invoice: invoice
+        first = EpaySubmitService.submit(self._signed_params())
+        self.create_waiting_invoices(MAX_WAITING_INVOICES_PER_PROJECT - 1)
+
+        again = EpaySubmitService.submit(self._signed_params())
+
+        self.assertEqual(again.pk, first.pk)
 
     @patch("invoices.epay.service.InvoiceService.initialize_invoice")
     @patch("invoices.epay.service.check_saas_permission")

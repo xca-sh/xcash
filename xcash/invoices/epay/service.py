@@ -159,6 +159,11 @@ class EpaySubmitService:
         raw_request: dict[str, str],
     ) -> Invoice:
         project = merchant.project
+        # 易支付每次结账都会建单，访客可以反复触发，与原生建单同样受待支付上限约束。
+        try:
+            InvoiceService.ensure_waiting_capacity(project)
+        except APIError as exc:
+            raise EpaySubmitError("too many waiting invoices") from exc
         try:
             methods = InvoiceService.finalize_methods(
                 project=project,
