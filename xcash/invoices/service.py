@@ -24,6 +24,7 @@ from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.service import ChainService
 from chains.service import TransferService
+from chains.vault_slots import is_chain_native_crypto
 from chains.vault_slots import schedule_collect_for_slot
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
@@ -358,7 +359,9 @@ class InvoiceService:
             return None
         base_units, crypto_on_chain = base
 
-        if invoice.crypto.is_native:
+        # 按本链原生币判断：ETH 以 BEP20 上架 BSC 时 Crypto.is_native 仍为真，若当原生币编码，
+        # 钱包会把同等数量的 BNB 打到收款地址，付款无法匹配账单。
+        if is_chain_native_crypto(chain=chain, crypto=invoice.crypto):
             return {
                 "chain_id": chain.chain_id,
                 "is_native": True,
@@ -479,16 +482,19 @@ class InvoiceService:
             return None
         base_units, crypto_on_chain = base
 
+        # 按本链原生币判断：ETH 以 TRC20 上架 Tron 时 Crypto.is_native 仍为真，若当原生币，
+        # TronLink 会发 TRX 而不是该代币，付款无法匹配账单。
+        is_native = is_chain_native_crypto(chain=chain, crypto=invoice.crypto)
         # fee_limit 对原生 TRX 转账无意义（前端忽略即可），仍统一带上以保持字段稳定。
         payment = {
-            "is_native": invoice.crypto.is_native,
+            "is_native": is_native,
             "to": invoice.pay_address,
             "contract": None,
             "amount": str(base_units),
             "fee_limit": TRON_TRC20_FEE_LIMIT_SUN,
             "is_testnet": chain.is_testnet,
         }
-        if invoice.crypto.is_native:
+        if is_native:
             return payment
 
         if not crypto_on_chain.address:

@@ -13,6 +13,7 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import TxTask
 from chains.models import VaultSlot
+from chains.vault_slots import is_chain_native_crypto
 from core.models import SystemWallet
 
 # 原生币在 CryptoOnChain 里 address=""，但归集要调 collect(address(0))；这里把空地址
@@ -23,11 +24,11 @@ NATIVE_COLLECT_TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000"
 def collect_token_address(*, crypto, chain: Chain) -> str:
     """归集时该 crypto 对应的 token 入参：本链原生币用 address(0)，TRC20 用其合约地址。
 
-    必须按「本链 native_coin」判断而不是 Crypto.is_native：is_native 表示它是某条链
-    的原生币，ETH/BNB 等以 TRC20 形式上架 Tron 时同样为真，误判会把代币归集变成
-    collect(address(0)) 扫 TRX，代币永远留在槽位里。
+    必须按「本链原生币」判断而不是 Crypto.is_native：ETH/BNB 等以 TRC20 形式上架
+    Tron 时 is_native 同样为真，误判会把代币归集变成 collect(address(0)) 扫 TRX，
+    代币永远留在槽位里。
     """
-    if getattr(crypto, "pk", None) == chain.native_coin.pk:
+    if is_chain_native_crypto(chain=chain, crypto=crypto):
         return NATIVE_COLLECT_TOKEN_ADDRESS
     return crypto.address(chain)
 

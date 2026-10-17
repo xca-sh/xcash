@@ -594,6 +594,42 @@ class InvoicePaymentSelectionTests(TestCase):
         ):
             invoice._allocate_differ_payment(self.crypto, self.chain_a, Decimal("10"))
 
+    def test_differ_payment_allows_other_chain_native_listed_as_token(self):
+        # ETH 以 BEP20 上架 BSC 是合约币，靠 Transfer 事件即可在 EOA 上观测；
+        # 不能因 Crypto.is_native 为真被当成「EVM 原生币不支持钱包直收」拒绝。
+        address = self.enable_differ_mode(address_suffix="d01")
+        eth, _ = Crypto.objects.get_or_create(
+            symbol="ETH",
+            defaults={"name": "ETH", "coingecko_id": "ethereum", "is_native": True},
+        )
+        CryptoOnChain.objects.create(
+            crypto=eth,
+            chain=self.chain_b,
+            address=Web3.to_checksum_address(
+                "0x2170ed0880ac9a755fd29b2688956bd959f933f8"
+            ),
+            decimals=18,
+        )
+        invoice = self.create_invoice(out_no="payment-differ-eth-on-bsc")
+
+        pay_address, pay_amount = invoice._allocate_differ_payment(
+            eth, self.chain_b, Decimal("0.05")
+        )
+
+        self.assertEqual((pay_address, pay_amount), (address, Decimal("0.05")))
+
+    def test_differ_payment_rejects_evm_chain_native_coin(self):
+        # 本链原生币（BSC 上的 BNB）打到 EOA 不产生事件，钱包直收无法观测，必须拒绝。
+        self.enable_differ_mode(address_suffix="d01")
+        invoice = self.create_invoice(out_no="payment-differ-bnb")
+
+        with self.assertRaisesMessage(
+            Invoice.InvoiceAllocationError, "钱包直收不支持该链原生币"
+        ):
+            invoice._allocate_differ_payment(
+                self.chain_b.native_coin, self.chain_b, Decimal("0.05")
+            )
+
     def test_differ_payment_query_count_independent_of_address_pool(self):
         # 占用组合一次查出、内存挑选：地址数 × 偏移档数不能放大成同等数量的查询。
         self.enable_differ_mode(address_suffix="d01")
@@ -1316,6 +1352,36 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
         methods = Invoice.available_methods(project)
 
         self.assertNotIn(eth.symbol, methods)
+
+    def test_differ_available_methods_allows_other_chain_native_listed_as_token(self):
+        # ETH 以 BEP20 上架 BSC 是合约币，钱包直收按金额匹配即可，应当开放；
+        # 不能因 Crypto.is_native 为真被当成 BSC 原生币排除。
+        project = Project.objects.create(
+            name="Invoice Differ ETH On BSC Project",
+            evm_invoice_receiving_mode=InvoiceReceivingMode.Differ,
+            tron_invoice_receiving_mode=InvoiceReceivingMode.Differ,
+        )
+        bsc_chain = create_active_evm_test_chain(code=ChainCode.BSC)
+        eth, _ = Crypto.objects.get_or_create(
+            symbol="ETH",
+            defaults={"name": "ETH", "coingecko_id": "ethereum", "is_native": True},
+        )
+        CryptoOnChain.objects.create(
+            crypto=eth,
+            chain=bsc_chain,
+            address="0x0000000000000000000000000000000000008831",
+            decimals=18,
+        )
+        DifferRecipientAddress.objects.create(
+            project=project,
+            chain_type=ChainType.EVM,
+            address="0x0000000000000000000000000000000000008832",
+        )
+
+        methods = Invoice.available_methods(project)
+
+        self.assertTrue(eth.is_native)
+        self.assertEqual(methods.get(eth.symbol), [bsc_chain.code])
 
     def test_differ_available_methods_allows_tron_native_coin(self):
         # Tron 原生 TRX 在钱包直收模式可用：逐块 TransferContract 扫描能观测 EOA 收原生。
@@ -3412,6 +3478,31 @@ class InvoiceEvmWalletPaymentTests(InvoiceTestMixin, TestCase):
         # calldata 总长固定：0x + 8(选择器) + 64(地址) + 64(金额) = 138 字符。
         self.assertEqual(len(payload["data"]), 138)
 
+    def test_other_chain_native_listed_as_token_encodes_erc20_transfer(self):
+        # ETH 以 BEP20 上架 BSC 时 Crypto.is_native 仍为真，但它不是 BSC 原生币；
+        # 必须编码为代币 transfer，否则钱包会把同等数量的 BNB 打到收款地址。
+        bsc = create_active_evm_test_chain(code=ChainCode.BSC)
+        eth, _ = Crypto.objects.get_or_create(
+            symbol="ETH",
+            defaults={"name": "ETH", "coingecko_id": "ethereum", "is_native": True},
+        )
+        token = Web3.to_checksum_address("0x2170ed0880ac9a755fd29b2688956bd959f933f8")
+        CryptoOnChain.objects.create(crypto=eth, chain=bsc, address=token, decimals=18)
+        invoice = self.make_invoice(
+            crypto=eth,
+            chain=bsc,
+            pay_amount=Decimal("0.05"),
+            out_no="eth-on-bsc-pay",
+        )
+
+        payload = InvoiceService.build_evm_wallet_payment(invoice)
+
+        self.assertTrue(eth.is_native)
+        self.assertEqual(payload["chain_id"], 56)
+        self.assertEqual(payload["to"], token)
+        self.assertEqual(payload["value"], "0x0")
+        self.assertEqual(payload["data"][-64:], format(5 * 10**16, "064x"))
+
     def test_precision_beyond_chain_decimals_returns_none(self):
         # USDT 链上 6 位精度，7 位报价无法精确编码 → 降级 None，绝不截断金额。
         invoice = self.make_invoice(
@@ -3589,6 +3680,31 @@ class InvoiceTronWalletPaymentTests(InvoiceTestMixin, TestCase):
         self.assertEqual(payload["amount"], "12340000")
         self.assertEqual(payload["fee_limit"], 100000000)
         self.assertFalse(payload["is_testnet"])
+
+    def test_other_chain_native_listed_as_trc20_encodes_contract(self):
+        # ETH 以 TRC20 上架 Tron 时 Crypto.is_native 仍为真，但它不是 TRX；
+        # 必须走合约 transfer，否则 TronLink 会把同等数量的 TRX 打到收款地址。
+        eth, _ = Crypto.objects.get_or_create(
+            symbol="ETH",
+            defaults={"name": "ETH", "coingecko_id": "ethereum", "is_native": True},
+        )
+        contract = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"
+        CryptoOnChain.objects.create(
+            crypto=eth, chain=self.tron_chain, address=contract, decimals=18
+        )
+        invoice = self.make_invoice(
+            crypto=eth,
+            chain=self.tron_chain,
+            pay_amount=Decimal("0.05"),
+            out_no="eth-on-tron-pay",
+        )
+
+        payload = InvoiceService.build_tron_wallet_payment(invoice)
+
+        self.assertTrue(eth.is_native)
+        self.assertFalse(payload["is_native"])
+        self.assertEqual(payload["contract"], contract)
+        self.assertEqual(payload["amount"], str(5 * 10**16))
 
     def test_nile_testnet_invoice_sets_is_testnet_true(self):
         # Nile 测试网账单：is_testnet=True，供前端校验 TronLink 当前网络。

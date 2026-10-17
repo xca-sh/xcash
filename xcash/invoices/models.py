@@ -474,12 +474,13 @@ class Invoice(models.Model):
     ) -> tuple[str, Decimal]:
         """钱包直收：从项目链类型地址池中分配未被 WAITING 账单占用的金额组合。"""
         from chains.capabilities import ChainProductCapabilityService
+        from chains.vault_slots import is_chain_native_crypto
 
-        if (
-            crypto.is_native
-            and not ChainProductCapabilityService.differ_supports_native(
-                chain_type=chain.type
-            )
+        # 只有本链原生币才受「EOA 收原生能否被观测」约束；ETH 以 BEP20 上架 BSC 是合约币，
+        # 靠 Transfer 事件即可观测，不能因 Crypto.is_native 为真被拒。
+        is_native = is_chain_native_crypto(chain=chain, crypto=crypto)
+        if is_native and not ChainProductCapabilityService.differ_supports_native(
+            chain_type=chain.type
         ):
             raise self.InvoiceAllocationError(
                 f"project={self.project_id}, chain={chain.code} 钱包直收不支持该链原生币"

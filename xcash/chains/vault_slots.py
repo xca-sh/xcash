@@ -37,7 +37,17 @@ def should_predeploy_on_address_exposure(
 
 
 def is_chain_native_crypto(*, chain: Chain, crypto) -> bool:
-    return getattr(crypto, "pk", None) == chain.native_coin.pk
+    """是否为本链原生币；全仓库判断「本链原生币」都应走这里。
+
+    不能用 Crypto.is_native：它表示该币是某条链的原生币，ETH/BNB 等以代币形式
+    （BEP20/TRC20）上架别的链时同样为真。误判会让收款按原生币放行、归集按
+    address(0) 扫原生币、一键支付让钱包发出本链原生币。
+
+    本链原生币由 ChainSpec.native_coin_symbol 唯一确定：Chain.native_coin 正是按该
+    符号取 Crypto，且 Crypto.symbol 唯一。故按符号比较与比较 native_coin 主键等价，
+    但不发查询、也不会顺带建币，可放心用在账单分配等热路径上。
+    """
+    return getattr(crypto, "symbol", None) == chain.spec.native_coin_symbol
 
 
 def schedule_deploy_after_commit_if_needed(

@@ -4,6 +4,7 @@ from chains.capabilities import ChainProductCapabilityService
 from chains.constants import CHAIN_SPECS
 from chains.models import ChainType
 from chains.service import ChainService
+from chains.vault_slots import is_chain_native_crypto
 from currencies.models import CryptoOnChain
 from projects.models import InvoiceReceivingMode
 from projects.models import Project
@@ -96,7 +97,7 @@ class ProjectService:
                     continue
             elif mode == InvoiceReceivingMode.Differ:
                 if not ProjectService._differ_invoice_receiving_ready(
-                    chain_type=chain.type,
+                    chain=chain,
                     crypto=crypto,
                     token_address=token.address,
                     differ_chain_types=differ_chain_types,
@@ -120,18 +121,20 @@ class ProjectService:
     @staticmethod
     def _differ_invoice_receiving_ready(
         *,
-        chain_type: str,
+        chain,
         crypto,
         token_address: str,
         differ_chain_types: set[str],
     ) -> bool:
-        if chain_type not in differ_chain_types:
+        if chain.type not in differ_chain_types:
             return False
-        if crypto.is_native:
+        # 按本链原生币判断：ETH 以 BEP20 上架 BSC 是合约币，Crypto.is_native 却为真，
+        # 误判会把它当成 BSC 原生币排除出钱包直收。
+        if is_chain_native_crypto(chain=chain, crypto=crypto):
             # 原生币钱包直收仅在链能观测「EOA 收原生」时开放：Tron 逐块扫 TransferContract
             # 可观测 EOA 收原生；EVM 靠合约事件、原生打到 EOA 零事件，不可观测。
             return ChainProductCapabilityService.differ_supports_native(
-                chain_type=chain_type
+                chain_type=chain.type
             )
         # 合约币（ERC20/TRC20）钱包直收按金额匹配，仍要求该币在链上有合约地址。
         return bool(token_address)
