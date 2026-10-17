@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -245,24 +244,14 @@ class InvoiceService:
                 detail=str(exc),
             )
 
-    @staticmethod
-    def schedule_expiration_check(invoice: Invoice) -> None:
-        """在事务提交后注册过期检查任务，避免回滚后仍派发悬空 Celery 任务。"""
-        from functools import partial
-
-        from .tasks import check_expired
-
-        # 提前捕获值，避免闭包延迟绑定陷阱。
-        eta = invoice.expires_at + timedelta(seconds=1)
-        dispatch = partial(check_expired.apply_async, (invoice.id,), eta=eta)
-        transaction.on_commit(dispatch)
-
     @classmethod
     def initialize_invoice(cls, invoice: Invoice) -> Invoice:
-        """账单创建后的显式初始化入口：worth、自动支付方式、过期任务。"""
+        """账单创建后的显式初始化入口：worth、自动支付方式。
+
+        过期由 fallback_invoice_expired 周期批量处理，这里不再投递逐单 ETA 任务。
+        """
         cls.refresh_initial_worth(invoice)
         cls.try_auto_select_single_method(invoice)
-        cls.schedule_expiration_check(invoice)
         return invoice
 
     @staticmethod

@@ -98,9 +98,11 @@ VAULT_SLOT_COLLECT_SCHEDULE_SECONDS = get_int_default(
     "CELERY_VAULT_SLOT_COLLECT_SCHEDULE_SECONDS",
     60,
 )
+# 账单过期只靠这一个周期任务（不再逐单投递 ETA），周期即过期/槽位释放的最大延迟；
+# 查询走 invoice_waiting_unpaid_idx 部分索引，只扫待支付未绑定转账的账单。
 INVOICE_EXPIRED_SCHEDULE_SECONDS = get_int_default(
     "CELERY_INVOICE_EXPIRED_SCHEDULE_SECONDS",
-    60,
+    15,
 )
 OPERATIONAL_RISKS_SCHEDULE_SECONDS = get_int_default(
     "CELERY_OPERATIONAL_RISKS_SCHEDULE_SECONDS",

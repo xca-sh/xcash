@@ -7,39 +7,14 @@ from .models import InvoiceStatus
 
 
 @shared_task
-def check_expired(instance_id: int):
-    # 无锁预检避免不必要的事务开销。
-    invoice = Invoice.objects.get(id=instance_id)
-    if invoice.status != InvoiceStatus.WAITING or invoice.transfer_id is not None:
-        return
-
-    expired_at = timezone.now()
-    with transaction.atomic():
-        # 只过期尚未观察到付款的账单；已绑定 Transfer 的 WAITING 账单
-        # 表示支付页正在等待链上确认，不能因确认窗口跨过 expires_at 而回退为 EXPIRED。
-        # 注意：Celery ETA 不是硬性保证（worker 重启/broker 故障可能导致提前执行），
-        # 因此必须在锁住后校验 expires_at 已到达，避免误判有效账单为过期。
-        locked = (
-            Invoice.objects.select_for_update()
-            .filter(
-                pk=invoice.pk,
-                status=InvoiceStatus.WAITING,
-                transfer__isnull=True,
-                expires_at__lte=expired_at,
-            )
-            .first()
-        )
-        if locked is None:
-            return
-
-        Invoice.objects.filter(pk=invoice.pk).update(
-            status=InvoiceStatus.EXPIRED,
-            updated_at=expired_at,
-        )
-
-
-@shared_task
 def fallback_invoice_expired():
+    """周期批量过期到期未付的账单，是账单过期的唯一机制。
+
+    不再为每张账单投递 ETA 任务：过期与支付组合槽位释放最多延后一个周期（15s）。
+    只过期尚未观察到付款的账单；已绑定 Transfer 的 WAITING 账单表示支付页正在等待
+    链上确认，不能因确认窗口跨过 expires_at 而回退为 EXPIRED。expires_at 只在建单时
+    写入、此后不会延长，因此锁内无需再复核到期时间。
+    """
     now = timezone.now()
     # 批量收集需要过期的账单 ID，避免逐条处理的 N+1 问题。
     expired_ids = list(

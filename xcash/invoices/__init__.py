@@ -10,7 +10,6 @@ invoices 模块 — 加密货币支付账单管理。
    当前账单支付指引直接存放在 Invoice 上，因此这些路径只锁 Invoice。
 
    - InvoiceService.try_match_invoice() — 无锁探测 → 锁 Invoice → 复核当前支付指引
-   - tasks.check_expired() — 锁 Invoice 后标记过期
    - tasks.fallback_invoice_expired() — 按 pk 顺序锁 Invoice 批次后标记过期
 
 2. **乐观并发（唯一约束 + 重试）**——用于分配当前支付指引的路径。

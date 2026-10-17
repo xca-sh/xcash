@@ -47,7 +47,6 @@ from invoices.models import InvoiceStatus
 from invoices.serializers import InvoiceCreateSerializer
 from invoices.service import MAX_WAITING_INVOICES_PER_PROJECT
 from invoices.service import InvoiceService
-from invoices.tasks import check_expired
 from invoices.tasks import fallback_invoice_expired
 from invoices.viewsets import INVOICE_PUBLIC_NON_WAITING_CACHE_TTL
 from invoices.viewsets import INVOICE_PUBLIC_WAITING_CACHE_TTL
@@ -428,20 +427,6 @@ class InvoicePaymentSelectionTests(TestCase):
         invoice.refresh_from_db()
         self.assertEqual(invoice.pay_amount, Decimal("1.43"))
         self.assertEqual(invoice.worth, Decimal("1.428571"))
-
-    def test_check_expired_marks_waiting_invoice_expired(self):
-        invoice = self.create_invoice(out_no="payment-expire")
-        invoice.select_method(self.crypto, self.chain_a)
-
-        # 将账单设为已过期（check_expired 会校验 expires_at <= now）
-        Invoice.objects.filter(pk=invoice.pk).update(
-            expires_at=timezone.now() - timedelta(seconds=1),
-        )
-
-        check_expired(invoice.pk)
-
-        invoice.refresh_from_db()
-        self.assertEqual(invoice.status, InvoiceStatus.EXPIRED)
 
     @patch("invoices.service.WebhookService.create_event")
     def test_try_match_invoice_only_binds_transfer_without_webhook(
@@ -1984,6 +1969,25 @@ class FallbackInvoiceExpiredTests(TestCase):
         invoice.refresh_from_db()
         self.assertEqual(invoice.status, InvoiceStatus.EXPIRED)
 
+    def test_fallback_keeps_unexpired_waiting_invoice(self):
+        # fallback 是账单过期的唯一机制，每个周期都会扫描；未到 expires_at 的账单
+        # 必须原样保持 WAITING，不能被提前过期、释放其支付组合。
+        invoice = Invoice.objects.create(
+            project=self.project,
+            out_no="fallback-unexpired",
+            title="Fallback unexpired",
+            currency_id="USD",
+            amount=Decimal("10"),
+            methods={"USDTF": [ChainCode.Ethereum]},
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+        invoice.select_method(self.crypto, self.chain)
+
+        fallback_invoice_expired()
+
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, InvoiceStatus.WAITING)
+
     def test_fallback_skips_waiting_invoice_with_observed_transfer(self):
         # 已观察到链上付款的 WAITING 账单正在等待 Transfer 确认，不应被 fallback 误过期。
         invoice = Invoice.objects.create(
@@ -2024,8 +2028,8 @@ class FallbackInvoiceExpiredTests(TestCase):
         self.assertEqual(invoice.transfer_id, transfer.pk)
 
 
-class CheckExpiredAtomicityTests(TransactionTestCase):
-    """验证 check_expired 在并发场景下的原子性。"""
+class FallbackExpiredAtomicityTests(TransactionTestCase):
+    """验证 fallback_invoice_expired 不会过期已被真实撮合绑定付款的账单。"""
 
     def setUp(self):
         disable_vault_slot_deploy_schedule(self)
@@ -2056,8 +2060,8 @@ class CheckExpiredAtomicityTests(TransactionTestCase):
             decimals=6,
         )
 
-    def test_check_expired_skips_already_matched_invoice(self):
-        # 并发场景：check_expired 执行时如果账单已绑定 Transfer，
+    def test_fallback_skips_already_matched_invoice(self):
+        # 并发场景：fallback 执行时如果账单已绑定 Transfer，
         # select_for_update + transfer 条件应使其安全跳过，不会误过期。
         invoice = Invoice.objects.create(
             project=self.project,
@@ -2070,7 +2074,7 @@ class CheckExpiredAtomicityTests(TransactionTestCase):
         )
         invoice.select_method(self.crypto, self.chain)
 
-        # 模拟在 check_expired 执行前，账单已被匹配
+        # 模拟在 fallback 执行前，账单已被匹配
         now = timezone.now()
         transfer = Transfer.objects.create(
             chain=self.chain,
@@ -2092,8 +2096,8 @@ class CheckExpiredAtomicityTests(TransactionTestCase):
             expires_at=timezone.now() - timedelta(seconds=1)
         )
 
-        # check_expired 应该安全跳过已观察到付款的账单
-        check_expired(invoice.pk)
+        # fallback 应该安全跳过已观察到付款的账单
+        fallback_invoice_expired()
 
         invoice.refresh_from_db()
         self.assertEqual(invoice.status, InvoiceStatus.WAITING)

@@ -284,7 +284,7 @@ class Invoice(models.Model):
         indexes = [
             # 入账撮合、组合占用判断按 pay_address 查 WAITING/EXPIRED 账单，部分唯一约束覆盖不了。
             models.Index(fields=("pay_address",), name="invoice_pay_address_idx"),
-            # fallback_invoice_expired 每 60s 按 expires_at 取到期且未绑定转账的待支付账单。
+            # fallback_invoice_expired 每 15s 按 expires_at 取到期且未绑定转账的待支付账单。
             models.Index(
                 fields=("expires_at",),
                 condition=Q(status=InvoiceStatus.WAITING, transfer__isnull=True),
