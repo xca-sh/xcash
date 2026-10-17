@@ -3737,6 +3737,30 @@ class TronCollectScheduleExecuteTests(TestCase):
             "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
         )
 
+    def test_collect_token_address_uses_contract_for_other_chain_native_as_trc20(
+        self,
+    ):
+        # ETH 等「别链原生币」以 TRC20 上架 Tron 时 Crypto.is_native 仍为真；
+        # 归集必须传其合约地址，否则 collect(address(0)) 扫的是 TRX、代币永不归集。
+        from tron.vault_slots import collect_token_address
+
+        eth, _ = Crypto.objects.get_or_create(
+            symbol="ETH",
+            defaults={"name": "ETH", "coingecko_id": "ethereum", "is_native": True},
+        )
+        self.assertTrue(eth.is_native)
+        CryptoOnChain.objects.create(
+            crypto=eth,
+            chain=self.chain,
+            address="TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj",
+            decimals=18,
+        )
+
+        self.assertEqual(
+            collect_token_address(crypto=eth, chain=self.chain),
+            "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj",
+        )
+
     @patch("tron.vault_slots.TronAdapter.is_contract", return_value=False)
     def test_execute_due_creates_single_deploy_task_for_multi_crypto_slot(
         self, is_contract

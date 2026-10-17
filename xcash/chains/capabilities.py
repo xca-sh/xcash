@@ -34,7 +34,9 @@ class ChainProductCapabilityService:
             # Tron 账单收款放行 USDT（主流 TRC20）与原生 TRX；原生 TRX 的入账扫描
             # （逐块 TransferContract）与归集（部署后 collect(address(0))）已就绪。
             # 其余 TRC20 暂不作为账单支付方式。
-            return crypto.symbol == "USDT" or crypto.is_native
+            return crypto.symbol == "USDT" or cls.is_chain_native_coin(
+                chain=chain, crypto=crypto
+            )
         return True
 
     @classmethod
@@ -46,8 +48,19 @@ class ChainProductCapabilityService:
         if chain.type == ChainType.TRON:
             # Tron VaultSlot 已覆盖 TRC20 与原生 TRX：TRC20 走 Transfer 事件扫描，
             # 原生 TRX 走 TransferContract 扫描并在部署后 collect(address(0)) 归集。
-            return crypto.symbol == "USDT" or crypto.is_native
+            return crypto.symbol == "USDT" or cls.is_chain_native_coin(
+                chain=chain, crypto=crypto
+            )
         return False
+
+    @staticmethod
+    def is_chain_native_coin(*, chain, crypto) -> bool:
+        """是否为本链原生币。
+
+        不能用 Crypto.is_native：它表示该币是某条链的原生币，ETH/BNB 等以 TRC20
+        形式上架 Tron 时同样为真，会被当成原生 TRX 放行收款、并按 address(0) 归集。
+        """
+        return crypto.pk == chain.native_coin.pk
 
     @classmethod
     def differ_supports_native(cls, *, chain_type: str) -> bool:

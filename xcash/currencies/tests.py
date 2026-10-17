@@ -137,6 +137,35 @@ class CustomTokenPricingTests(TestCase):
             )
         )
 
+    def test_tron_rejects_other_chain_native_coin_listed_as_trc20(self):
+        # ETH 以 TRC20 上架 Tron 时 Crypto.is_native 仍为真，但它不是 Tron 原生币；
+        # 不能被当成原生 TRX 放行收款，否则充值/账单可用而归集却按 address(0) 扫 TRX。
+        tron = Chain.objects.create(
+            code=ChainCode.Tron, rpc="", tron_api_key="", active=False
+        )
+        eth, _ = Crypto.objects.get_or_create(
+            symbol="ETH",
+            defaults={"name": "ETH", "coingecko_id": "ethereum", "is_native": True},
+        )
+        CryptoOnChain.objects.create(
+            crypto=eth,
+            chain=tron,
+            address="TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj",
+            decimals=18,
+        )
+
+        self.assertTrue(eth.is_native)
+        self.assertFalse(
+            ChainProductCapabilityService.supports_deposit_address(
+                chain=tron, crypto=eth
+            )
+        )
+        self.assertFalse(
+            ChainProductCapabilityService.supports_existing_invoice_method(
+                chain=tron, crypto=eth
+            )
+        )
+
     def test_tron_deposit_address_allows_usdt_and_native_trx_only(self):
         # Tron VaultSlot 充币地址放行 USDT 与原生 TRX；其余 TRC20 暂不开放。
         tron = Chain.objects.create(
