@@ -17,25 +17,6 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: config/settings/dev.py:119 xcash/stress/models.py:92
-#: xcash/stress/models.py:166
-msgid "测试轮次"
-msgstr "Test Run"
-
-#: config/settings/dev.py:124 xcash/stress/models.py:153
-#: xcash/stress/models.py:154
-msgid "账单收款测试"
-msgstr "Invoice Payment Test"
-
-#: config/settings/dev.py:129 xcash/stress/models.py:225
-#: xcash/stress/models.py:226
-msgid "充值收款测试"
-msgstr "Deposit Test"
-
-#: config/settings/dev.py:138
-msgid "压测"
-msgstr "Stress Testing"
-
 #: config/settings/unfold.py:64
 msgid "文档"
 msgstr "Documentation"
@@ -277,13 +258,10 @@ msgstr "Address"
 #: xcash/chains/admin.py:323 xcash/chains/admin.py:405
 #: xcash/chains/admin.py:409 xcash/chains/models.py:587
 #: xcash/chains/models.py:649 xcash/deposits/admin.py:156
-#: xcash/stress/admin.py:416 xcash/stress/admin.py:500
-#: xcash/stress/models.py:114 xcash/stress/models.py:187
 msgid "交易哈希"
 msgstr "Hash"
 
-#: xcash/aml/admin.py:160 xcash/stress/models.py:68 xcash/stress/models.py:132
-#: xcash/stress/models.py:209
+#: xcash/aml/admin.py:160
 msgid "错误信息"
 msgstr "Error Message"
 
@@ -361,8 +339,8 @@ msgstr "Query Completed At"
 #: xcash/evm/models.py:99 xcash/invoices/models.py:68
 #: xcash/invoices/models.py:224 xcash/invoices/models.py:604
 #: xcash/invoices/models.py:707 xcash/projects/models.py:110
-#: xcash/stress/models.py:70 xcash/tron/models.py:67 xcash/tron/models.py:134
-#: xcash/webhooks/models.py:74 xcash/webhooks/models.py:122
+#: xcash/tron/models.py:67 xcash/tron/models.py:134 xcash/webhooks/models.py:74
+#: xcash/webhooks/models.py:122
 msgid "创建时间"
 msgstr "Created At"
 
@@ -392,8 +370,7 @@ msgstr "Search by chain code"
 #: xcash/chains/models.py:1064 xcash/chains/models.py:1137
 #: xcash/chains/models.py:1476 xcash/currencies/models.py:277
 #: xcash/evm/models.py:43 xcash/invoices/admin.py:327
-#: xcash/invoices/models.py:160 xcash/stress/models.py:104
-#: xcash/stress/models.py:179
+#: xcash/invoices/models.py:160
 #: xcash/templates/admin/core/systemwallet/change_form.html:81
 #: xcash/tron/models.py:60
 msgid "链"
@@ -483,8 +460,7 @@ msgstr "From → To"
 msgid "数量"
 msgstr "Amount"
 
-#: xcash/chains/admin.py:315 xcash/stress/models.py:113
-#: xcash/stress/models.py:186
+#: xcash/chains/admin.py:315
 msgid "付款地址"
 msgstr "Payment Address"
 
@@ -510,9 +486,6 @@ msgstr "Ownership"
 #: xcash/core/admin.py:108 xcash/deposits/admin.py:105
 #: xcash/deposits/admin.py:116 xcash/evm/admin.py:208 xcash/evm/admin.py:225
 #: xcash/invoices/admin.py:251 xcash/invoices/models.py:199
-#: xcash/stress/admin.py:245 xcash/stress/admin.py:408
-#: xcash/stress/admin.py:492 xcash/stress/models.py:52
-#: xcash/stress/models.py:127 xcash/stress/models.py:204
 #: xcash/tron/admin.py:126 xcash/tron/admin.py:156 xcash/webhooks/admin.py:177
 #: xcash/webhooks/models.py:43
 msgid "状态"
@@ -707,15 +680,12 @@ msgstr "Queued"
 msgid "已提交"
 msgstr "Submitted"
 
-#: xcash/chains/models.py:564 xcash/stress/models.py:23
-#: xcash/stress/models.py:34 xcash/stress/models.py:65
-#: xcash/webhooks/admin.py:316 xcash/webhooks/models.py:117
+#: xcash/chains/models.py:564 xcash/webhooks/admin.py:316
+#: xcash/webhooks/models.py:117
 msgid "成功"
 msgstr "Success"
 
-#: xcash/chains/models.py:565 xcash/stress/models.py:24
-#: xcash/stress/models.py:35 xcash/stress/models.py:66
-#: xcash/webhooks/admin.py:316
+#: xcash/chains/models.py:565 xcash/webhooks/admin.py:316
 msgid "失败"
 msgstr "Failed"
 
@@ -765,7 +735,6 @@ msgid "是否收到过资金"
 msgstr "Has Received Funds"
 
 #: xcash/chains/models.py:1068 xcash/chains/models.py:1141
-#: xcash/stress/models.py:103 xcash/stress/models.py:178
 msgid "币种"
 msgstr "Currency"
 
@@ -811,12 +780,11 @@ msgstr "Scheduled At"
 msgid "收款地址归集计划"
 msgstr "Receiving Address Collection Schedule"
 
-#: xcash/chains/models.py:1449 xcash/stress/models.py:180
+#: xcash/chains/models.py:1449
 msgid "充值收款地址"
 msgstr "Deposit Address"
 
 #: xcash/chains/models.py:1456 xcash/invoices/models.py:171
-#: xcash/stress/models.py:105
 msgid "账单收款地址"
 msgstr "Payment address"
 
@@ -1069,7 +1037,7 @@ msgstr "Project does not exist"
 msgid "账户已冻结"
 msgstr "Account is frozen"
 
-#: xcash/common/fields.py:124 xcash/stress/models.py:101
+#: xcash/common/fields.py:124
 msgid "系统单号"
 msgstr "System order number"
 
@@ -1086,8 +1054,7 @@ msgstr "Tasks"
 msgid "入参"
 msgstr "Arguments"
 
-#: xcash/core/admin.py:95 xcash/core/admin.py:142 xcash/stress/admin.py:258
-#: xcash/webhooks/admin.py:311
+#: xcash/core/admin.py:95 xcash/core/admin.py:142 xcash/webhooks/admin.py:311
 msgid "结果"
 msgstr "Result"
 
@@ -1742,7 +1709,7 @@ msgstr "Price Snapshot"
 msgid "支持按法币代码搜索"
 msgstr "Search by currency code"
 
-#: xcash/currencies/models.py:31 xcash/stress/models.py:40
+#: xcash/currencies/models.py:31
 msgid "名称"
 msgstr "Name"
 
@@ -2019,7 +1986,6 @@ msgid "订单"
 msgstr "Order"
 
 #: xcash/invoices/admin.py:190 xcash/invoices/models.py:139
-#: xcash/stress/admin.py:488
 msgid "金额"
 msgstr "Amount"
 
@@ -2064,7 +2030,7 @@ msgstr "Pay Page URL"
 msgid "可选收款方式"
 msgstr "Available Payment Methods"
 
-#: xcash/invoices/models.py:41 xcash/stress/models.py:13
+#: xcash/invoices/models.py:41
 msgid "已完成"
 msgstr "Completed"
 
@@ -2096,7 +2062,7 @@ msgstr "Direct wallet address is already used as a collection address"
 msgid "该地址已被添加为钱包直收地址，不能重复添加"
 msgstr "This address has already been added as a direct wallet address"
 
-#: xcash/invoices/models.py:128 xcash/stress/models.py:102
+#: xcash/invoices/models.py:128
 msgid "商户单号"
 msgstr "Merchant order number"
 
@@ -2265,7 +2231,7 @@ msgstr ""
 "address derivation, so changing it invalidates every receiving address "
 "issued so far."
 
-#: xcash/projects/admin.py:359 xcash/stress/models.py:11
+#: xcash/projects/admin.py:359
 msgid "就绪"
 msgstr "Ready"
 
@@ -2384,7 +2350,7 @@ msgstr ""
 "addresses. It must be a Tron Base58 address. Leaving it blank disables smart "
 "contract receiving on Tron; once set, it cannot be changed."
 
-#: xcash/projects/models.py:89 xcash/stress/models.py:43
+#: xcash/projects/models.py:89
 msgid "EVM 账单收款模式"
 msgstr "EVM Invoice Payment Mode"
 
@@ -2469,296 +2435,6 @@ msgstr "Customer UID"
 #: xcash/projects/models.py:276
 msgid "加入时间"
 msgstr "Joined At"
-
-#: xcash/stress/admin.py:201
-msgid "支持按轮次名称搜索"
-msgstr "Search by run name"
-
-#: xcash/stress/admin.py:241
-msgid "轮次"
-msgstr "Run"
-
-#: xcash/stress/admin.py:249
-msgid "规模"
-msgstr "Scale"
-
-#: xcash/stress/admin.py:253
-#, python-format
-msgid "账单 %(count)s"
-msgstr "Invoices %(count)s"
-
-#: xcash/stress/admin.py:254
-#, python-format
-msgid "充值 %(count)s / 客户 %(customers)s"
-msgstr "Deposits %(count)s / Customers %(customers)s"
-
-#: xcash/stress/admin.py:261
-#, python-format
-msgid "成功 %(n)s"
-msgstr "Succeeded %(n)s"
-
-#: xcash/stress/admin.py:262
-#, python-format
-msgid "失败 %(failed)s / 跳过 %(skipped)s"
-msgstr "Failed %(failed)s / Skipped %(skipped)s"
-
-#: xcash/stress/admin.py:266
-msgid "各阶段耗时分位数"
-msgstr "Stage Duration Percentiles"
-
-#: xcash/stress/admin.py:274 xcash/stress/admin.py:316
-msgid "无数据可聚合"
-msgstr "No data to aggregate"
-
-#: xcash/stress/admin.py:294
-msgid "Invoice"
-msgstr "Invoice"
-
-#: xcash/stress/admin.py:303
-msgid "Deposit"
-msgstr "Deposit"
-
-#: xcash/stress/admin.py:355
-msgid "测试数据正在后台准备，稍后刷新页面查看状态"
-msgstr ""
-"Test data is being prepared in the background. Refresh the page later to "
-"view the status."
-
-#: xcash/stress/admin.py:357
-msgid "开始执行"
-msgstr "Start Execution"
-
-#: xcash/stress/admin.py:364
-#, python-format
-msgid "%(name)s 状态为 %(status)s，只有就绪状态才能执行"
-msgstr "%(name)s status is %(status)s. Only ready items can be executed."
-
-#: xcash/stress/admin.py:372
-#, python-format
-msgid "已启动 %(count)d 个测试"
-msgstr "Started %(count)d tests"
-
-#: xcash/stress/admin.py:393
-msgid "支持按账单单号、商户单号或交易哈希搜索"
-msgstr "Search by invoice number, merchant number or transaction hash"
-
-#: xcash/stress/admin.py:404 xcash/stress/admin.py:484
-msgid "用例"
-msgstr "Case"
-
-#: xcash/stress/admin.py:412 xcash/stress/admin.py:496
-msgid "收款方式"
-msgstr "Payment Method"
-
-#: xcash/stress/admin.py:421 xcash/stress/admin.py:505
-msgid "Webhook 校验"
-msgstr "Webhook Checks"
-
-#: xcash/stress/admin.py:427 xcash/stress/admin.py:511
-msgid "未收到"
-msgstr "Not received"
-
-#: xcash/stress/admin.py:435 xcash/stress/admin.py:519
-msgid "全部通过"
-msgstr "All passed"
-
-#: xcash/stress/admin.py:438 xcash/stress/admin.py:522
-#, python-format
-msgid "%(passed)s/4 通过"
-msgstr "%(passed)s/4 passed"
-
-#: xcash/stress/admin.py:442 xcash/stress/admin.py:526
-msgid "归集"
-msgstr "Sweep"
-
-#: xcash/stress/admin.py:448 xcash/stress/admin.py:532
-msgid "已验证"
-msgstr "Verified"
-
-#: xcash/stress/admin.py:450 xcash/stress/admin.py:534
-msgid "未验证"
-msgstr "Unverified"
-
-#: xcash/stress/admin.py:473
-msgid "支持按客户 UID、交易哈希或归集哈希搜索"
-msgstr "Search by customer UID, transaction hash or sweep hash"
-
-#: xcash/stress/apps.py:8 xcash/stress/models.py:75 xcash/stress/models.py:76
-msgid "压力测试"
-msgstr "Stress Test"
-
-#: xcash/stress/models.py:8
-msgid "草稿"
-msgstr "Draft"
-
-#: xcash/stress/models.py:9
-msgid "准备中"
-msgstr "Preparing"
-
-#: xcash/stress/models.py:10
-msgid "准备失败"
-msgstr "Preparation Failed"
-
-#: xcash/stress/models.py:12
-msgid "运行中"
-msgstr "Running"
-
-#: xcash/stress/models.py:17 xcash/stress/models.py:29
-msgid "等待执行"
-msgstr "Waiting to Execute"
-
-#: xcash/stress/models.py:18
-msgid "创建账单收款中"
-msgstr "Creating Invoice Payment"
-
-#: xcash/stress/models.py:19
-msgid "账单收款已创建"
-msgstr "Invoice Payment Created"
-
-#: xcash/stress/models.py:20
-msgid "账单收款中"
-msgstr "Paying Invoice"
-
-#: xcash/stress/models.py:21
-msgid "链上已广播"
-msgstr "Broadcast On-chain"
-
-#: xcash/stress/models.py:22 xcash/stress/models.py:33
-msgid "Webhook 验证通过"
-msgstr "Webhook Verification Passed"
-
-#: xcash/stress/models.py:25 xcash/stress/models.py:36
-#: xcash/stress/models.py:67
-msgid "跳过"
-msgstr "Skipped"
-
-#: xcash/stress/models.py:30
-msgid "获取充值收款地址中"
-msgstr "Fetching Deposit Address"
-
-#: xcash/stress/models.py:31
-msgid "模拟充值收款中"
-msgstr "Simulating Deposit"
-
-#: xcash/stress/models.py:32
-msgid "充值收款已完成"
-msgstr "Deposit Completed"
-
-#: xcash/stress/models.py:41
-msgid "账单收款模拟次数"
-msgstr "Invoice Payment Simulation Count"
-
-#: xcash/stress/models.py:47
-msgid "本轮 EVM 账单收款压测使用的钱包直收或智能合约模式。"
-msgstr ""
-"The direct wallet or smart contract mode used for this EVM invoice payment "
-"stress test run."
-
-#: xcash/stress/models.py:49
-msgid "充值收款模拟次数"
-msgstr "Deposit Simulation Count"
-
-#: xcash/stress/models.py:50
-msgid "充值收款客户数"
-msgstr "Deposit Customer Count"
-
-#: xcash/stress/models.py:62
-msgid "专用项目"
-msgstr "Dedicated Project"
-
-#: xcash/stress/models.py:71 xcash/stress/models.py:139
-#: xcash/stress/models.py:211
-msgid "开始时间"
-msgstr "Started At"
-
-#: xcash/stress/models.py:72 xcash/stress/models.py:150
-#: xcash/stress/models.py:222
-msgid "完成时间"
-msgstr "Completed at"
-
-#: xcash/stress/models.py:94 xcash/stress/models.py:168
-msgid "序号"
-msgstr "Sequence"
-
-#: xcash/stress/models.py:96 xcash/stress/models.py:170
-msgid "调度偏移(秒)"
-msgstr "Schedule Offset (seconds)"
-
-#: xcash/stress/models.py:97 xcash/stress/models.py:171
-msgid "相对于 Stress.started_at 的偏移秒数"
-msgstr "Offset in seconds relative to Stress.started_at"
-
-#: xcash/stress/models.py:107
-msgid "账单收款金额"
-msgstr "Invoice Payment Amount"
-
-#: xcash/stress/models.py:117 xcash/stress/models.py:190
-msgid "已收到 Webhook"
-msgstr "Webhook Received"
-
-#: xcash/stress/models.py:118 xcash/stress/models.py:191
-msgid "签名验证"
-msgstr "Signature Verification"
-
-#: xcash/stress/models.py:119 xcash/stress/models.py:192
-msgid "Payload 验证"
-msgstr "Payload Verification"
-
-#: xcash/stress/models.py:120 xcash/stress/models.py:193
-msgid "Nonce 验证"
-msgstr "Nonce Verification"
-
-#: xcash/stress/models.py:121 xcash/stress/models.py:194
-msgid "时间戳验证"
-msgstr "Timestamp Verification"
-
-#: xcash/stress/models.py:123 xcash/stress/models.py:196
-msgid "已收到的 Nonce 列表"
-msgstr "Received Nonce List"
-
-#: xcash/stress/models.py:135 xcash/stress/models.py:200
-msgid "归集已验证"
-msgstr "Collection Verified"
-
-#: xcash/stress/models.py:136 xcash/stress/models.py:201
-msgid "归集交易哈希"
-msgstr "Collection Transaction Hash"
-
-#: xcash/stress/models.py:137 xcash/stress/models.py:221
-msgid "归集完成时间"
-msgstr "Collection Completed At"
-
-#: xcash/stress/models.py:141
-msgid "账单收款创建完成时间"
-msgstr "Invoice Payment Creation Completed At"
-
-#: xcash/stress/models.py:144
-msgid "选择账单收款方式完成时间"
-msgstr "Payment Method Selection Completed At"
-
-#: xcash/stress/models.py:146
-msgid "链上广播完成时间"
-msgstr "On-chain Broadcast Completed At"
-
-#: xcash/stress/models.py:148 xcash/stress/models.py:219
-msgid "Webhook 处理完成时间"
-msgstr "Webhook Processing Completed At"
-
-#: xcash/stress/models.py:175
-msgid "客户 UID"
-msgstr "Customer UID"
-
-#: xcash/stress/models.py:182
-msgid "充值收款金额"
-msgstr "Deposit Amount"
-
-#: xcash/stress/models.py:213
-msgid "获取充值收款地址完成时间"
-msgstr "Deposit Address Fetch Completed At"
-
-#: xcash/stress/models.py:216
-msgid "链上充值收款完成时间"
-msgstr "On-chain Deposit Completed At"
 
 #: xcash/templates/admin/core/systemwallet/change_form.html:14
 msgid ""

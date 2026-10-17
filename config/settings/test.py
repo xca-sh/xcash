@@ -34,15 +34,11 @@ warnings.filterwarnings(
 )
 
 from .base import *  # noqa: F403
-from .base import INSTALLED_APPS
 from .base import TEMPLATES
 from .base import env
 
 SAAS_API_TOKEN = "test-saas-token"
 IS_SAAS = True
-
-# stress app 仅在开发/测试环境加载，生产环境不包含。
-INSTALLED_APPS += ["stress"]
 
 # 测试环境用内存静态文件后端，避免在项目根目录留下静态文件构建产物。
 STATIC_ROOT = str(BASE_DIR / "test-staticfiles")  # noqa: F405

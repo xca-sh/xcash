@@ -92,7 +92,7 @@ TRUSTED_PROXY_IPS = env.list("TRUSTED_PROXY_IPS", default=[])
 # Webhook
 # ------------------------------------------------------------------------------
 # 投递目标默认拒绝 http / localhost / 私有网段，反 SSRF。
-# 仅开发/压测环境需要给本地回调（如 StressRun self-webhook）放行时打开。
+# 仅开发环境需要给本地回调（如指向 localhost 的商户 webhook）放行时打开。
 WEBHOOK_ALLOW_INTERNAL_TARGETS = env.bool(
     "WEBHOOK_ALLOW_INTERNAL_TARGETS", default=False
 )
@@ -460,8 +460,6 @@ CELERY_TASK_ROUTES = {
     "evm.tasks._scan_evm_chain": {"queue": "scan"},
     "tron.tasks.scan_tron_chain": {"queue": "scan"},
     **{task: {"queue": queue} for task, queue in PERIODIC_TASK_QUEUES.items()},
-    # stress 模块的全部任务都走独立的 stress 队列（Celery 路由键支持 glob）。
-    "stress.tasks.*": {"queue": "stress"},
 }
 
 # -------------------------------------------------------------------------------

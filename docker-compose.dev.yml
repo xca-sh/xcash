@@ -58,7 +58,7 @@ services:
       - flower
       - --port=5555
 
-  # 本地 EVM 模拟链统一叫 anvil：与 ChainCode.Anvil、STRESS 链代码、调试默认起的
+  # 本地 EVM 模拟链统一叫 anvil：与 ChainCode.Anvil、调试默认起的
   # 唯一 EVM 链保持同名，避免「服务叫 ethereum、链代码却是 anvil」的认知割裂。
   anvil:
     image: ghcr.io/foundry-rs/foundry:v1.3.1

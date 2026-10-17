@@ -280,9 +280,7 @@ def test_compressed_json_tick_can_be_published_and_consumed(broker):
     message.ack()
 
 
-@pytest.mark.parametrize(
-    "groups", [("celery",), ("scan",), ("celery", "scan"), ("stress",)]
-)
+@pytest.mark.parametrize("groups", [("celery",), ("scan",), ("celery", "scan")])
 def test_worker_group_subscription_preserves_isolation(broker, groups):
     queues = broker.app.amqp.queues
     queues.select(groups)

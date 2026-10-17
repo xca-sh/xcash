@@ -18,7 +18,6 @@ source "${SCRIPT_DIR}/dev-env.sh"
 # ── 并发数配置（可通过环境变量覆盖） ─────────────────────────
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-4}"
 CELERY_BUSINESS_WORKER_CONCURRENCY="${CELERY_BUSINESS_WORKER_CONCURRENCY:-16}"
-CELERY_STRESS_WORKER_CONCURRENCY="${CELERY_STRESS_WORKER_CONCURRENCY:-16}"
 CELERY_SCAN_WORKER_CONCURRENCY="${CELERY_SCAN_WORKER_CONCURRENCY:-4}"
 
 # ── 生命周期管理 ──────────────────────────────────────────────
@@ -61,7 +60,6 @@ rm -f /tmp/xcash-celerybeat-schedule{,-shm,-wal}
 echo "=== dev-up-pro: 生产级本地启动 ==="
 echo "  gunicorn workers : ${GUNICORN_WORKERS}"
 echo "  celery business  : ${CELERY_BUSINESS_WORKER_CONCURRENCY} threads"
-echo "  celery stress    : ${CELERY_STRESS_WORKER_CONCURRENCY} threads"
 echo "  celery scan      : ${CELERY_SCAN_WORKER_CONCURRENCY} threads"
 echo ""
 
@@ -86,16 +84,7 @@ uv run celery -A config.celery worker \
   -n business@%h &
 child_pids+=("$!")
 
-# ── 4. Celery Worker — 压测队列 ──────────────────────────────
-uv run celery -A config.celery worker \
-  -l INFO \
-  --pool=threads \
-  --concurrency="${CELERY_STRESS_WORKER_CONCURRENCY}" \
-  -Q stress \
-  -n stress@%h &
-child_pids+=("$!")
-
-# ── 5. Celery Worker — 扫描队列 ──────────────────────────────
+# ── 4. Celery Worker — 扫描队列 ──────────────────────────────
 uv run celery -A config.celery worker \
   -l INFO \
   --pool=threads \
@@ -104,7 +93,7 @@ uv run celery -A config.celery worker \
   -n scan@%h &
 child_pids+=("$!")
 
-# ── 6. Celery Beat ───────────────────────────────────────────
+# ── 5. Celery Beat ───────────────────────────────────────────
 uv run celery -A config.celery beat \
   -l INFO \
   -s /tmp/xcash-celerybeat-schedule &

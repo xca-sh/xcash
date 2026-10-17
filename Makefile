@@ -1,7 +1,7 @@
 ENV_FILE ?= .env
 DC = docker compose --env-file $(ENV_FILE) -f docker-compose.dev.yml
 
-.PHONY: help init-env up down upgrade dev-sync lint fmt typecheck clean dev-up dev-up-pro dev-up-deps dev-up-chain dev-down dev-logs dev-chain-logs dev-ps dev-web dev-worker dev-worker-stress dev-worker-scan dev-beat dev-manage dev-mm dev-migrate dev-clear-migrations dev-shell dev-test pytest dev-local-init dev-bootstrap
+.PHONY: help init-env up down upgrade dev-sync lint fmt typecheck clean dev-up dev-up-pro dev-up-deps dev-up-chain dev-down dev-logs dev-chain-logs dev-ps dev-web dev-worker dev-worker-scan dev-beat dev-manage dev-mm dev-migrate dev-clear-migrations dev-shell dev-test pytest dev-local-init dev-bootstrap
 
 help:
 	@echo "可用命令："
@@ -26,7 +26,6 @@ help:
 	@echo "  make dev-ps                查看依赖容器状态"
 	@echo "  make dev-web               宿主机启动 Django"
 	@echo "  make dev-worker            宿主机启动业务 Celery worker"
-	@echo "  make dev-worker-stress     宿主机启动 stress Celery worker"
 	@echo "  make dev-worker-scan       宿主机启动 scan Celery worker"
 	@echo "  make dev-beat              宿主机启动 Celery beat"
 	@echo "  make dev-manage ARGS='check'"
@@ -105,9 +104,6 @@ dev-web:
 
 dev-worker:
 	ENV_FILE=$(ENV_FILE) ./scripts/dev-worker.sh
-
-dev-worker-stress:
-	ENV_FILE=$(ENV_FILE) ./scripts/dev-worker-stress.sh
 
 dev-worker-scan:
 	ENV_FILE=$(ENV_FILE) ./scripts/dev-worker-scan.sh

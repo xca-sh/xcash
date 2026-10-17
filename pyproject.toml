@@ -160,7 +160,6 @@ root_packages = [
     "invoices",
     "projects",
     "saas_api",
-    "stress",
     "tron",
     "users",
     "webhooks",
@@ -171,8 +170,8 @@ exclude_type_checking_imports = true
 name = "模块分层：依赖只能自上而下"
 type = "layers"
 layers = [
-    # 入口与运维聚合层：SaaS 控制面 API、压测工具、后台看板 / 巡检 / 初始化，可依赖一切。
-    "saas_api : stress : core.admin : core.dashboard : core.dashboard_metrics : core.default_data : core.health : core.management : core.monitoring : core.tasks",
+    # 入口与运维聚合层：SaaS 控制面 API、后台看板 / 巡检 / 初始化，可依赖一切。
+    "saas_api : core.admin : core.dashboard : core.dashboard_metrics : core.default_data : core.health : core.management : core.monitoring : core.tasks",
     # 业务层：账单、充值。
     "invoices | deposits",
     # 业务支撑层：商户项目、AML、后台用户。

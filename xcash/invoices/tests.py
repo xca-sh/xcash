@@ -2305,7 +2305,7 @@ class InvoiceCreatePermissionCheckTests(TestCase):
 class InvoiceSelectForUpdateLockScopeTests(InvoicePaymentSelectionTests):
     """select_for_update(of=("self",)) 回归测试。
 
-    StressRun 高并发压测时，三处 `select_for_update().select_related("project")`
+    高并发压测时，三处 `select_for_update().select_related("project")`
     会让 PostgreSQL 把 join 中的 projects_project / currencies_crypto 父行也锁成
     FOR UPDATE，与并发 INSERT/UPDATE 子表自动加的 FK FOR KEY SHARE 互斥，引发
     `OperationalError: deadlock detected`。修复后必须显式 `of=("self",)`，仅锁

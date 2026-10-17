@@ -1952,7 +1952,7 @@ class BlockNumberUpdatedCompensationTests(TestCase):
 class ProcessTransferAutoretryTests(SimpleTestCase):
     """process_transfer 死锁自动重试回归测试。
 
-    PostgreSQL 死锁的设计前提是被牺牲方应重试；StressRun 高并发场景里，
+    PostgreSQL 死锁的设计前提是被牺牲方应重试；高并发压测场景里，
     `try_match_invoice` / `confirm_invoice` 等行锁链路会偶发 deadlock。
     若 process_transfer 不配置 OperationalError 重试，单次死锁就会让
     Transfer 永久卡在未处理状态，对应的账单也无法被匹配。

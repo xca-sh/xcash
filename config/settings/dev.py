@@ -6,7 +6,6 @@ from .base import *  # noqa: F403
 from .base import INSTALLED_APPS
 from .base import MIDDLEWARE
 from .base import REST_FRAMEWORK as BASE_REST_FRAMEWORK
-from .base import UNFOLD
 from .base import env
 
 # GENERAL
@@ -26,7 +25,7 @@ TRUSTED_PROXY_IPS = ["127.0.0.1", "::1"]
 # django-debug-toolbar
 # ------------------------------------------------------------------------------
 # https://django-debug-toolbar.readthedocs.io/en/latest/installation.html#prerequisites
-INSTALLED_APPS += ["debug_toolbar", "django_migration_linter", "stress"]
+INSTALLED_APPS += ["debug_toolbar", "django_migration_linter"]
 # https://django-debug-toolbar.readthedocs.io/en/latest/installation.html#middleware
 MIDDLEWARE += ["debug_toolbar.middleware.DebugToolbarMiddleware"]
 # https://django-debug-toolbar.readthedocs.io/en/latest/configuration.html#debug-toolbar-config
@@ -89,17 +88,7 @@ WALLET_MNEMONIC_ENCRYPTION_KEY = env.str(
     default="dev-wallet-mnemonic-encryption-key-change-me",
 )
 
-# Stress test 配置（仅开发环境）
-STRESS_EVM_RPC_URL = "http://localhost:8545"
-# Anvil 默认助记词第一个账户私钥
-STRESS_EVM_PRIVATE_KEY = (
-    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-)
-STRESS_WEBHOOK_BASE_URL = "http://localhost:8000"
-# 压力测试允许的链代码；EVM 走本地 anvil，非本地链无法支付
-STRESS_ALLOWED_CHAINS = ["anvil"]
-
-# StressRun 的 self-webhook 走 http://localhost:8000，反 SSRF 校验默认会拒；
+# 本地联调的商户 webhook 常指向 localhost，反 SSRF 校验默认会拒；
 # 仅在开发环境放行内部目标，生产仍保持 base.py 默认的拒绝策略。
 WEBHOOK_ALLOW_INTERNAL_TARGETS = True
 
@@ -108,35 +97,3 @@ WEBHOOK_ALLOW_INTERNAL_TARGETS = True
 REST_FRAMEWORK = deepcopy(BASE_REST_FRAMEWORK)
 REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["anon"] = "10000/minute"
 REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["vault_slot"] = "10000/minute"
-
-# Stress app 侧边栏注入
-# ------------------------------------------------------------------------------
-from django.urls import reverse_lazy  # noqa: E402
-from django.utils.translation import gettext_lazy as _  # noqa: E402
-
-STRESS_SIDEBAR_ITEMS = [
-    {
-        "title": _("测试轮次"),
-        "icon": "speed",
-        "link": reverse_lazy("admin:stress_stressrun_changelist"),
-    },
-    {
-        "title": _("账单收款测试"),
-        "icon": "checklist",
-        "link": reverse_lazy("admin:stress_invoicestresscase_changelist"),
-    },
-    {
-        "title": _("充值收款测试"),
-        "icon": "download",
-        "link": reverse_lazy("admin:stress_depositstresscase_changelist"),
-    },
-]
-
-UNFOLD["SIDEBAR"]["navigation"].insert(
-    -1,
-    {
-        "title": _("压测"),
-        "collapsible": True,
-        "items": STRESS_SIDEBAR_ITEMS,
-    },
-)
