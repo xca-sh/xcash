@@ -6,7 +6,7 @@ from web3 import Web3
 from common.consts import APPID_HEADER
 from common.consts import TIMESTAMP_HEADER
 from common.error_codes import ErrorCode
-from common.middlewares import ProjectConfigMiddleware
+from common.middlewares import XcashMiddleware
 from projects.models import Project
 
 
@@ -44,21 +44,20 @@ class ProjectActiveGateTests(TestCase):
                 TIMESTAMP_HEADER.lower(): str(int(timezone.now().timestamp())),
             },
         )
-        sentinel = object()
-        middleware = ProjectConfigMiddleware(lambda _request: sentinel)
-        return middleware(request), sentinel
+        middleware = XcashMiddleware(lambda _request: None)
+        return middleware.check_project(request)
 
     def test_deactivated_project_is_rejected(self):
         project = self.make_ready_project(active=False)
 
-        response, sentinel = self.call_middleware(project)
+        rejection = self.call_middleware(project)
 
-        self.assertIsNot(response, sentinel)
-        self.assertEqual(response.status_code, ErrorCode.ACCESS_DENY.value.status)
+        self.assertIsNotNone(rejection)
+        self.assertEqual(
+            rejection.to_response().status_code, ErrorCode.ACCESS_DENY.value.status
+        )
 
-    def test_active_project_passes_through(self):
+    def test_active_project_passes_project_gate(self):
         project = self.make_ready_project(active=True)
 
-        response, sentinel = self.call_middleware(project)
-
-        self.assertIs(response, sentinel)
+        self.assertIsNone(self.call_middleware(project))

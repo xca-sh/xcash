@@ -576,7 +576,7 @@ class EpaySubmitServiceTests(TestCase):
     def test_submit_rejects_deactivated_project(self):
         """项目停用必须拦住 epay 建单，与 /v1 商户 API 同口径。
 
-        epay 入口不经过 ProjectConfigMiddleware，EpayMerchant.active 又是独立
+        epay 入口不经过 XcashMiddleware，EpayMerchant.active 又是独立
         开关；自托管（IS_SAAS=False）没有 SaaS 冻结兜底，Project.active 是唯一
         的停用闸门，漏掉它等于停用形同虚设。
         """

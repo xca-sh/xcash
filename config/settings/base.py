@@ -277,9 +277,8 @@ MIDDLEWARE = [
     "common.middlewares.AdminSessionTimeoutMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "common.middlewares.ExceptionMiddleware",
-    "common.middlewares.ProjectConfigMiddleware",
-    "common.middlewares.IPWhiteListMiddleware",
-    "common.middlewares.HMACMiddleware",
+    # 商户 /v1 API 准入：项目状态 → IP 白名单 → HMAC 签名与 nonce。
+    "common.middlewares.XcashMiddleware",
 ]
 
 # STATIC

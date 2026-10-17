@@ -20,7 +20,7 @@ class PublicEndpointExemptionTests(SimpleTestCase):
         request = self.factory.get("/v1/metadata")
         self.assertTrue(XcashMiddleware._is_no_signature_request(request))
         self.assertFalse(self.middleware._requires_project(request))
-        self.assertFalse(self.middleware._requires_signature(request))
+        self.assertFalse(self.middleware._requires_project(request))
 
     def test_invoice_public_retrieve_stays_public(self):
         # 固定既有豁免（invoice 公开详情）不被回归破坏。
@@ -31,7 +31,7 @@ class PublicEndpointExemptionTests(SimpleTestCase):
         # 商户端点（非白名单）仍必须带 appid + 签名，确保豁免未误扩大。
         request = self.factory.get("/v1/deposit/address")
         self.assertTrue(self.middleware._requires_project(request))
-        self.assertTrue(self.middleware._requires_signature(request))
+        self.assertTrue(self.middleware._requires_project(request))
 
     def test_metadata_post_not_exempted(self):
         # 仅 GET 豁免；POST /v1/metadata 不在白名单，防止豁免被方法混用绕过。

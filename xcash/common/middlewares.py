@@ -111,7 +111,7 @@ class XcashMiddleware:
         ]
         # 公开只读端点：买家支付页直接访问，无商户 appid / 签名。
         # /v1/metadata 是链/币基础字典，与 invoice 公开详情同属此类，必须豁免，
-        # 否则会被 ProjectConfigMiddleware 当作商户 API 拦成 INVALID_APPID。
+        # 否则会被当作商户 API 拦成 INVALID_APPID。
         get_patterns = [
             re.compile(r"^/v1/invoice/[^/]+$"),
             re.compile(r"^/v1/metadata$"),
@@ -127,9 +127,6 @@ class XcashMiddleware:
         return self._is_api_request(request) and not self._is_no_signature_request(
             request
         )
-
-    def _requires_signature(self, request: HttpRequest) -> bool:
-        return self._requires_project(request)
 
     @staticmethod
     def _parse_timestamp(request: HttpRequest) -> int:
@@ -155,6 +152,89 @@ class XcashMiddleware:
     @staticmethod
     def _nonce_cache_key(project: Project, nonce: str) -> str:
         return f"xcash:nonce:{project.appid}:{nonce}"
+
+    def __call__(self, request: HttpRequest):
+        """商户 /v1 API 的统一准入，依次校验：项目 → IP 白名单 → HMAC 签名与 nonce。
+
+        任一项不通过即返回对应错误码；顺序与原先三个独立中间件的叠放顺序一致。
+        """
+        if not self._requires_project(request):
+            return self.get_response(request)
+
+        rejection = (
+            self.check_project(request)
+            or self.check_ip_whitelist(request)
+            or self.check_signature(request)
+        )
+        if rejection is not None:
+            return rejection.to_response()
+        return self.get_response(request)
+
+    def check_project(self, request: HttpRequest) -> APIError | None:
+        project = self.project(request)
+        if not project:
+            return APIError(ErrorCode.INVALID_APPID)
+
+        # 停用的项目必须在此拒绝。active 此前只有 SaaS 的 activate/deactivate 会写、
+        # 没有任何读取方：运维或 SaaS 停用商户后，对方仍能照常建账单、申请充币地址、
+        # 占用 VaultSlot 并消耗归集 gas，后台却显示「已停用」。
+        # 注意它与 SaaS 侧的 frozen 是两套独立状态，check_saas_permission 兜不住。
+        if not project.active:
+            return APIError(ErrorCode.ACCESS_DENY)
+
+        if not settings.DEBUG:
+            request_timestamp = self.timestamp(request)
+            now_ts = int(timezone.now().timestamp())
+            # 容限取 TIMESTAMP_TOLERANCE_SECONDS（300s），与 NONCE_TTL_SECONDS 保持一致，
+            # 防止 nonce 在时间窗口内过期后被重放
+            if (
+                not request_timestamp
+                or abs(request_timestamp - now_ts) > self.TIMESTAMP_TOLERANCE_SECONDS
+            ):
+                return APIError(ErrorCode.EXPIRED)
+
+        ready, errors = project.is_ready
+        if not ready:
+            return APIError(
+                ErrorCode.PROJECT_NOT_READY, detail="; ".join(str(e) for e in errors)
+            )
+        return None
+
+    def check_ip_whitelist(self, request: HttpRequest) -> APIError | None:
+        client_ip = self.client_ip(request)
+        if not client_ip or not is_ip_in_whitelist(
+            whitelist=self.project(request).ip_white_list,
+            ip=client_ip,
+        ):
+            return APIError(ErrorCode.IP_FORBIDDEN)
+        return None
+
+    def check_signature(self, request: HttpRequest) -> APIError | None:
+        project = self.project(request)
+        if not self._is_valid_hmac(request, project):
+            return APIError(ErrorCode.SIGNATURE_ERROR)
+
+        nonce_status = self.register_nonce(request, project)
+        if nonce_status is None:
+            return APIError(ErrorCode.PARAMETER_ERROR)
+        if not nonce_status:
+            return APIError(ErrorCode.REPLAY_ATTACK)
+        return None
+
+    def _is_valid_hmac(self, request: HttpRequest, project: Project) -> bool:
+        # 仅在 DEBUG 模式且服务端显式设置 ALLOW_DEV_BYPASS=1 环境变量时跳过签名校验；
+        # 客户端无法控制服务端环境变量，不存在请求头绕过签名的攻击面。
+        if settings.DEBUG and os.environ.get("ALLOW_DEV_BYPASS") == "1":
+            logger.warning(
+                "HMAC 验证已跳过（DEBUG + ALLOW_DEV_BYPASS=1），请勿在生产环境使用"
+            )
+            return True
+
+        return verify_hmac(
+            message=self.message(request),
+            key=project.hmac_key,
+            signature=self.signature(request),
+        )
 
     def register_nonce(self, request: HttpRequest, project: Project) -> bool | None:
         ctx = self._get_context(request)
@@ -183,92 +263,6 @@ class XcashMiddleware:
             return False
 
         return bool(stored)
-
-
-class ProjectConfigMiddleware(XcashMiddleware):
-    def __call__(self, request: HttpRequest):
-        if not self._requires_project(request):
-            return self.get_response(request)
-
-        project = self.project(request)
-        if not project:
-            return APIError(ErrorCode.INVALID_APPID).to_response()
-
-        # 停用的项目必须在此拒绝。active 此前只有 SaaS 的 activate/deactivate 会写、
-        # 没有任何读取方：运维或 SaaS 停用商户后，对方仍能照常建账单、申请充币地址、
-        # 占用 VaultSlot 并消耗归集 gas，后台却显示「已停用」。
-        # 注意它与 SaaS 侧的 frozen 是两套独立状态，check_saas_permission 兜不住。
-        if not project.active:
-            return APIError(ErrorCode.ACCESS_DENY).to_response()
-
-        if not settings.DEBUG:
-            request_timestamp = self.timestamp(request)
-            now_ts = int(timezone.now().timestamp())
-            # 修复：容限从 60s 改为 TIMESTAMP_TOLERANCE_SECONDS（300s）
-            # 与 NONCE_TTL_SECONDS 保持一致，防止 nonce 在时间窗口内过期后被重放
-            if (
-                not request_timestamp
-                or abs(request_timestamp - now_ts) > self.TIMESTAMP_TOLERANCE_SECONDS
-            ):
-                return APIError(ErrorCode.EXPIRED).to_response()
-
-        ready, errors = project.is_ready
-        if not ready:
-            return APIError(
-                ErrorCode.PROJECT_NOT_READY, detail="; ".join(str(e) for e in errors)
-            ).to_response()
-
-        return self.get_response(request)
-
-
-class IPWhiteListMiddleware(XcashMiddleware):
-    def __call__(self, request: HttpRequest):
-        if not self._requires_project(request):
-            return self.get_response(request)
-
-        client_ip = self.client_ip(request)
-        if not client_ip or not is_ip_in_whitelist(
-            whitelist=self.project(request).ip_white_list,
-            ip=client_ip,
-        ):
-            return APIError(ErrorCode.IP_FORBIDDEN).to_response()
-
-        return self.get_response(request)
-
-
-class HMACMiddleware(XcashMiddleware):
-    def __call__(self, request: HttpRequest):
-        if not self._requires_signature(request):
-            return self.get_response(request)
-
-        project = self.project(request)
-
-        if not self._is_valid_hmac(request, project):
-            return APIError(ErrorCode.SIGNATURE_ERROR).to_response()
-
-        nonce_status = self.register_nonce(request, project)
-        if nonce_status is None:
-            return APIError(ErrorCode.PARAMETER_ERROR).to_response()
-        if not nonce_status:
-            return APIError(ErrorCode.REPLAY_ATTACK).to_response()
-
-        return self.get_response(request)
-
-    def _is_valid_hmac(self, request: HttpRequest, project: Project) -> bool:
-        # 修复：原实现允许客户端通过请求头 "Dev: true" 完全绕过签名验证，高危漏洞
-        # 改为：仅在 DEBUG 模式且服务端显式设置 ALLOW_DEV_BYPASS=1 环境变量时跳过
-        # 客户端无法控制服务端环境变量，彻底消除此攻击面
-        if settings.DEBUG and os.environ.get("ALLOW_DEV_BYPASS") == "1":
-            logger.warning(
-                "HMAC 验证已跳过（DEBUG + ALLOW_DEV_BYPASS=1），请勿在生产环境使用"
-            )
-            return True
-
-        return verify_hmac(
-            message=self.message(request),
-            key=project.hmac_key,
-            signature=self.signature(request),
-        )
 
 
 class ExceptionMiddleware:
