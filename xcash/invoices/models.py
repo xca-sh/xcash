@@ -282,6 +282,14 @@ class Invoice(models.Model):
                 name="uniq_invoice_active_payment",
             ),
         ]
+        indexes = [
+            # fallback_invoice_expired 每 60s 按 expires_at 取到期且未绑定转账的待支付账单。
+            models.Index(
+                fields=("expires_at",),
+                condition=Q(status=InvoiceStatus.WAITING, transfer__isnull=True),
+                name="invoice_waiting_unpaid_idx",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.sys_no}"

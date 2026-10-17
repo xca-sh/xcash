@@ -674,6 +674,17 @@ class TxTask(UndeletableModel):
                 name="uniq_tx_task_chain_hash",
             ),
         ]
+        indexes = [
+            # 派发/轮询/回执/卡单巡检每隔几秒按「未终局」取任务；终局行随时间无限增长，
+            # 部分索引只收录在途的少量行，避免这些周期查询退化成全表扫描。
+            models.Index(
+                fields=("status",),
+                condition=models.Q(
+                    status__in=(TxTaskStatus.QUEUED, TxTaskStatus.SUBMITTED)
+                ),
+                name="txtask_active_status_idx",
+            ),
+        ]
         verbose_name = _("链上任务")
         verbose_name_plural = verbose_name
 
@@ -1529,6 +1540,20 @@ class Transfer(models.Model):
             models.UniqueConstraint(
                 fields=("chain", "hash", "event_index"),
                 name="uniq_transfer_chain_hash_event_index",
+            ),
+        ]
+        indexes = [
+            # fallback_process_transfer 每 20s 按 created_at 取未处理转账。
+            models.Index(
+                fields=("created_at",),
+                condition=models.Q(processed_at__isnull=True),
+                name="transfer_unprocessed_idx",
+            ),
+            # 每条链推进高度后按 timestamp 取本链确认中的转账（block_number_updated）。
+            models.Index(
+                fields=("chain", "timestamp"),
+                condition=models.Q(status=TransferStatus.CONFIRMING),
+                name="transfer_confirming_idx",
             ),
         ]
 

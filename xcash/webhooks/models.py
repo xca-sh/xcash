@@ -75,6 +75,15 @@ class WebhookEvent(models.Model):
 
     class Meta:
         ordering = ("-created_at",)
+        indexes = [
+            # 调度（15s）、超时回收、巡检都按 created_at 取待投递事件；已终结事件只增不减。
+            # Meta 作用域看不到外层的 Status，"pending" 即 Status.PENDING。
+            models.Index(
+                fields=("created_at",),
+                condition=models.Q(status="pending"),
+                name="webhook_event_pending_idx",
+            ),
+        ]
         verbose_name = _("事件")
         verbose_name_plural = verbose_name
 
