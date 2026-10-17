@@ -9,6 +9,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 
 from chains.constants import TRON_MAINNET_BASE_URL
+from common import http_client
 
 logger = structlog.get_logger()
 
@@ -80,17 +81,17 @@ class TronHttpClient:
         )
         for attempt in range(max_attempts):
             try:
-                # 走 httpx.get/post 而非 httpx.request 分发：测试用 @patch("tron.client.httpx.get/post")
-                # 拦截调用，统一入口能稳定保持现有测试 mock 表面。
+                # 复用进程级共享 Client（见 common.http_client）：Tron 扫描每块都要发请求，
+                # 每次新建客户端要多付一次 SSLContext 构造与 TCP+TLS 握手。
                 if method == "GET":
-                    response = httpx.get(
+                    response = http_client.get(
                         url,
                         headers=self._headers(),
                         timeout=self.timeout,
                         params=params,
                     )
                 elif method == "POST":
-                    response = httpx.post(
+                    response = http_client.post(
                         url,
                         headers=self._headers(),
                         timeout=self.timeout,

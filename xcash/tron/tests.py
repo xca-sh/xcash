@@ -412,7 +412,7 @@ class TronTransferConfirmationTests(TestCase):
 @override_settings(TRON_RPC_TIMEOUT=3.0)
 @patch("tron.client._TRON_HTTP_RETRY_BACKOFF_SECONDS", (0, 0))
 class TronHttpClientTests(SimpleTestCase):
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_get_energy_fee_reads_live_chain_parameter(self, get_mock):
         chain = SimpleNamespace(code=ChainCode.Tron, tron_api_key="")
         client = TronHttpClient(chain=chain)
@@ -431,7 +431,7 @@ class TronHttpClientTests(SimpleTestCase):
         )
         self.assertEqual(get_mock.call_args.kwargs["timeout"], 3.0)
 
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_get_energy_fee_rejects_missing_or_invalid_price(self, get_mock):
         client = TronHttpClient(
             chain=SimpleNamespace(code=ChainCode.Tron, tron_api_key=""),
@@ -450,7 +450,7 @@ class TronHttpClientTests(SimpleTestCase):
         with self.assertRaisesMessage(TronClientError, "invalid energy fee"):
             client.get_energy_fee()
 
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_get_energy_fee_wraps_network_failure(self, get_mock):
         get_mock.side_effect = httpx.ConnectError("unavailable")
         client = TronHttpClient(
@@ -462,7 +462,7 @@ class TronHttpClientTests(SimpleTestCase):
             client.get_energy_fee()
 
     @patch("tron.client._TRON_HTTP_RETRY_BACKOFF_SECONDS", (0, 0))
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_retry_error_uses_chain_code_when_chain_field_is_absent(self, get_mock):
         get_mock.side_effect = httpx.ConnectError("boom")
         chain = SimpleNamespace(
@@ -474,7 +474,7 @@ class TronHttpClientTests(SimpleTestCase):
         with self.assertRaisesMessage(TronClientError, "from tron-mainnet"):
             TronHttpClient(chain=chain).get_latest_solid_block_number()
 
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_get_latest_solid_block_number_reads_block_header_number(self, get_mock):
         get_mock.return_value.json.return_value = {
             "block_header": {"raw_data": {"number": 123456}}
@@ -497,7 +497,7 @@ class TronHttpClientTests(SimpleTestCase):
             "https://api.trongrid.io/walletsolidity/getnowblock",
         )
 
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_get_latest_solid_block_number_rejects_missing_or_zero_number(
         self, get_mock
     ):
@@ -522,7 +522,7 @@ class TronHttpClientTests(SimpleTestCase):
                 ):
                     TronHttpClient(chain=chain).get_latest_solid_block_number()
 
-    @patch("tron.client.httpx.post")
+    @patch("tron.client.http_client.post")
     def test_get_solid_block_id_posts_block_number(self, post_mock):
         post_mock.return_value.json.return_value = {"blockID": "A" * 64}
         post_mock.return_value.raise_for_status.return_value = None
@@ -543,7 +543,7 @@ class TronHttpClientTests(SimpleTestCase):
         )
         self.assertEqual(call_kwargs["json"], {"num": 123456})
 
-    @patch("tron.client.httpx.post")
+    @patch("tron.client.http_client.post")
     def test_get_solid_block_id_rejects_invalid_block_id(self, post_mock):
         post_mock.return_value.json.return_value = {"blockID": ""}
         post_mock.return_value.raise_for_status.return_value = None
@@ -557,7 +557,7 @@ class TronHttpClientTests(SimpleTestCase):
         with self.assertRaisesMessage(TronClientError, "invalid solid block id"):
             TronHttpClient(chain=chain).get_solid_block_id(block_number=123456)
 
-    @patch("tron.client.httpx.post")
+    @patch("tron.client.http_client.post")
     def test_get_transaction_info_by_id_posts_tx_hash(self, post_mock):
         post_mock.return_value.json.return_value = {"id": "a" * 64}
         post_mock.return_value.raise_for_status.return_value = None
@@ -575,7 +575,7 @@ class TronHttpClientTests(SimpleTestCase):
         _, kwargs = post_mock.call_args
         self.assertEqual(kwargs["json"], {"value": "a" * 64})
 
-    @patch("tron.client.httpx.post")
+    @patch("tron.client.http_client.post")
     def test_get_account_resource_posts_visible_address(self, post_mock):
         post_mock.return_value.json.return_value = {"EnergyLimit": 1000}
         post_mock.return_value.raise_for_status.return_value = None
@@ -603,7 +603,7 @@ class TronHttpClientTests(SimpleTestCase):
             },
         )
 
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_list_confirmed_trc20_history_sends_contract_filter_and_fingerprint(
         self,
         get_mock,
@@ -624,7 +624,7 @@ class TronHttpClientTests(SimpleTestCase):
         self.assertEqual(kwargs["params"]["only_confirmed"], "true")
         self.assertEqual(kwargs["params"]["fingerprint"], "cursor-1")
 
-    @patch("tron.client.httpx.post")
+    @patch("tron.client.http_client.post")
     def test_get_transaction_infos_by_block_posts_solidity_endpoint(self, post_mock):
         post_mock.return_value.json.return_value = []
         post_mock.return_value.raise_for_status.return_value = None
@@ -646,7 +646,7 @@ class TronHttpClientTests(SimpleTestCase):
         self.assertEqual(kwargs["headers"]["TRON-PRO-API-KEY"], "tron-key")
         self.assertEqual(kwargs["json"], {"num": 61840405})
 
-    @patch("tron.client.httpx.post")
+    @patch("tron.client.http_client.post")
     def test_get_transaction_infos_by_block_rejects_non_list_payload(self, post_mock):
         # 错误形态（网关错误 dict 等）绝不能被当作空块推进游标，必须抛错停住扫描。
         post_mock.return_value.json.return_value = {"Error": "boom"}
@@ -665,7 +665,7 @@ class TronHttpClientTests(SimpleTestCase):
         ):
             client.get_transaction_infos_by_block(block_number=61840405)
 
-    @patch("tron.client.httpx.post")
+    @patch("tron.client.http_client.post")
     def test_get_transaction_infos_by_block_wraps_http_error(self, post_mock):
         post_mock.side_effect = httpx.HTTPError("boom")
 
@@ -682,7 +682,7 @@ class TronHttpClientTests(SimpleTestCase):
         ):
             client.get_transaction_infos_by_block(block_number=61840405)
 
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_retries_transient_http_error_until_success(self, get_mock):
         # 第一次抛瞬时网络错误、第二次成功：整体被重试吸收，不应上抛 TronClientError。
         good_response = Mock()
@@ -701,7 +701,7 @@ class TronHttpClientTests(SimpleTestCase):
         self.assertEqual(latest_block, 42)
         self.assertEqual(get_mock.call_count, 2)
 
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_retries_retriable_http_status_until_success(self, get_mock):
         # 5xx / 429 属于节点瞬时错误，应进入同一套退避重试逻辑。
         bad_response = Mock()
@@ -727,7 +727,7 @@ class TronHttpClientTests(SimpleTestCase):
         self.assertEqual(latest_block, 43)
         self.assertEqual(get_mock.call_count, 2)
 
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_does_not_retry_on_non_retriable_4xx(self, get_mock):
         # 401 / 403 / 404 等客户端错误属永久故障，重试只会重复触发，应立即上抛。
         bad_response = Mock()
@@ -773,7 +773,7 @@ class TronHttpClientSoftTimeLimitTests(SimpleTestCase):
         )
 
     @patch("tron.client.time.sleep")
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_soft_time_limit_propagates_without_retry_or_backoff(
         self, get_mock, sleep_mock
     ):
@@ -789,7 +789,7 @@ class TronHttpClientSoftTimeLimitTests(SimpleTestCase):
         sleep_mock.assert_not_called()
 
     @patch("tron.client._TRON_HTTP_RETRY_BACKOFF_SECONDS", (0, 0))
-    @patch("tron.client.httpx.get")
+    @patch("tron.client.http_client.get")
     def test_ordinary_http_error_still_retries_and_wraps(self, get_mock):
         # 反向用例：确认穿透分支没有顺带关掉普通网络故障的重试与统一包装。
         get_mock.side_effect = httpx.ConnectError("boom")
