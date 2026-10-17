@@ -1081,6 +1081,33 @@ class EvmErc20ScannerTests(TestCase):
 
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
+    def test_scan_chain_requests_logs_within_chain_max_block_range(
+        self,
+        get_latest_block_number_mock,
+        get_logs_mock,
+    ):
+        # RPC 层不再切片，eth_getLogs 的区块跨度只由扫描器按链配置分段控制；
+        # 任何一次请求越过 evm_log_max_block_range 都会被节点按跨度上限拒绝。
+        Chain.objects.filter(pk=self.chain.pk).update(evm_log_max_block_range=10)
+        self.chain.refresh_from_db(fields=["evm_log_max_block_range"])
+        EvmScanCursor.objects.filter(chain=self.chain).delete()
+        EvmScanCursor.objects.create(chain=self.chain, last_scanned_block=100)
+        get_latest_block_number_mock.return_value = 126
+        get_logs_mock.return_value = []
+
+        EvmLogScanner.scan_chain(chain=self.chain, batch_size=100)
+
+        requested = sorted(
+            {
+                (call.kwargs["from_block"], call.kwargs["to_block"])
+                for call in get_logs_mock.call_args_list
+            }
+        )
+        # 窗口 [97, 125]（回放 4 块、扫到链头前一块），按 10 块一段。
+        self.assertEqual(requested, [(97, 106), (107, 116), (117, 125)])
+
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_chain_commits_progress_per_chunk_on_interrupt(
         self,
         get_latest_block_number_mock,

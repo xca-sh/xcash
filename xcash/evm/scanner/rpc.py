@@ -58,29 +58,20 @@ class EvmScannerRpcClient:
         topic0: str | list[str],
         summary: str = "获取 EVM 日志失败",
     ) -> list[dict[str, Any]]:
+        """拉取 [from_block, to_block] 的日志。
+
+        区块跨度由调用方按 chain.evm_log_max_block_range 分段控制（EvmLogScanner 逐段
+        调用并逐段提交游标），这里整段请求；节点报结果超限时由 _get_logs_chunk 二分。
+        """
         if from_block > to_block or addresses == []:
             return []
-
-        max_block_range = max(
-            1, int(getattr(self.chain, "evm_log_max_block_range", 10))
+        return self._get_logs_chunk(
+            from_block=from_block,
+            to_block=to_block,
+            addresses=addresses,
+            topic0=topic0,
+            summary=summary,
         )
-        logs: list[dict[str, Any]] = []
-        chunk_from = from_block
-
-        while chunk_from <= to_block:
-            chunk_to = min(to_block, chunk_from + max_block_range - 1)
-            logs.extend(
-                self._get_logs_chunk(
-                    from_block=chunk_from,
-                    to_block=chunk_to,
-                    addresses=addresses,
-                    topic0=topic0,
-                    summary=summary,
-                )
-            )
-            chunk_from = chunk_to + 1
-
-        return logs
 
     def _get_logs_chunk(
         self,
