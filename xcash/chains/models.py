@@ -590,6 +590,8 @@ class TxHash(models.Model):
         "Chain",
         on_delete=models.PROTECT,
         related_name="tx_hashes",
+        # 唯一约束 (chain, hash) 以 chain_id 打头，已能服务按链过滤，不再单独建索引。
+        db_index=False,
         verbose_name=_("链"),
     )
     hash = HashField(unique=False, verbose_name=_("交易哈希"))
@@ -646,6 +648,8 @@ class TxTask(UndeletableModel):
     chain = models.ForeignKey(
         "Chain",
         on_delete=models.PROTECT,
+        # 唯一约束 (chain, tx_hash) 以 chain_id 打头，已能服务按链过滤，不再单独建索引。
+        db_index=False,
         verbose_name=_("链"),
     )
     tx_type = models.CharField(
@@ -850,7 +854,6 @@ class VaultSlot(models.Model):
         _("用途"),
         choices=VaultSlotUsage,
         max_length=16,
-        db_index=True,
     )
     project = models.ForeignKey(
         "projects.Project",
@@ -919,6 +922,10 @@ class VaultSlot(models.Model):
                 ),
                 name="ck_vault_slot_usage_customer",
             ),
+        ]
+        indexes = [
+            # 跨链识别充值地址时按 address__in 查、不带 chain，(chain, address) 唯一约束用不上。
+            models.Index(fields=("address",), name="vault_slot_address_idx"),
         ]
         verbose_name = _("收款地址")
         verbose_name_plural = verbose_name
@@ -1485,7 +1492,13 @@ class Transfer(models.Model):
         invoice: Invoice
         deposit: Deposit
 
-    chain = models.ForeignKey(Chain, on_delete=models.CASCADE, verbose_name=_("链"))
+    chain = models.ForeignKey(
+        Chain,
+        on_delete=models.CASCADE,
+        # 唯一约束 (chain, hash, event_index) 以 chain_id 打头，已能服务按链过滤，不再单独建索引。
+        db_index=False,
+        verbose_name=_("链"),
+    )
     block = models.IntegerField(_("区块高度"))
     block_hash = HashField(
         verbose_name=_("区块哈希"),

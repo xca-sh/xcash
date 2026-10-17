@@ -228,7 +228,6 @@ class Invoice(models.Model):
         verbose_name=_("账单收款地址"),
         blank=True,
         null=True,
-        db_index=True,
     )
 
     started_at = models.DateTimeField(_("账单收款开始时间"), auto_now_add=True)
@@ -283,6 +282,8 @@ class Invoice(models.Model):
             ),
         ]
         indexes = [
+            # 入账撮合、组合占用判断按 pay_address 查 WAITING/EXPIRED 账单，部分唯一约束覆盖不了。
+            models.Index(fields=("pay_address",), name="invoice_pay_address_idx"),
             # fallback_invoice_expired 每 60s 按 expires_at 取到期且未绑定转账的待支付账单。
             models.Index(
                 fields=("expires_at",),

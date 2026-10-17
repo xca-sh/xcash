@@ -11,10 +11,16 @@ from common.tron_codec import TronAddressCodec
 
 
 class HashField(models.CharField):
+    """链上哈希字段。
+
+    哈希/地址类字段默认不建单列索引：PostgreSQL 对 db_index 的 varchar 列会额外建一个
+    varchar_pattern_ops 的 _like 索引，而这类列只有等值查询、且几乎都带 chain 被唯一约束
+    前缀覆盖。确有单列查询的字段在模型 Meta.indexes 里显式声明（不产生 _like）。
+    """
+
     def __init__(self, *args, **kwargs):
         # 修复：默认保持唯一，但允许具体业务模型按需覆盖。
         kwargs.setdefault("unique", True)
-        kwargs.setdefault("db_index", True)
         kwargs.setdefault("verbose_name", _("哈希"))
         # 覆盖当前支持链哈希最大长度：EVM=66，Tron=64。
         # 统一设为 100，留有余量，不依赖调用方传入
@@ -41,8 +47,9 @@ class HashField(models.CharField):
 
 
 class EvmAddressField(models.CharField):
+    """EVM checksum 地址字段；索引策略同 HashField，按需在 Meta.indexes 显式声明。"""
+
     def __init__(self, *args, **kwargs):
-        kwargs["db_index"] = True
         # EVM 地址固定 42 字符（0x + 40 hex）
         kwargs.setdefault("max_length", 42)
 
@@ -58,8 +65,9 @@ class EvmAddressField(models.CharField):
 
 
 class AddressField(models.CharField):
+    """链上地址字段；索引策略同 HashField，按需在 Meta.indexes 显式声明。"""
+
     def __init__(self, *args, **kwargs):
-        kwargs["db_index"] = True
         # 覆盖当前支持链地址最大长度：EVM=42。
         kwargs.setdefault("max_length", 100)
 
