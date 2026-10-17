@@ -596,7 +596,7 @@ class DepositAddressValidationTests(TestCase):
         )
 
         with patch(
-            "deposits.viewsets.VaultSlot.ensure_deposit_address"
+            "deposits.service.VaultSlot.ensure_deposit_address"
         ) as ensure_address:
             response = self.call_address(project=project, chain=chain, crypto=crypto)
 
@@ -666,11 +666,11 @@ class DepositCustomerLimitTests(TestCase):
         with (
             patch.object(DepositViewSet, "permission_classes", [AllowAny]),
             patch(
-                "deposits.viewsets.ChainProductCapabilityService.supports_deposit_address",
+                "deposits.service.ChainProductCapabilityService.supports_deposit_address",
                 return_value=True,
             ),
             patch(
-                "deposits.viewsets.VaultSlot.ensure_deposit_address",
+                "deposits.service.VaultSlot.ensure_deposit_address",
                 return_value="0x000000000000000000000000000000000000dEaD",
             ),
         ):

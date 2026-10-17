@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 
 import structlog
 from aml.service import AmlScreeningService
 from aml.tasks import screen_transfer_aml
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
+from chains.capabilities import ChainProductCapabilityService
+from chains.models import Chain
 from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
@@ -15,19 +19,98 @@ from chains.models import VaultSlot
 from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.vault_slots import schedule_collect_for_slot
+from common.error_codes import ErrorCode
+from common.exceptions import APIError
+from common.permission_check import get_saas_deposit_customer_limit
 from common.saas_callback import CallbackEvent
 from common.saas_callback import SaasCallback
 from common.saas_callback import send_saas_callback
 from common.utils.math import format_decimal_stripped
+from currencies.models import Crypto
+from currencies.service import CryptoService
 from deposits.exceptions import DepositStatusError
 from deposits.models import Deposit
+from projects.models import Customer
+from projects.models import Project
 from webhooks.service import WebhookService
 
 logger = structlog.get_logger()
 
+# 客户 uid 合法字符：字母、数字、下划线、中划线，长度 1~128
+DEPOSIT_UID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,128}$")
+
 
 class DepositService:
     """智能合约收款体系下的充值生命周期。"""
+
+    @staticmethod
+    def resolve_deposit_address(
+        *, project: Project, uid: str, chain_code: str, crypto_symbol: str
+    ) -> tuple[str, Chain, Crypto]:
+        """校验后返回客户在指定链上的充值地址，客户与地址不存在时按需创建。
+
+        /v1 商户接口与 SaaS 内部接口共用这一套校验，避免两处口径漂移：
+        主网/测试网隔离、币种启用、链上可充值、归集地址已配置、客户数上限。
+        """
+        if not uid or not DEPOSIT_UID_PATTERN.match(uid):
+            raise APIError(ErrorCode.INVALID_UID)
+
+        try:
+            chain = Chain.objects.get(code=chain_code, active=True)
+        except Chain.DoesNotExist as exc:
+            raise APIError(ErrorCode.INVALID_CHAIN) from exc
+
+        # 测试项目只能在测试网建充币地址，非测试项目只能用主网，隔离两类代币防止资金/记账混淆。
+        if chain.is_testnet != project.is_test:
+            raise APIError(ErrorCode.INVALID_CHAIN)
+
+        if not crypto_symbol:
+            raise APIError(ErrorCode.INVALID_CRYPTO, detail="crypto is required")
+        try:
+            crypto = CryptoService.get_by_symbol(crypto_symbol)
+        except ObjectDoesNotExist as exc:
+            raise APIError(ErrorCode.INVALID_CRYPTO) from exc
+
+        # 停用的币不允许申请充币地址，避免用户入金后因币种未启用而没有 Deposit 记录。
+        if not crypto.active:
+            raise APIError(ErrorCode.INVALID_CRYPTO)
+
+        if not crypto.support_this_chain(chain=chain):
+            raise APIError(
+                ErrorCode.CHAIN_CRYPTO_NOT_SUPPORT,
+                detail=f"{crypto_symbol} 不支持 {chain_code} 链",
+            )
+        if not ChainProductCapabilityService.has_active_crypto_on_chain(
+            chain=chain,
+            crypto=crypto,
+        ):
+            raise APIError(
+                ErrorCode.CHAIN_CRYPTO_NOT_SUPPORT,
+                detail=f"{crypto_symbol} 未在 {chain_code} 链启用",
+            )
+        if not ChainProductCapabilityService.supports_deposit_address(
+            chain=chain,
+            crypto=crypto,
+        ):
+            raise APIError(ErrorCode.INVALID_CHAIN)
+        if not project.vault_address_for_chain_type(chain.type):
+            raise APIError(ErrorCode.RECIPIENT_NOT_CONFIGURED)
+
+        if not Customer.objects.filter(project=project, uid=uid).exists():
+            customer_limit = get_saas_deposit_customer_limit(appid=project.appid)
+            if (
+                customer_limit is not None
+                and Customer.objects.filter(project=project).count() >= customer_limit
+            ):
+                raise APIError(ErrorCode.DEPOSIT_CUSTOMER_LIMIT_REACHED)
+        customer, _ = Customer.objects.get_or_create(project=project, uid=uid)
+
+        deposit_address = VaultSlot.ensure_deposit_address(
+            chain,
+            customer,
+            crypto=crypto,
+        )
+        return deposit_address, chain, crypto
 
     @staticmethod
     def build_webhook_payload(
