@@ -107,7 +107,7 @@ class AmlTestMixin:
 
 class QuicknodeMistTrackClientTests(SimpleTestCase):
     @patch("aml.clients.time.sleep", return_value=None)
-    @patch("aml.clients.httpx.request")
+    @patch("aml.clients.http_client.request")
     def test_address_risk_score_posts_json_rpc_payload(self, httpx_request, _sleep):
         response = httpx.Response(
             200,
@@ -142,7 +142,7 @@ class QuicknodeMistTrackClientTests(SimpleTestCase):
         self.assertEqual(result.risk_score, Decimal("88"))
 
     @patch("aml.clients.time.sleep", return_value=None)
-    @patch("aml.clients.httpx.request")
+    @patch("aml.clients.http_client.request")
     def test_json_rpc_error_raises_client_error(self, httpx_request, _sleep):
         httpx_request.return_value = httpx.Response(
             200,
@@ -156,7 +156,7 @@ class QuicknodeMistTrackClientTests(SimpleTestCase):
             ).address_risk_score(chain="ETH", address="0xabc")
 
     @patch("aml.clients.time.sleep", return_value=None)
-    @patch("aml.clients.httpx.request")
+    @patch("aml.clients.http_client.request")
     def test_4xx_raises_without_retry(self, httpx_request, _sleep):
         httpx_request.return_value = httpx.Response(
             401,
@@ -172,7 +172,7 @@ class QuicknodeMistTrackClientTests(SimpleTestCase):
         self.assertEqual(httpx_request.call_count, 1)
 
     @patch("aml.clients.time.sleep", return_value=None)
-    @patch("aml.clients.httpx.request")
+    @patch("aml.clients.http_client.request")
     def test_5xx_and_429_retry_then_succeed(self, httpx_request, _sleep):
         ok = httpx.Response(
             200,
@@ -203,7 +203,7 @@ class QuicknodeMistTrackClientTests(SimpleTestCase):
         self.assertEqual(httpx_request.call_count, 3)
 
     @patch("aml.clients.time.sleep", return_value=None)
-    @patch("aml.clients.httpx.request")
+    @patch("aml.clients.http_client.request")
     def test_exhausted_retries_raise_without_leaking_endpoint_token(
         self, httpx_request, _sleep
     ):

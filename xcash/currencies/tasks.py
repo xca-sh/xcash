@@ -1,8 +1,8 @@
-import httpx
 import structlog
 from celery import shared_task
 from django.utils import timezone
 
+from common import http_client
 from currencies.models import Crypto
 from currencies.models import Fiat
 
@@ -42,7 +42,7 @@ def refresh_crypto_prices():
         f"&vs_currencies={','.join(code.lower() for code in fiat_codes)}"
     )
     try:
-        response = httpx.get(api_url, timeout=8)
+        response = http_client.get(api_url, timeout=8)
         response.raise_for_status()
         price_data = response.json()
     except Exception:

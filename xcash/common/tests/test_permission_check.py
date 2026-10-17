@@ -230,8 +230,8 @@ class RefreshSaasPermissionTaskTest(TestCase):
     def setUp(self):
         cache.clear()
 
-    @patch("common.permission_check.httpx.Client")
-    def test_task_writes_cache_with_fetched_at(self, mock_client_cls):
+    @patch("common.permission_check.http_client")
+    def test_task_writes_cache_with_fetched_at(self, mock_http):
         """任务成功 → 缓存被覆写，含 _fetched_at 时间戳。"""
 
         mock_resp = Mock()
@@ -240,9 +240,7 @@ class RefreshSaasPermissionTaskTest(TestCase):
             "frozen": False,
         }
         mock_resp.raise_for_status.return_value = None
-        mock_client_cls.return_value.__enter__.return_value.post.return_value = (
-            mock_resp
-        )
+        mock_http.post.return_value = mock_resp
 
         before = time.time()
         _refresh_saas_permission.run(appid="XC-r")
@@ -254,22 +252,20 @@ class RefreshSaasPermissionTaskTest(TestCase):
         self.assertGreaterEqual(cached["_fetched_at"], before)
         self.assertLessEqual(cached["_fetched_at"], after)
 
-    @patch("common.permission_check.httpx.Client")
-    def test_task_failure_keeps_old_cache(self, mock_client_cls):
+    @patch("common.permission_check.http_client")
+    def test_task_failure_keeps_old_cache(self, mock_http):
         """任务调 SaaS 失败 → 旧缓存原封不动，方便后续主调用继续兜底。"""
 
         old = {"frozen": False, "_fetched_at": time.time() - 100}
         cache.set("saas:permission:XC-keep", old, None)
 
-        mock_client_cls.return_value.__enter__.return_value.post.side_effect = (
-            httpx.ConnectError("boom")
-        )
+        mock_http.post.side_effect = httpx.ConnectError("boom")
         _refresh_saas_permission.run(appid="XC-keep")
 
         self.assertEqual(cache.get("saas:permission:XC-keep"), old)
 
-    @patch("common.permission_check.httpx.Client")
-    def test_task_4xx_treated_as_failure(self, mock_client_cls):
+    @patch("common.permission_check.http_client")
+    def test_task_4xx_treated_as_failure(self, mock_http):
         """SaaS 返回 4xx（如 token 错误）→ 同样视作失败，不破坏旧缓存。"""
 
         old = {"frozen": False, "_fetched_at": time.time() - 100}
@@ -281,19 +277,17 @@ class RefreshSaasPermissionTaskTest(TestCase):
             request=Mock(),
             response=Mock(status_code=403),
         )
-        mock_client_cls.return_value.__enter__.return_value.post.return_value = (
-            mock_resp
-        )
+        mock_http.post.return_value = mock_resp
 
         _refresh_saas_permission.run(appid="XC-4xx")
 
         self.assertEqual(cache.get("saas:permission:XC-4xx"), old)
 
     @override_settings(IS_SAAS=False)
-    @patch("common.permission_check.httpx.Client")
-    def test_task_skips_when_no_token(self, mock_client_cls):
+    @patch("common.permission_check.http_client")
+    def test_task_skips_when_no_token(self, mock_http):
         """自托管模式下任务被错误派发也不会调 SaaS。"""
 
         _refresh_saas_permission.run(appid="XC-x")
 
-        mock_client_cls.assert_not_called()
+        mock_http.post.assert_not_called()

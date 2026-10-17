@@ -222,7 +222,7 @@ class EvmTokenRegistryCacheTests(TestCase):
         token_registry = load_token_registry(chain=self.chain)
         self.assertIn(self.token_on_chain.address, token_registry)
 
-    @patch("currencies.tasks.httpx.get")
+    @patch("currencies.tasks.http_client.get")
     def test_price_refresh_task_keeps_cached_token_set(self, mock_get):
         # 直接跑真实的行情刷新任务：任务写入的 update_fields 一旦超出豁免集（曾漏掉
         # prices_updated_at），每分钟都会把所有 EVM 链的代币表缓存清空重建。

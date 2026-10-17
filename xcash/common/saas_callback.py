@@ -10,6 +10,8 @@ from django.db import models
 from django.db import transaction
 from django.utils import timezone
 
+from common import http_client
+
 logger = structlog.get_logger()
 
 # SaaS 侧接收回调的固定路径；SAAS_CALLBACK_URL 只配 scheme+host，路径由这里拼
@@ -129,16 +131,16 @@ def _deliver_saas_callback(self, *, payload: dict) -> None:
     url = f"{settings.SAAS_CALLBACK_URL.rstrip('/')}{_SAAS_CALLBACK_PATH}"
 
     try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.post(
-                url,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {settings.SAAS_API_TOKEN}",
-                    "Content-Type": "application/json",
-                },
-            )
-            resp.raise_for_status()
+        resp = http_client.post(
+            url,
+            timeout=10,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {settings.SAAS_API_TOKEN}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
             "saas_callback_failed",

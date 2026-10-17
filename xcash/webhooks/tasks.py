@@ -17,6 +17,7 @@ from django.db.models import F
 from django.db.models import Q
 from django.utils import timezone
 
+from common import http_client
 from common.consts import APPID_HEADER
 from common.consts import NONCE_HEADER
 from common.consts import SIGNATURE_HEADER
@@ -266,7 +267,10 @@ def _execute_http_delivery(
 
     start = time.perf_counter()
     try:
-        with httpx.Client(timeout=5) as client:
+        # 不能用 common.http_client 的共享连接池：连接固定到已校验 IP，池按 IP 复用连接，
+        # 同 IP 的两个商户会复用对方的 TLS 连接、绕过证书校验。只复用 SSLContext，省掉
+        # 每次投递现场加载 CA 包的开销。
+        with httpx.Client(timeout=5, verify=http_client.ssl_context()) as client:
             with client.stream(
                 method,
                 request_url,

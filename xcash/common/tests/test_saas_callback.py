@@ -10,11 +10,11 @@ class SaasCallbackTest(TestCase):
         SAAS_API_TOKEN="test-token",
         SAAS_CALLBACK_URL="http://saas.local",
     )
-    @patch("common.saas_callback.httpx.Client")
-    def test_deliver_sends_post_with_bearer_token(self, mock_client_cls):
+    @patch("common.saas_callback.http_client")
+    def test_deliver_sends_post_with_bearer_token(self, mock_http):
         from common.saas_callback import _deliver_saas_callback
 
-        mock_client = mock_client_cls.return_value.__enter__.return_value
+        mock_client = mock_http
 
         _deliver_saas_callback(
             payload={
@@ -37,8 +37,8 @@ class SaasCallbackTest(TestCase):
         assert payload["worth"] == "100.00"
 
     @override_settings(IS_SAAS=False)
-    @patch("common.saas_callback.httpx.Client")
-    def test_deliver_skips_when_token_missing(self, mock_client_cls):
+    @patch("common.saas_callback.http_client")
+    def test_deliver_skips_when_token_missing(self, mock_http):
         from common.saas_callback import _deliver_saas_callback
 
         _deliver_saas_callback(
@@ -51,20 +51,20 @@ class SaasCallbackTest(TestCase):
             }
         )
 
-        mock_client_cls.assert_not_called()
+        mock_http.post.assert_not_called()
 
     @override_settings(
         IS_SAAS=True,
         SAAS_API_TOKEN="test-token",
         SAAS_CALLBACK_URL="http://saas.local",
     )
-    @patch("common.saas_callback.httpx.Client")
-    def test_deliver_retries_on_http_error(self, mock_client_cls):
+    @patch("common.saas_callback.http_client")
+    def test_deliver_retries_on_http_error(self, mock_http):
         import httpx
 
         from common.saas_callback import _deliver_saas_callback
 
-        mock_client = mock_client_cls.return_value.__enter__.return_value
+        mock_client = mock_http
         mock_response = httpx.Response(
             status_code=500, request=httpx.Request("POST", "http://test")
         )

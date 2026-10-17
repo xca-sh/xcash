@@ -9,6 +9,8 @@ from typing import Any
 import httpx
 from aml.models import RiskLevel
 
+from common import http_client
+
 
 @dataclass(frozen=True)
 class MistTrackAmlResult:
@@ -42,7 +44,7 @@ def _request_with_retry(
     last_exc: Exception | None = None
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            response = httpx.request(method, url, **request_kwargs)
+            response = http_client.request(method, url, **request_kwargs)
         except httpx.HTTPError as exc:
             last_exc = exc
             if attempt == _MAX_ATTEMPTS - 1:

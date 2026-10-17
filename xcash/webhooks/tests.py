@@ -977,3 +977,40 @@ class ReapStalledEventsTests(TestCase):
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
+
+
+class WebhookDeliveryClientIsolationTests(SimpleTestCase):
+    """商户投递固定到已校验 IP，连接池按 IP 复用会让同 IP 的商户共用 TLS 连接。"""
+
+    def test_delivery_uses_isolated_client_with_shared_ssl_context(self):
+        from common import http_client
+        from webhooks.tasks import _execute_http_delivery
+
+        mock_response = MagicMock(status_code=200, headers={})
+        mock_response.iter_bytes.return_value = iter([b"ok"])
+        mock_client = MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_client.stream.return_value.__enter__.return_value = mock_response
+
+        with (
+            patch(
+                "webhooks.tasks.httpx.Client", return_value=mock_client
+            ) as client_cls,
+            patch.object(http_client, "shared_client") as shared_client_mock,
+        ):
+            ok, *_ = _execute_http_delivery(
+                request_url="https://merchant.example/notify",
+                headers={},
+                body_str="{}",
+                pinned_ip="93.184.216.34",
+            )
+
+        self.assertTrue(ok)
+        shared_client_mock.assert_not_called()
+        client_cls.assert_called_once()
+        self.assertIs(client_cls.call_args.kwargs["verify"], http_client.ssl_context())
+        # 证书仍按原主机名校验：SNI 走 extensions，连接目标改成已校验 IP。
+        stream_kwargs = mock_client.stream.call_args.kwargs
+        self.assertEqual(
+            stream_kwargs["extensions"], {"sni_hostname": "merchant.example"}
+        )

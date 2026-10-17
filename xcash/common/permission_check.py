@@ -26,6 +26,7 @@ from celery import shared_task
 from django.conf import settings
 from django.core.cache import cache
 
+from common import http_client
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
 
@@ -179,21 +180,21 @@ def _refresh_saas_permission(*, appid: str) -> None:
 
 def _fetch_from_saas(appid: str) -> dict:
     url = f"{settings.SAAS_CALLBACK_URL.rstrip('/')}{_SAAS_PERMISSION_PATH}"
-    with httpx.Client(timeout=_TIMEOUT) as client:
-        resp = client.post(
-            url,
-            json={"appid": appid},
-            headers={
-                "Authorization": f"Bearer {settings.SAAS_API_TOKEN}",
-                "Content-Type": "application/json",
-            },
-        )
-        resp.raise_for_status()
-        try:
-            data = resp.json()
-        except ValueError as exc:
-            # 非 JSON 响应（502 HTML 网关页等）→ 包成 HTTPError 让调用方按"SaaS 不可达"处理
-            raise httpx.HTTPError(f"non-JSON response: {exc}") from exc
-        if not isinstance(data, dict):
-            raise httpx.HTTPError(f"unexpected response type: {type(data).__name__}")
-        return data
+    resp = http_client.post(
+        url,
+        timeout=_TIMEOUT,
+        json={"appid": appid},
+        headers={
+            "Authorization": f"Bearer {settings.SAAS_API_TOKEN}",
+            "Content-Type": "application/json",
+        },
+    )
+    resp.raise_for_status()
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        # 非 JSON 响应（502 HTML 网关页等）→ 包成 HTTPError 让调用方按"SaaS 不可达"处理
+        raise httpx.HTTPError(f"non-JSON response: {exc}") from exc
+    if not isinstance(data, dict):
+        raise httpx.HTTPError(f"unexpected response type: {type(data).__name__}")
+    return data
