@@ -3,7 +3,6 @@ from __future__ import annotations
 from chains.capabilities import ChainProductCapabilityService
 from chains.constants import CHAIN_SPECS
 from chains.models import ChainType
-from chains.service import ChainService
 from chains.vault_slots import is_chain_native_crypto
 from currencies.models import CryptoOnChain
 from projects.models import InvoiceReceivingMode
@@ -16,40 +15,6 @@ class ProjectService:
     @staticmethod
     def get_by_appid(appid: str) -> Project:
         return Project.retrieve(appid)
-
-    @staticmethod
-    def get_by_id(project_id: int) -> Project:
-        return Project.objects.get(pk=project_id)
-
-    @staticmethod
-    def contract_receivable_chain_codes(project: Project) -> set[str]:
-        """智能合约收款模式下项目可收款的链 code 集合。
-
-        智能合约收款依赖对应链类型的项目不可变归集地址；Tron 的基础合约地址是
-        发布前必须补齐的项目常量，不在业务入口重复做运行时门禁。
-        """
-        chain_codes = set()
-        if project.evm_vault:
-            chain_codes |= ChainService.codes_of_types({ChainType.EVM})
-        if project.tron_vault:
-            chain_codes |= set(
-                CryptoOnChain.objects.filter(
-                    chain__type=ChainType.TRON,
-                    chain__active=True,
-                    crypto__symbol="USDT",
-                    crypto__active=True,
-                    active=True,
-                )
-                .exclude(address="")
-                .values_list("chain__code", flat=True)
-            )
-
-        # 主网/测试网门控：测试项目只收测试网链，非测试项目只收主网，隔离两类代币防混淆。
-        return {
-            code
-            for code in chain_codes
-            if CHAIN_SPECS[code].is_testnet == project.is_test
-        }
 
     @staticmethod
     def invoice_receiving_mode_for_chain(*, project: Project, chain) -> str:

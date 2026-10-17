@@ -2779,7 +2779,7 @@ class TronScannerTests(TestCase):
         from_hex = TronAddressCodec.base58_to_hex41(self.sender_address)
 
         def parse(tx):
-            return TronScanner._parse_native_transfer(
+            events = TronScanner._parse_native_transfers(
                 chain=self.chain,
                 tx=tx,
                 block_number=123,
@@ -2788,6 +2788,7 @@ class TronScannerTests(TestCase):
                 crypto=self.trx,
                 decimals=6,
             )
+            return events[0] if events else None
 
         event = parse(self._native_tx(to_hex=to_hex, from_hex=from_hex))
         self.assertIsNotNone(event)

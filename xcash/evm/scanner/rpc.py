@@ -223,18 +223,6 @@ class EvmScannerRpcClient:
         )
         return int(block["timestamp"])
 
-    def get_full_block(self, *, block_number: int) -> dict[str, Any]:
-        raw_block: dict[str, Any] = self._call_with_retry(
-            fn=lambda: self._get_block_with_poa_retry(
-                block_number=block_number,
-                full_transactions=True,
-            ),
-            summary="获取完整区块失败",
-            method="eth_getBlockByNumber",
-            context=f"block={block_number}",
-        )
-        return dict(raw_block)
-
     def get_block_receipts(self, *, block_number: int) -> dict[str, dict] | None:
         """整块拉取所有交易 receipt，返回 hash -> receipt 映射。"""
         if self._block_receipts_supported is False:

@@ -96,20 +96,6 @@ class Crypto(models.Model):
         """
         return CryptoOnChain.objects.get(crypto=self, chain=chain).decimals
 
-    def supported_chains(self) -> str:
-        crypto_on_chains = self.crypto_on_chains.select_related("chain").all()
-        return ", ".join(on_chain.chain.name for on_chain in crypto_on_chains)
-
-    @classmethod
-    def all_methods(cls):
-        # 通过 CryptoOnChain 统一处理原生币和合约币，不再区分两种路径
-        methods = {}
-        for crypto in cls.objects.prefetch_related("crypto_on_chains__chain"):
-            chain_codes = [ct.chain.code for ct in crypto.crypto_on_chains.all()]
-            if chain_codes:
-                methods[crypto.symbol] = chain_codes
-        return methods
-
     def price(self, fiat):
         # 稳定币对 USD 恒按 1 锚定，无需行情。
         if fiat == "USD" and self.symbol in self.USD_PEGGED_SYMBOLS:

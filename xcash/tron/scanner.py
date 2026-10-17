@@ -318,30 +318,6 @@ class TronScanner:
         return events
 
     @classmethod
-    def _parse_native_transfer(
-        cls,
-        *,
-        chain: Chain,
-        tx: dict,
-        block_number: int,
-        block_hash: str,
-        block_timestamp_ms: int,
-        crypto,
-        decimals: int,
-    ) -> ParsedTronTransferEvent | None:
-        """兼容旧单测入口：返回 tx 中第一条可解析的原生 TRX 入账事件。"""
-        events = cls._parse_native_transfers(
-            chain=chain,
-            tx=tx,
-            block_number=block_number,
-            block_hash=block_hash,
-            block_timestamp_ms=block_timestamp_ms,
-            crypto=crypto,
-            decimals=decimals,
-        )
-        return events[0] if events else None
-
-    @classmethod
     def _parse_native_transfer_contract(
         cls,
         *,

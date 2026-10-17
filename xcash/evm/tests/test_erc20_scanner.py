@@ -1158,7 +1158,7 @@ class EvmErc20ScannerTests(TestCase):
         self.assertEqual(self.chain.latest_block_number, 200)
 
     @patch("evm.tasks.EvmTaskPoller.poll_chain")
-    @patch("evm.tasks.EvmScannerService.scan_chain")
+    @patch("evm.tasks.EvmLogScanner.scan_chain")
     def test_scan_evm_chain_task_runs_scanner_without_polling_tx_tasks(
         self,
         scan_chain_mock,

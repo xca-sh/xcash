@@ -1,15 +1,17 @@
+from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import ANY
 from unittest.mock import Mock
 from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import TestCase
+from django.utils import timezone
 from web3 import Web3
 
 from chains.constants import ChainCode
 from chains.models import Address
 from chains.models import AddressUsage
+from chains.models import Chain
 from chains.models import ChainType
 from chains.models import TxHash
 from chains.models import TxTask
@@ -21,10 +23,8 @@ from chains.service import TransferService
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from currencies.models import Crypto
 from evm.intents import build_contract_call_intent
-from evm.models import EvmScanCursor
 from evm.models import EvmTxTask
 from evm.scanner.rpc import EvmScannerRpcError
-from evm.scanner.service import EvmScannerService
 from evm.tests._fixtures import make_evm_chain
 
 
@@ -47,70 +47,26 @@ class EvmChainScannerServiceTests(TestCase):
         cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
-    @patch("evm.scanner.service.EvmLogScanner.scan_chain")
-    def test_scan_chain_runs_even_when_cursor_disabled(
-        self,
-        scan_chain_mock,
-    ):
-        EvmScanCursor.objects.create(
-            chain=self.chain,
-            enabled=False,
-        )
-
-        result = EvmScannerService.scan_chain(chain=self.chain)
-
-        scan_chain_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
-        self.assertIsNone(result)
-
-    @patch("evm.scanner.service.EvmLogScanner.scan_chain")
-    def test_scan_chain_scans_native_and_erc20(
-        self,
-        scan_chain_mock,
-    ):
-        scan_chain_mock.return_value = None
-
-        result = EvmScannerService.scan_chain(chain=self.chain)
-
-        scan_chain_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
-        self.assertIsNone(result)
-
     @patch(
-        "evm.scanner.service.EvmLogScanner.scan_chain",
+        "evm.tasks.EvmLogScanner.scan_chain",
         side_effect=EvmScannerRpcError("rpc timeout"),
     )
-    def test_scan_chain_returns_empty_when_rpc_fails(
+    def test_scan_task_swallows_rpc_error_and_still_marks_scanned(
         self,
         scan_chain_mock,
     ):
-        result = EvmScannerService.scan_chain(chain=self.chain)
+        # RPC 失败只记日志，不能让任务抛错；last_scanned_at 照常推进，按固定周期重试，
+        # 避免对不健康的节点每 2 秒一次连环重扫。
+        from evm.tasks import _scan_evm_chain
 
-        scan_chain_mock.assert_called_once_with(chain=self.chain, rpc_client=ANY)
-        self.assertIsNone(result)
+        stale = timezone.now() - timedelta(hours=1)
+        Chain.objects.filter(pk=self.chain.pk).update(last_scanned_at=stale)
 
-    @patch("evm.scanner.service.load_token_registry")
-    @patch("evm.scanner.service.EvmLogScanner.scan_range")
-    def test_reconcile_blocks_scans_native_and_erc20_ranges(
-        self,
-        scan_range_mock,
-        load_token_registry_mock,
-    ):
-        load_token_registry_mock.return_value = {}
-        scan_range_mock.return_value = None
+        _scan_evm_chain(self.chain.pk)
 
-        result = EvmScannerService.reconcile_blocks(
-            chain=self.chain,
-            block_numbers={10},
-        )
-
-        scan_range_mock.assert_called_once_with(
-            chain=self.chain,
-            rpc_client=ANY,
-            token_registry=load_token_registry_mock.return_value,
-            from_block=10,
-            to_block=10,
-        )
-        self.assertEqual(result.from_block, 10)
-        self.assertEqual(result.to_block, 10)
+        scan_chain_mock.assert_called_once()
+        self.chain.refresh_from_db()
+        self.assertGreater(self.chain.last_scanned_at, stale)
 
     @patch.object(EvmTxTask, "_next_nonce", return_value=0)
     def test_schedule_defers_signing_until_first_broadcast(

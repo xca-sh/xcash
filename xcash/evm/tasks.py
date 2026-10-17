@@ -13,8 +13,8 @@ from common.decorators import singleton_task
 from common.time import ago
 from evm.models import EvmTxTask
 from evm.poller import EvmTaskPoller
+from evm.scanner.logs import EvmLogScanner
 from evm.scanner.rpc import EvmScannerRpcError
-from evm.scanner.service import EvmScannerService
 
 logger = structlog.get_logger()
 
@@ -179,7 +179,7 @@ def _scan_evm_chain(chain_pk: int) -> None:
 
     try:
         try:
-            EvmScannerService.scan_chain(chain=chain)
+            EvmLogScanner.scan_chain(chain=chain)
         except EvmScannerRpcError:
             logger.warning("EVM 自扫描 RPC 失败", chain=chain.name)
         except SoftTimeLimitExceeded:

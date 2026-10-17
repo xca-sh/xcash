@@ -58,7 +58,7 @@ class EvmScannerRpcErrorMessageTests(SimpleTestCase):
         self.assertLess(message.index("rpc=eth_getLogs"), message.index("from=100"))
         self.assertIn("rpc=eth_getLogs", message[:60])
 
-    def test_get_full_block_error_includes_rpc_method_and_raw_reason(self):
+    def test_get_block_timestamp_error_includes_rpc_method_and_raw_reason(self):
         chain = SimpleNamespace(
             code="bsc-mainnet",
             w3=SimpleNamespace(
@@ -69,10 +69,10 @@ class EvmScannerRpcErrorMessageTests(SimpleTestCase):
         )
 
         with self.assertRaises(EvmScannerRpcError) as caught:
-            EvmScannerRpcClient(chain=chain).get_full_block(block_number=9_586_911)
+            EvmScannerRpcClient(chain=chain).get_block_timestamp(block_number=9_586_911)
 
         message = str(caught.exception)
-        self.assertIn("获取完整区块失败", message)
+        self.assertIn("获取区块时间失败", message)
         self.assertIn("rpc=eth_getBlockByNumber", message)
         self.assertIn("read timeout", message)
         self.assertLess(
@@ -407,26 +407,28 @@ class EvmScannerRpcClientTests(TestCase):
         build_poa_retry_w3_mock.assert_called_once()
 
     @patch.object(rpc_module, "_EVM_RPC_RETRY_BACKOFF_SECONDS", (0, 0))
-    def test_get_full_block_retries_until_success_within_attempt_budget(self):
+    def test_get_block_timestamp_retries_until_success_within_attempt_budget(self):
         # 瞬时网络抖动应被重试吸收：第三次成功就当作整体成功，不应上抛 EvmScannerRpcError。
         get_block_mock = Mock(
             side_effect=[
                 TimeoutError("read timeout"),
                 TimeoutError("read timeout"),
-                {"number": 100, "transactions": []},
+                {"number": 100, "timestamp": 1_700_000_000},
             ]
         )
         self.chain.__dict__["w3"] = SimpleNamespace(
             eth=SimpleNamespace(get_block=get_block_mock)
         )
 
-        block = EvmScannerRpcClient(chain=self.chain).get_full_block(block_number=100)
+        timestamp = EvmScannerRpcClient(chain=self.chain).get_block_timestamp(
+            block_number=100
+        )
 
-        self.assertEqual(block["number"], 100)
+        self.assertEqual(timestamp, 1_700_000_000)
         self.assertEqual(get_block_mock.call_count, 3)
 
     @patch.object(rpc_module, "_EVM_RPC_RETRY_BACKOFF_SECONDS", (0, 0))
-    def test_get_full_block_exhausts_retries_and_wraps_as_rpc_error(self):
+    def test_get_block_timestamp_exhausts_retries_and_wraps_as_rpc_error(self):
         # 退避窗口耗尽后才包装成 EvmScannerRpcError 上抛；游标据此记录 last_error。
         get_block_mock = Mock(side_effect=TimeoutError("read timeout"))
         self.chain.__dict__["w3"] = SimpleNamespace(
@@ -434,7 +436,7 @@ class EvmScannerRpcClientTests(TestCase):
         )
 
         with self.assertRaises(EvmScannerRpcError):
-            EvmScannerRpcClient(chain=self.chain).get_full_block(block_number=100)
+            EvmScannerRpcClient(chain=self.chain).get_block_timestamp(block_number=100)
 
         self.assertEqual(get_block_mock.call_count, 3)
 
@@ -453,36 +455,6 @@ class EvmScannerRpcClientTests(TestCase):
         self.assertEqual(second, 99)
         # 第二次调用读自实例缓存，不应再触达底层 Web3 / chain property。
         self.assertIsNotNone(client._cached_latest_block)
-
-    @patch("evm.scanner.rpc.EvmScannerRpcClient._build_poa_retry_w3")
-    def test_get_full_block_retries_with_poa_when_extradata_is_too_long(
-        self,
-        build_poa_retry_w3_mock,
-    ):
-        # is_poa 现由链常量推导且只读，POA 重试不再回写 DB，故仅验证重试路径被触发。
-        failing_w3 = SimpleNamespace(
-            eth=SimpleNamespace(
-                get_block=Mock(
-                    side_effect=ExtraDataLengthError(
-                        "poa extraData too long",
-                    )
-                )
-            )
-        )
-        retry_w3 = SimpleNamespace(
-            eth=SimpleNamespace(
-                get_block=Mock(return_value={"number": 93_739_122, "transactions": []})
-            )
-        )
-        self.chain.__dict__["w3"] = failing_w3
-        build_poa_retry_w3_mock.return_value = retry_w3
-
-        block = EvmScannerRpcClient(chain=self.chain).get_full_block(
-            block_number=93_739_122
-        )
-
-        self.assertEqual(block["number"], 93_739_122)
-        build_poa_retry_w3_mock.assert_called_once()
 
 
 class EvmScannerSoftTimeLimitTests(SimpleTestCase):

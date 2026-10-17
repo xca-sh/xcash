@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import typing
 
-from chains.capabilities import ChainProductCapabilityService
 from currencies.models import Crypto
-from currencies.models import CryptoOnChain
 from currencies.models import Fiat
 
 if typing.TYPE_CHECKING:
@@ -47,30 +45,6 @@ class CryptoService:
     @staticmethod
     def to_fiat(crypto: Crypto, fiat: Fiat, amount: Decimal) -> Decimal:
         return crypto.to_fiat(fiat, amount)
-
-    @staticmethod
-    def allowed_methods(*, chain_codes: set[str] | None = None) -> dict[str, set[str]]:
-        """返回系统级 invoice 可用 (crypto_symbol → {chain_code}) 映射。
-
-        实现：通过 CryptoOnChain 一次查询带出所有 active 的链上币种关系（币、链、链上币种三级开关
-        均需启用），在内存中应用 capability 规则。chain_codes 可把查询收敛到项目已配置
-        收币地址的链，避免无关链币关系进入后续计算。
-        """
-        tokens = CryptoOnChain.objects.select_related("crypto", "chain").filter(
-            crypto__active=True, chain__active=True, active=True
-        )
-        if chain_codes is not None:
-            tokens = tokens.filter(chain__code__in=chain_codes)
-
-        sanitized: dict[str, set[str]] = {}
-        for token in tokens:
-            if ChainProductCapabilityService.supports_existing_invoice_method(
-                chain=token.chain,
-                crypto=token.crypto,
-            ):
-                sanitized.setdefault(token.crypto.symbol, set()).add(token.chain.code)
-
-        return sanitized
 
 
 class FiatService:

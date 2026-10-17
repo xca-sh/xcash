@@ -13,6 +13,7 @@ from currencies.models import Crypto
 from invoices.models import DifferRecipientAddress
 from projects.admin import ProjectAdmin
 from projects.admin import ProjectForm
+from projects.models import InvoiceReceivingMode
 from projects.models import Project
 from projects.service import ProjectService
 from users.models import User
@@ -127,30 +128,35 @@ class ProjectAdminTests(TestCase):
 class ProjectTestnetGateTests(TestCase):
     """主网/测试网门控：is_test 隔离两类链，防止主网与测试网代币混淆。"""
 
-    def test_contract_receivable_chain_codes_isolate_by_is_test(self):
-        make_evm_chain(code=ChainCode.Ethereum)  # 主网
-        make_evm_chain(code=ChainCode.Sepolia)  # 测试网
+    def test_invoice_receivable_methods_isolate_by_is_test(self):
+        mainnet = make_evm_chain(code=ChainCode.Ethereum)
+        testnet = make_evm_chain(code=ChainCode.Sepolia)
 
         prod = Project.objects.create(
             name="Prod Gate Project",
             evm_vault="0x0000000000000000000000000000000000009901",
+            evm_invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
             is_test=False,
         )
         test = Project.objects.create(
             name="Test Gate Project",
             evm_vault="0x0000000000000000000000000000000000009902",
+            evm_invoice_receiving_mode=InvoiceReceivingMode.VaultSlot,
             is_test=True,
         )
 
-        prod_codes = ProjectService.contract_receivable_chain_codes(prod)
-        test_codes = ProjectService.contract_receivable_chain_codes(test)
+        prod_chains = set().union(
+            *ProjectService.invoice_receivable_methods(prod).values()
+        )
+        test_chains = set().union(
+            *ProjectService.invoice_receivable_methods(test).values()
+        )
 
-        # 普通项目只见主网链
-        self.assertIn(ChainCode.Ethereum, prod_codes)
-        self.assertNotIn(ChainCode.Sepolia, prod_codes)
-        # 测试项目只见测试网链
-        self.assertIn(ChainCode.Sepolia, test_codes)
-        self.assertNotIn(ChainCode.Ethereum, test_codes)
+        # 普通项目只见主网链，测试项目只见测试网链。
+        self.assertIn(mainnet.code, prod_chains)
+        self.assertNotIn(testnet.code, prod_chains)
+        self.assertIn(testnet.code, test_chains)
+        self.assertNotIn(mainnet.code, test_chains)
 
 
 class ProjectReadinessTests(TestCase):

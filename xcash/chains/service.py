@@ -35,14 +35,6 @@ class ChainService:
             qs = qs.filter(active=True)
         return qs.get()
 
-    @staticmethod
-    def codes_of_types(chain_types: set[str]) -> set[str]:
-        return set(
-            Chain.objects.filter(type__in=chain_types, active=True).values_list(
-                "code", flat=True
-            )
-        )
-
 
 @dataclass(frozen=True)
 class ObservedTransferPayload:
