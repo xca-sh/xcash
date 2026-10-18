@@ -33,10 +33,11 @@ from .serializers import InvoiceCreateSerializer
 from .serializers import InvoiceDisplaySerializer
 from .serializers import InvoicePublicSerializer
 from .serializers import InvoiceSetCryptoChainSerializer
-from .service import (
-    INVOICE_PUBLIC_NON_WAITING_CACHE_TTL,  # noqa: F401  向后兼容 re-export
-)
-from .service import INVOICE_PUBLIC_WAITING_CACHE_TTL  # noqa: F401  向后兼容 re-export
+
+# 下面两个 TTL 常量是向后兼容 re-export。noqa 行内只放 pragma：black 会把超长行拆开，
+# 带说明文字的 noqa 会被挪到 `)` 后失效，ruff --fix 进而把这个 re-export 当未使用删掉。
+from .service import INVOICE_PUBLIC_NON_WAITING_CACHE_TTL  # noqa: F401
+from .service import INVOICE_PUBLIC_WAITING_CACHE_TTL  # noqa: F401
 from .service import InvoiceService
 from .service import invoice_public_cache_key
 from .service import invoice_public_cache_ttl

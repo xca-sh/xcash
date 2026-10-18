@@ -336,9 +336,7 @@ class TronTxTask(UndeletableModel):
         if self.base_task.tx_type == TxTaskType.VaultSlotDeploy:
             # 与回执失败收口保持一致：部署失败后兜底检查链上是否已有合约
             # （他途部署/CREATE2 撞已部署地址会模拟 revert），避免漏翻 is_deployed。
-            from chains.vault_slots import (  # noqa: PLC0415
-                mark_deployed_if_on_chain_for_task,
-            )
+            from chains.vault_slots import mark_deployed_if_on_chain_for_task
 
             mark_deployed_if_on_chain_for_task(self.base_task)
 

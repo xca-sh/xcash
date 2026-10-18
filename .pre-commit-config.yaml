@@ -27,17 +27,19 @@ repos:
         args: [ '--target-version', '4.2' ]
 
   # Black 代码格式化（在 ruff lint 之前运行，确保格式先统一）
+  # black / ruff 的 rev 必须与 pyproject.toml dev 依赖的版本一致，否则本地钩子与 CI 的
+  # `uv run black/ruff` 规则不同，会出现钩子改完 CI 仍报错（或反之）。
   - repo: https://github.com/psf/black
-    rev: 25.1.0
+    rev: 26.10.1
     hooks:
       - id: black
 
   # Ruff 静态检查（在 black 之后运行，此时格式已统一）
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.12
+    rev: v0.17.1
     hooks:
       # 只跑 linter：格式化由 black 独占，ruff-format 已移除以免两者互相打架
-      - id: ruff
+      - id: ruff-check
         args: [ --fix, --exit-non-zero-on-fix ]
 
   - repo: local

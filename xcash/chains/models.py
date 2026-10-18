@@ -1692,8 +1692,6 @@ class Transfer(models.Model):
 
     def _refresh_vault_slot_balances(self) -> None:
         """确认后按链上余额真值刷新受影响 VaultSlot 余额快照。"""
-        from chains.vault_slot_balances import (  # noqa: PLC0415
-            refresh_vault_slot_balance_for_transfer,
-        )
+        from chains.vault_slot_balances import refresh_vault_slot_balance_for_transfer
 
         refresh_vault_slot_balance_for_transfer(self)
