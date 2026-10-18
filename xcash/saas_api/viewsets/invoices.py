@@ -2,6 +2,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 from saas_api.authentication import SaasTokenAuthentication
 from saas_api.invoice_status import DISPLAY_STATUS_FILTERS
+from saas_api.list_filters import filter_invoices
 from saas_api.serializers.invoices import SaasInvoiceDetailSerializer
 
 from common.error_codes import ErrorCode
@@ -31,7 +32,9 @@ class SaasInvoiceViewSet(ModelViewSet):
             "transfer__aml_assessment",
         )
         if self.action == "list":
+            # 状态、关键字、公链/币种、创建时间区间可任意组合
             queryset = self.filter_by_display_status(queryset)
+            queryset = filter_invoices(queryset, self.request.query_params)
         return queryset
 
     def filter_by_display_status(self, queryset):

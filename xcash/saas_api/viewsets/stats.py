@@ -23,6 +23,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from saas_api.authentication import SaasTokenAuthentication
 from saas_api.invoice_status import DISPLAY_STATUS_FILTERS
+from saas_api.list_filters import filter_invoices
 
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
@@ -76,9 +77,7 @@ class StatsViewSet(GenericViewSet):
                 invoices.filter(
                     started_at__gte=start,
                     started_at__lt=end,
-                ).aggregate(
-                    n=Count("pk")
-                )["n"]
+                ).aggregate(n=Count("pk"))["n"]
                 or 0
             )
 
@@ -158,10 +157,17 @@ class StatsViewSet(GenericViewSet):
 
     @action(detail=False, methods=["get"], url_path="invoice-status-counts")
     def invoice_status_counts(self, request, project_appid=None):
-        """按商户可见状态统计项目全部账单数量，口径见 saas_api.invoice_status。"""
+        """按商户可见状态统计账单数量，口径见 saas_api.invoice_status。
+
+        接受与账单列表相同的关键字 / 公链 / 币种 / 创建时间筛选（不含 status），
+        让列表页签上的数字始终等于对应页签下的筛选结果条数。
+        """
         project = self._project()
 
-        counts = Invoice.objects.filter(project=project).aggregate(
+        queryset = filter_invoices(
+            Invoice.objects.filter(project=project), request.query_params
+        )
+        counts = queryset.aggregate(
             total=Count("pk"),
             **{
                 name: Count("pk", filter=condition)
