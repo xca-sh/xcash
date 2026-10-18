@@ -30,6 +30,11 @@ updates:
       # ——本意是跟补丁，结果反而漏补丁。5.3 同样不是 LTS，一并挡掉。
       - dependency-name: "django"
         versions: [">= 5.3"]
+      # mypy 与 pyproject.toml 的上限保持一致：djangorestframework-stubs[compatible-mypy]
+      # 要求 mypy<2.4，dependabot 照样会提 2.4，uv lock 无解后整个 Dependabot 运行被
+      # 标红（每周一次）。stubs 放开后与 pyproject 里的 mypy pin 一起删掉这条。
+      - dependency-name: "mypy"
+        versions: [">= 2.4"]
 
   # 支付前端（pnpm）
   - package-ecosystem: "npm"
