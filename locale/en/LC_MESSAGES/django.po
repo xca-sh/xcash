@@ -2370,6 +2370,18 @@ msgstr ""
 "Invoice payments on Tron networks use either direct wallet or smart contract "
 "mode."
 
+#: xcash/projects/models.py:118
+msgid "智能合约收款"
+msgstr "Smart Contract Receiving"
+
+#: xcash/projects/models.py:120
+msgid ""
+"开启后才能设置收款归集地址、使用智能合约账单收款与用户充值；设置任一收款归集"
+"地址后不可关闭。"
+msgstr ""
+"Enable to set collection addresses and use smart contract invoice payments "
+"and customer deposits; cannot be disabled once any collection address is set."
+
 #: xcash/projects/models.py:103
 msgid "测试项目"
 msgstr "Test Project"
@@ -2386,6 +2398,26 @@ msgstr ""
 #: xcash/projects/models.py:132
 msgid "收款归集地址一旦设置不可修改。"
 msgstr "The collection address cannot be changed after it is set."
+
+#: xcash/projects/models.py:197
+msgid "已设置收款归集地址，不能关闭智能合约收款。"
+msgstr "A collection address is already set; smart contract receiving cannot be disabled."
+
+#: xcash/projects/models.py:202
+msgid "未开启智能合约收款，不能设置收款归集地址。"
+msgstr "Smart contract receiving is disabled; collection addresses cannot be set."
+
+#: xcash/projects/models.py:205
+msgid "需先设置 EVM 收款归集地址。"
+msgstr "Set the EVM collection address first."
+
+#: xcash/projects/models.py:206
+msgid "需先设置 Tron 收款归集地址。"
+msgstr "Set the Tron collection address first."
+
+#: xcash/projects/models.py:212
+msgid "未开启智能合约收款，账单只能使用钱包直收。"
+msgstr "Smart contract receiving is disabled; invoices can only use direct wallet payments."
 
 #: xcash/projects/models.py:171
 msgid "EVM 收款归集地址必须是 checksum 地址。"

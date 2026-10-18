@@ -1,7 +1,9 @@
+import copy
 import ipaddress
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework import serializers
 
 from chains.models import ChainType
@@ -24,6 +26,21 @@ def validate_webhook_url(value: str) -> str:
     if not is_http_url or not delivery_url_scheme_allowed(value):
         raise serializers.ValidationError("webhook 必须使用 https 地址")
     return value
+
+
+def validate_contract_receiving_change(project: Project, changes: dict) -> None:
+    """在 project 现值上叠加本次改动，按智能合约收款的配置不变量校验最终状态。
+
+    不变量定义在 Project.validate_contract_receiving，admin 与 SaaS API 共用同一口径；
+    这里在副本上叠加改动，校验失败不会污染调用方持有的实例。
+    """
+    candidate = copy.copy(project)
+    for field, value in changes.items():
+        setattr(candidate, field, value)
+    try:
+        candidate.validate_contract_receiving()
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError(exc.message_dict) from exc
 
 
 class ProjectCreateSerializer(serializers.ModelSerializer):
@@ -59,6 +76,9 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
             # 不动已存在账单。choices 校验由 ModelSerializer 从模型字段自动派生。
             "evm_invoice_receiving_mode",
             "tron_invoice_receiving_mode",
+            # 智能合约收款开关（SaaS 钱包页的简洁/完整模式）。关闭时不能有归集地址，
+            # 账单模式选智能合约须先开启并设置该链归集地址，见 validate()。
+            "contract_receiving_enabled",
             # AML 筛查按项目配置，商户自助开关。阈值非负由模型 MinValueValidator 派生校验。
             "aml_screening_enabled",
             "aml_screening_threshold_usd",
@@ -99,6 +119,21 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
         if value < 0:
             raise serializers.ValidationError("fast_confirm_threshold 不能为负数")
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if self.instance is not None:
+            validate_contract_receiving_change(self.instance, attrs)
+        return attrs
+
+    def update(self, instance, validated_data):
+        # validate() 读的是未加锁的实例：关闭开关的同时另一请求可能刚设置了归集地址。
+        # 锁定行后按最新数据复查（与 vault 接口的行锁互斥），并在锁定行上写入，
+        # 避免用过期实例整行保存。
+        with transaction.atomic():
+            locked = Project.objects.select_for_update().get(pk=instance.pk)
+            validate_contract_receiving_change(locked, validated_data)
+            return super().update(locked, validated_data)
 
 
 class ProjectVaultSetSerializer(serializers.Serializer):
@@ -145,6 +180,7 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
             "fast_confirm_threshold",
             "evm_invoice_receiving_mode",
             "tron_invoice_receiving_mode",
+            "contract_receiving_enabled",
             "aml_screening_enabled",
             "aml_screening_threshold_usd",
             "evm_vault_address",

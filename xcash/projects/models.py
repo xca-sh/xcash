@@ -112,6 +112,16 @@ class Project(models.Model):
         default=InvoiceReceivingMode.Differ,
         help_text=_("Tron 网络账单收款使用钱包直收或智能合约模式。"),
     )
+    # 智能合约收款总开关，只在配置入口（admin clean / SaaS API）把关，运行时逻辑不读它。
+    # 由 validate_contract_receiving 的不变量保证：关闭 ⇒ 无归集地址 ⇒ 账单只能钱包直收、无法充值。
+    contract_receiving_enabled = models.BooleanField(
+        _("智能合约收款"),
+        default=False,
+        help_text=_(
+            "开启后才能设置收款归集地址、使用智能合约账单收款与用户充值；"
+            "设置任一收款归集地址后不可关闭。"
+        ),
+    )
 
     active = models.BooleanField(verbose_name=_("启用"), default=True)
     is_test = models.BooleanField(
@@ -152,6 +162,58 @@ class Project(models.Model):
     def clean(self) -> None:
         super().clean()
         self.validate_vault_addresses()
+        self.validate_contract_receiving()
+
+    def validate_contract_receiving(self) -> None:
+        """校验智能合约收款开关与归集地址、账单收款模式之间的配置不变量。
+
+        只在配置入口调用（admin 表单经 clean()，SaaS API 经序列化器），运行时不依赖它：
+        1. 开关关闭 ⇒ evm_vault、tron_vault 都为空。
+           违反时按实际改动的字段报错：有归集地址已落库，说明是在关闭开关，报在开关字段；
+           归集地址都是本次新填的，报在这些归集地址字段上。admin 中已设置的归集地址是
+           只读字段，错误不能挂在它上面，这样区分也保证错误总落在表单可编辑的字段上。
+        2. 某链账单收款模式为智能合约 ⇒ 开关已开启且该链归集地址已设置。
+        由此关闭状态下两条链必然都是钱包直收，且没有归集地址就无法创建充值收款地址。
+        """
+        errors = {}
+        set_vault_fields = [
+            field for field in ("evm_vault", "tron_vault") if getattr(self, field)
+        ]
+        if not self.contract_receiving_enabled and set_vault_fields:
+            persisted = {}
+            if self.pk is not None:
+                persisted = (
+                    Project.objects.filter(pk=self.pk)
+                    .values("evm_vault", "tron_vault")
+                    .first()
+                    or {}
+                )
+            newly_set_fields = [
+                field
+                for field in set_vault_fields
+                if persisted.get(field) != getattr(self, field)
+            ]
+            if len(newly_set_fields) < len(set_vault_fields):
+                errors["contract_receiving_enabled"] = _(
+                    "已设置收款归集地址，不能关闭智能合约收款。"
+                )
+            else:
+                for field in newly_set_fields:
+                    errors[field] = _("未开启智能合约收款，不能设置收款归集地址。")
+
+        for chain_type, missing_vault_message in (
+            (ChainType.EVM, _("需先设置 EVM 收款归集地址。")),
+            (ChainType.TRON, _("需先设置 Tron 收款归集地址。")),
+        ):
+            mode_field = self.invoice_receiving_mode_field_for_chain_type(chain_type)
+            if getattr(self, mode_field) != InvoiceReceivingMode.VaultSlot:
+                continue
+            if not self.contract_receiving_enabled:
+                errors[mode_field] = _("未开启智能合约收款，账单只能使用钱包直收。")
+            elif not self.vault_address_for_chain_type(chain_type):
+                errors[mode_field] = missing_vault_message
+        if errors:
+            raise ValidationError(errors)
 
     def validate_vault_addresses(self) -> None:
         errors = {}

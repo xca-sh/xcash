@@ -12,12 +12,16 @@ from decimal import Decimal
 
 import pytest
 from django.test import override_settings
+from rest_framework import serializers
+from saas_api.serializers.projects import ProjectUpdateSerializer
 
 from chains.models import ChainType
 from projects.models import InvoiceReceivingMode
 from projects.models import Project
 
 AUTH_HEADER = "Bearer test-saas-token"
+VALID_EVM_VAULT = "0x52908400098527886E0F7030069857D2E4169EE7"
+VALID_TRON_VAULT = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
 
 
 @pytest.fixture
@@ -104,6 +108,9 @@ class TestPatchFieldWhitelist:
 
     def test_receiving_mode_per_chain_update(self, client, project):
         """账单收款模式按链配置，切换只影响后续新账单的地址分配。"""
+        project.contract_receiving_enabled = True
+        project.tron_vault = VALID_TRON_VAULT
+        project.save(update_fields=["contract_receiving_enabled", "tron_vault"])
         assert project.evm_invoice_receiving_mode == InvoiceReceivingMode.Differ
         assert project.tron_invoice_receiving_mode == InvoiceReceivingMode.Differ
 
@@ -154,6 +161,114 @@ class TestPatchFieldWhitelist:
         assert project.webhook == "https://example.com/cb"
         assert project.webhook_open is False
         assert project.fast_confirm_threshold == Decimal("25.50")
+
+
+# ---------- 智能合约收款开关 ----------
+
+
+@pytest.mark.django_db
+class TestContractReceivingSwitch:
+    def patch(self, client, project, data):
+        return client.patch(
+            _url(project),
+            data=data,
+            content_type="application/json",
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+
+    def test_vault_slot_rejected_when_disabled(self, client, project):
+        response = self.patch(
+            client,
+            project,
+            {"evm_invoice_receiving_mode": InvoiceReceivingMode.VaultSlot},
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "evm_invoice_receiving_mode": ["未开启智能合约收款，账单只能使用钱包直收。"]
+        }
+        project.refresh_from_db()
+        assert project.evm_invoice_receiving_mode == InvoiceReceivingMode.Differ
+
+    def test_vault_slot_rejected_when_chain_vault_missing(self, client, project):
+        project.contract_receiving_enabled = True
+        project.evm_vault = VALID_EVM_VAULT
+        project.save(update_fields=["contract_receiving_enabled", "evm_vault"])
+
+        response = self.patch(
+            client,
+            project,
+            {"tron_invoice_receiving_mode": InvoiceReceivingMode.VaultSlot},
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "tron_invoice_receiving_mode": ["需先设置 Tron 收款归集地址。"]
+        }
+        project.refresh_from_db()
+        assert project.tron_invoice_receiving_mode == InvoiceReceivingMode.Differ
+
+    def test_enable_and_vault_slot_in_one_patch(self, client, project):
+        """归集地址已就绪时，开启开关与切换智能合约收款可以在同一次 PATCH 完成。"""
+        Project.objects.filter(pk=project.pk).update(evm_vault=VALID_EVM_VAULT)
+
+        response = self.patch(
+            client,
+            project,
+            {
+                "contract_receiving_enabled": True,
+                "evm_invoice_receiving_mode": InvoiceReceivingMode.VaultSlot,
+            },
+        )
+
+        assert response.status_code == 200, response.content
+        project.refresh_from_db()
+        assert project.contract_receiving_enabled is True
+        assert project.evm_invoice_receiving_mode == InvoiceReceivingMode.VaultSlot
+
+    def test_disable_rejected_when_vault_set(self, client, project):
+        project.contract_receiving_enabled = True
+        project.tron_vault = VALID_TRON_VAULT
+        project.save(update_fields=["contract_receiving_enabled", "tron_vault"])
+
+        response = self.patch(client, project, {"contract_receiving_enabled": False})
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "contract_receiving_enabled": ["已设置收款归集地址，不能关闭智能合约收款。"]
+        }
+        project.refresh_from_db()
+        assert project.contract_receiving_enabled is True
+
+    def test_toggle_without_vault_and_detail_echoes(self, client, project):
+        response = self.patch(client, project, {"contract_receiving_enabled": True})
+        assert response.status_code == 200, response.content
+        detail = client.get(_url(project), HTTP_AUTHORIZATION=AUTH_HEADER).json()
+        assert detail["contract_receiving_enabled"] is True
+
+        response = self.patch(client, project, {"contract_receiving_enabled": False})
+        assert response.status_code == 200, response.content
+        detail = client.get(_url(project), HTTP_AUTHORIZATION=AUTH_HEADER).json()
+        assert detail["contract_receiving_enabled"] is False
+
+    def test_disable_rechecks_vault_under_row_lock(self, project):
+        """校验通过后、写入前并发设置了归集地址：锁内复查必须拒绝关闭。"""
+        project.contract_receiving_enabled = True
+        project.save(update_fields=["contract_receiving_enabled"])
+        serializer = ProjectUpdateSerializer(
+            Project.objects.get(pk=project.pk),
+            data={"contract_receiving_enabled": False},
+            partial=True,
+        )
+        assert serializer.is_valid(), serializer.errors
+        Project.objects.filter(pk=project.pk).update(evm_vault=VALID_EVM_VAULT)
+
+        with pytest.raises(serializers.ValidationError) as exc_info:
+            serializer.save()
+
+        assert "contract_receiving_enabled" in exc_info.value.detail
+        project.refresh_from_db()
+        assert project.contract_receiving_enabled is True
 
 
 # ---------- 单字段校验 ----------

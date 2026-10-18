@@ -59,6 +59,7 @@ class ProjectForm(forms.ModelForm):
             "webhook_open",
             "fast_confirm_threshold",
             "hmac_key",
+            "contract_receiving_enabled",
             "evm_vault",
             "tron_vault",
             "evm_invoice_receiving_mode",
@@ -326,6 +327,7 @@ class ProjectAdmin(ModelAdmin):
             {
                 "classes": ("tab",),
                 "fields": (
+                    "contract_receiving_enabled",
                     "evm_vault",
                     "tron_vault",
                     "evm_invoice_receiving_mode",

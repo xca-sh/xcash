@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib import admin
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.test.client import RequestFactory
 
@@ -92,6 +93,7 @@ class ProjectAdminTests(TestCase):
                 "active": self.project.active,
                 "evm_invoice_receiving_mode": self.project.evm_invoice_receiving_mode,
                 "tron_invoice_receiving_mode": self.project.tron_invoice_receiving_mode,
+                "contract_receiving_enabled": True,
                 "evm_vault": contract_address,
             },
             instance=self.project,
@@ -123,6 +125,75 @@ class ProjectAdminTests(TestCase):
 
         self.assertFalse(form.is_valid())
         self.assertIn("evm_vault", form.errors)
+
+
+class ProjectContractReceivingTests(TestCase):
+    """智能合约收款开关的配置不变量：admin 表单经 Project.clean() 把关。"""
+
+    EVM_VAULT = "0x52908400098527886E0F7030069857D2E4169EE7"
+
+    def assert_clean_error(self, project: Project, field: str, message: str):
+        with self.assertRaises(ValidationError) as ctx:
+            project.clean()
+        self.assertEqual(ctx.exception.message_dict, {field: [message]})
+
+    def test_disable_rejected_when_vault_persisted(self):
+        project = Project.objects.create(
+            name="Persisted Vault",
+            contract_receiving_enabled=True,
+            evm_vault=self.EVM_VAULT,
+        )
+        project.contract_receiving_enabled = False
+
+        # 已落库的归集地址在 admin 中是只读字段，错误必须落在开关字段上。
+        self.assert_clean_error(
+            project,
+            "contract_receiving_enabled",
+            "已设置收款归集地址，不能关闭智能合约收款。",
+        )
+
+    def test_new_vault_rejected_when_disabled(self):
+        project = Project.objects.create(name="New Vault While Disabled")
+        project.evm_vault = self.EVM_VAULT
+
+        self.assert_clean_error(
+            project,
+            "evm_vault",
+            "未开启智能合约收款，不能设置收款归集地址。",
+        )
+
+    def test_vault_slot_rejected_when_disabled(self):
+        project = Project.objects.create(name="Vault Slot While Disabled")
+        project.tron_invoice_receiving_mode = InvoiceReceivingMode.VaultSlot
+
+        self.assert_clean_error(
+            project,
+            "tron_invoice_receiving_mode",
+            "未开启智能合约收款，账单只能使用钱包直收。",
+        )
+
+    def test_vault_slot_rejected_when_chain_vault_missing(self):
+        project = Project.objects.create(
+            name="Vault Slot Without Vault",
+            contract_receiving_enabled=True,
+        )
+        project.evm_invoice_receiving_mode = InvoiceReceivingMode.VaultSlot
+
+        self.assert_clean_error(
+            project,
+            "evm_invoice_receiving_mode",
+            "需先设置 EVM 收款归集地址。",
+        )
+
+    def test_vault_slot_allowed_when_enabled_with_vault(self):
+        project = Project.objects.create(
+            name="Vault Slot Ready",
+            contract_receiving_enabled=True,
+            evm_vault=self.EVM_VAULT,
+        )
+        project.evm_invoice_receiving_mode = InvoiceReceivingMode.VaultSlot
+
+        project.clean()
 
 
 class ProjectTestnetGateTests(TestCase):

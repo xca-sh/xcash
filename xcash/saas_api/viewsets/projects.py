@@ -15,6 +15,13 @@ from invoices.models import EpayMerchant
 from projects.models import Project
 
 
+def contract_receiving_disabled_response() -> Response:
+    return Response(
+        {"vault": "未开启智能合约收款，不能设置收款归集地址。"},
+        status=drf_status.HTTP_400_BAD_REQUEST,
+    )
+
+
 class ProjectViewSet(ModelViewSet):
     authentication_classes = [SaasTokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -56,10 +63,14 @@ class ProjectViewSet(ModelViewSet):
         """商户首次设置指定链类型的收款归集地址（Vault），一经设置不可修改。
 
         POST /projects/{appid}/vault  body: {"chain_type": "evm|tron", "vault": "..."}
+        - 未开启智能合约收款 → 400，归集地址只能在开启后设置；
         - 已设置 → 409，明确告知不可修改；
         - 未设置 → 写入后返回项目详情。
         """
         project = self.get_object()
+        # 无锁快路径：简洁模式（未开启智能合约收款）不允许设置归集地址。
+        if not project.contract_receiving_enabled:
+            return contract_receiving_disabled_response()
         serializer = ProjectVaultSetSerializer(
             data=request.data,
             context={"project": project},
@@ -78,6 +89,9 @@ class ProjectViewSet(ModelViewSet):
         # 加行锁后复查再写：vault 不可变且关乎资金去向，必须杜绝并发下两个请求都通过空值检查。
         with db_transaction.atomic():
             locked = Project.objects.select_for_update().get(pk=project.pk)
+            # 锁内复查开关：与 PATCH 关闭开关共用行锁，杜绝「刚关闭又写入归集地址」。
+            if not locked.contract_receiving_enabled:
+                return contract_receiving_disabled_response()
             if getattr(locked, vault_field):
                 return Response(
                     {"vault": "收款归集地址一旦设置不可修改。"},

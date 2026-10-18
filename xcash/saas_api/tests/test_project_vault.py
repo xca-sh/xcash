@@ -1,9 +1,12 @@
 """POST /saas/v1/projects/{appid}/vault 的行为契约测试。
 
-覆盖：set-once 写入、不可变性（已设置则 409）、鉴权。
+覆盖：set-once 写入、不可变性（已设置则 409）、智能合约收款开关把关、鉴权。
 """
 
+from unittest.mock import patch
+
 import pytest
+from saas_api.viewsets.projects import ProjectViewSet
 
 from invoices.models import DifferRecipientAddress
 from projects.models import Project
@@ -15,7 +18,10 @@ VALID_TRON_VAULT = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
 
 @pytest.fixture
 def project(db):
-    return Project.objects.create(name="vault-test-project")
+    return Project.objects.create(
+        name="vault-test-project",
+        contract_receiving_enabled=True,
+    )
 
 
 def _url(project):
@@ -121,5 +127,46 @@ class TestSetVault:
             content_type="application/json",
         )
         assert response.status_code in (401, 403)
+        project.refresh_from_db()
+        assert project.evm_vault in (None, "")
+
+
+@pytest.mark.django_db
+class TestSetVaultRequiresContractReceiving:
+    def test_rejects_when_contract_receiving_disabled(self, client, project):
+        project.contract_receiving_enabled = False
+        project.save(update_fields=["contract_receiving_enabled"])
+
+        response = client.post(
+            _url(project),
+            data={"chain_type": "evm", "vault": VALID_EVM_VAULT},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "vault": "未开启智能合约收款，不能设置收款归集地址。"
+        }
+        project.refresh_from_db()
+        assert project.evm_vault in (None, "")
+
+    def test_rechecks_switch_under_row_lock(self, client, project):
+        """锁外读到的是开启状态，但写入前开关已被并发关闭：锁内复查必须拒绝写入。"""
+        stale = Project.objects.get(pk=project.pk)
+        Project.objects.filter(pk=project.pk).update(contract_receiving_enabled=False)
+
+        with patch.object(ProjectViewSet, "get_object", return_value=stale):
+            response = client.post(
+                _url(project),
+                data={"chain_type": "evm", "vault": VALID_EVM_VAULT},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=AUTH_HEADER,
+            )
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "vault": "未开启智能合约收款，不能设置收款归集地址。"
+        }
         project.refresh_from_db()
         assert project.evm_vault in (None, "")
