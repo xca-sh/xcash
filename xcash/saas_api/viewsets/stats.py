@@ -77,7 +77,9 @@ class StatsViewSet(GenericViewSet):
                 invoices.filter(
                     started_at__gte=start,
                     started_at__lt=end,
-                ).aggregate(n=Count("pk"))["n"]
+                ).aggregate(
+                    n=Count("pk")
+                )["n"]
                 or 0
             )
 
