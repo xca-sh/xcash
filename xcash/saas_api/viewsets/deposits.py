@@ -5,6 +5,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 from saas_api.authentication import SaasTokenAuthentication
+from saas_api.csv_export import csv_response
+from saas_api.csv_export import escape_formula
+from saas_api.csv_export import iso
 from saas_api.list_filters import deposit_keyword_condition
 from saas_api.list_filters import filter_chain_crypto
 from saas_api.list_filters import filter_created_range
@@ -14,9 +17,44 @@ from saas_api.serializers.deposits import SaasDepositDetailSerializer
 from chains.models import TransferStatus
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
+from common.utils.math import format_decimal_stripped
 from deposits.models import Deposit
 from deposits.service import DepositService
 from projects.models import Project
+
+EXPORT_COLUMNS = [
+    "sys_no",
+    "uid",
+    "status",
+    "crypto",
+    "chain",
+    "amount",
+    "worth",
+    "from_address",
+    "to_address",
+    "tx_hash",
+    "risk_level",
+    "created_at",
+]
+
+
+def export_row(deposit: Deposit) -> list:
+    transfer = deposit.transfer
+    assessment = getattr(transfer, "aml_assessment", None)
+    return [
+        deposit.sys_no,
+        escape_formula(deposit.customer.uid),
+        transfer.status,
+        transfer.crypto.symbol,
+        transfer.chain.code,
+        format_decimal_stripped(transfer.amount),
+        format_decimal_stripped(deposit.worth),
+        escape_formula(transfer.from_address),
+        escape_formula(transfer.to_address),
+        escape_formula(transfer.hash),
+        assessment.risk_level if assessment else "",
+        iso(deposit.created_at),
+    ]
 
 
 class SaasDepositViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
@@ -40,7 +78,7 @@ class SaasDepositViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
         )
         # 仅列表接受筛选；详情按 sys_no 精确取，不受筛选参数影响。
         # 直接实例化 viewset（无 action 属性）时也按非列表处理。
-        if getattr(self, "action", None) == "list":
+        if getattr(self, "action", None) in ("list", "export"):
             queryset = self.filter_list(queryset)
         return queryset
 
@@ -68,6 +106,16 @@ class SaasDepositViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
             crypto_field="transfer__crypto",
         )
         return filter_created_range(queryset, params)
+
+    @action(detail=False, methods=["get"])
+    def export(self, request, project_appid=None):
+        """按与列表相同的筛选条件导出 CSV，不分页，超过行数上限返回 400。"""
+        return csv_response(
+            self.get_queryset(),
+            columns=EXPORT_COLUMNS,
+            to_row=export_row,
+            filename_prefix="deposits",
+        )
 
     @action(detail=False, methods=["get"])
     def address(self, request, project_appid=None):

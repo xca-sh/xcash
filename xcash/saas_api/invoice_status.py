@@ -25,3 +25,15 @@ DISPLAY_STATUS_FILTERS: dict[str, Q] = {
     "completed": Q(status=InvoiceStatus.COMPLETED),
     "expired": Q(status=InvoiceStatus.EXPIRED) & ~CONFIRMING,
 }
+
+
+def display_status(invoice) -> str:
+    """单笔账单的商户可见状态，口径与 DISPLAY_STATUS_FILTERS 一致（导出用）。"""
+    transfer = invoice.transfer
+    if (
+        invoice.status in (InvoiceStatus.WAITING, InvoiceStatus.EXPIRED)
+        and transfer is not None
+        and transfer.status == TransferStatus.CONFIRMING
+    ):
+        return "confirming"
+    return invoice.status
