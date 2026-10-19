@@ -9,6 +9,8 @@ from django.db.models import Q
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import TxTaskStatus
+from chains.scanning import ScanRoundBudgetExceeded
+from chains.scanning import scan_round_deadline
 from common.decorators import singleton_task
 from common.time import ago
 from evm.models import EvmTxTask
@@ -20,6 +22,9 @@ logger = structlog.get_logger()
 
 EVM_QUEUED_STUCK_ALERT_AFTER_MINUTES = 30
 EVM_QUEUED_DISPATCH_ELIGIBLE_AFTER_SECONDS = 1
+# 扫描任务的协作式轮次预算，留在 soft_time_limit(40s) 之内：正常情况下由预算在 chunk
+# 之间收尾，软超时只兜底单次调用卡住的情况。
+EVM_SCAN_TASK_BUDGET_SECONDS = 35
 
 
 @shared_task(ignore_result=True, soft_time_limit=25, time_limit=30)
@@ -183,9 +188,17 @@ def _scan_evm_chain(chain_pk: int) -> None:
 
     try:
         try:
-            EvmLogScanner.scan_chain(chain=chain)
+            EvmLogScanner.scan_chain(
+                chain=chain,
+                deadline=scan_round_deadline(
+                    budget_seconds=EVM_SCAN_TASK_BUDGET_SECONDS
+                ),
+            )
         except EvmScannerRpcError:
             logger.warning("EVM 自扫描 RPC 失败", chain=chain.name)
+        except ScanRoundBudgetExceeded:
+            # 已完成 chunk 的进度与游标错误均已由扫描器落盘，剩余区块留给下一轮。
+            logger.warning("EVM 自扫描超出轮次预算", chain=chain.code)
         except SoftTimeLimitExceeded:
             # 软超时要求立刻收尾，不再做后续动作；游标已按 chunk 分段提交，进度不丢。
             raise

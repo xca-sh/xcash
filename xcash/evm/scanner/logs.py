@@ -10,6 +10,8 @@ from django.utils import timezone
 
 from chains.models import Chain
 from chains.models import ChainType
+from chains.scanning import ScanRoundBudgetExceeded
+from chains.scanning import check_scan_round_deadline
 from currencies.models import CryptoOnChain
 from evm.hexutil import checksum_address
 from evm.hexutil import hex_lower
@@ -48,8 +50,12 @@ class EvmLogScanner:
         chain: Chain,
         batch_size: int = DEFAULT_LOG_SCAN_BATCH_SIZE,
         rpc_client: EvmScannerRpcClient | None = None,
+        deadline: float | None = None,
     ):
-        """根据游标推进一次正向日志扫描，成功后更新游标。"""
+        """根据游标推进一次正向日志扫描，成功后更新游标。
+
+        deadline 是本轮截止时刻（monotonic），只在 chunk 之间检查，见 chains.scanning。
+        """
         if chain.type != ChainType.EVM:
             raise ValueError(f"仅支持 EVM 链扫描，当前链为 {chain.code}")
 
@@ -93,6 +99,9 @@ class EvmLogScanner:
             chunk_size = max(1, chain.evm_log_max_block_range)
             chunk_from = from_block
             while chunk_from <= to_block:
+                if chunk_from > from_block:
+                    # 每轮至少扫完一段再看预算，保证节点再慢游标也在前进。
+                    check_scan_round_deadline(deadline)
                 chunk_to = min(to_block, chunk_from + chunk_size - 1)
                 cls.scan_range(
                     chain=chain,
@@ -103,9 +112,13 @@ class EvmLogScanner:
                 )
                 cls._advance_cursor(cursor=cursor, scanned_to_block=chunk_to)
                 chunk_from = chunk_to + 1
-        except (EvmScannerRpcError, SoftTimeLimitExceeded) as exc:
-            # 软超时同样是本轮扫描失败；此前 chunk 的进度已提交，只记录错误并原样
-            # 上抛，否则 last_scanned_at 刷新后，外部探针会把持续超时报成健康。
+        except (
+            EvmScannerRpcError,
+            ScanRoundBudgetExceeded,
+            SoftTimeLimitExceeded,
+        ) as exc:
+            # 预算耗尽与软超时同样是本轮扫描失败；此前 chunk 的进度已提交，只记录错误
+            # 并原样上抛，否则 last_scanned_at 刷新后，外部探针会把持续超时报成健康。
             cls._mark_cursor_error(cursor=cursor, exc=exc)
             raise
 
@@ -322,7 +335,7 @@ class EvmLogScanner:
 
     @staticmethod
     def _mark_cursor_error(*, cursor: EvmScanCursor, exc: Exception) -> None:
-        """记录本轮 RPC 错误或软超时到游标，便于运维观察。"""
+        """记录本轮 RPC 错误、预算耗尽或软超时到游标，便于运维观察。"""
         logger.warning(
             "EVM 日志扫描失败",
             chain=cursor.chain.code,

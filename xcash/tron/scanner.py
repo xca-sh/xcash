@@ -22,6 +22,8 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import VaultSlot
 from chains.registry import match_recipient_addresses
+from chains.scanning import ScanRoundBudgetExceeded
+from chains.scanning import check_scan_round_deadline
 from chains.service import MAX_TRANSFER_VALUE
 from chains.service import ObservedTransferPayload
 from chains.service import TransferService
@@ -72,7 +74,13 @@ class TronScanner:
     _debug_bootstrapped_cursors: set[int] = set()
 
     @classmethod
-    def scan_chain(cls, *, chain: Chain) -> TronScanSummary:
+    def scan_chain(
+        cls,
+        *,
+        chain: Chain,
+        deadline: float | None = None,
+    ) -> TronScanSummary:
+        """deadline 是本轮截止时刻（monotonic），只在块之间检查，见 chains.scanning。"""
         if chain.type != ChainType.TRON:
             raise ValueError(f"仅支持 Tron 链扫描，当前链为 {chain.code}")
 
@@ -123,6 +131,9 @@ class TronScanner:
                     start_block + DEFAULT_TRON_SCAN_BATCH_SIZE - 1,
                 )
                 for block_number in range(start_block, end_block + 1):
+                    if block_number > start_block:
+                        # 每轮至少扫完一块再看预算，保证节点再慢游标也在前进。
+                        check_scan_round_deadline(deadline)
                     parsed_events = cls._collect_block_matched_events(
                         client=client,
                         chain=chain,
@@ -138,10 +149,14 @@ class TronScanner:
                         cls._persist_observed_transfer_safely(observed=event.observed)
                     blocks_scanned += 1
                     last_successfully_scanned = block_number
-        except (TronClientError, SoftTimeLimitExceeded) as exc:
+        except (
+            TronClientError,
+            ScanRoundBudgetExceeded,
+            SoftTimeLimitExceeded,
+        ) as exc:
             # 已经成功扫完的块仍需落到游标，避免下一轮重新扫一遍 + 让错误信息可见。
             # 顺序：先 advance（清 last_error），再 mark_error（写新 last_error），
-            # 保证 last_error 反映最近一次失败而非被 advance 覆盖；软超时也必须记录，
+            # 保证 last_error 反映最近一次失败而非被 advance 覆盖；预算耗尽与软超时也必须记录，
             # 否则任务 finally 刷新 last_scanned_at 后，外部探针会误报健康。
             cls.flush_scan_progress(
                 cursor=cursor,

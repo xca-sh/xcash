@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -2339,6 +2340,36 @@ class TronScannerTests(TestCase):
         self.assertEqual(cursor.last_scanned_block, interrupt_at_block - 1)
         self.assertIsNotNone(cursor.last_error_at)
         self.assertIn("SoftTimeLimitExceeded", cursor.last_error)
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    @patch("tron.scanner.TronHttpClient")
+    def test_scan_chain_stops_between_blocks_when_round_budget_exhausted(
+        self,
+        client_cls,
+        _enqueue_processing_mock,
+    ):
+        """预算耗尽时只在块之间收尾：首块照常扫完落盘，之后记失败并上抛。
+
+        截止时刻在开扫前就已过，模拟节点极慢：仍须推进一块，否则每轮原地踏步。
+        """
+        from tron.scanner import TronScanner
+
+        from chains.scanning import ScanRoundBudgetExceeded
+
+        start_cursor = 300_000
+        self._set_cursor_block(last_scanned_block=start_cursor)
+        client = client_cls.return_value
+        client.get_latest_solid_block_number.return_value = start_cursor + 32
+        client.get_transaction_infos_by_block.return_value = []
+
+        with self.assertRaises(ScanRoundBudgetExceeded):
+            TronScanner.scan_chain(chain=self.chain, deadline=time.monotonic() - 1)
+
+        self.assertEqual(client.get_transaction_infos_by_block.call_count, 1)
+        cursor = TronWatchCursor.objects.get(chain=self.chain)
+        self.assertEqual(cursor.last_scanned_block, start_cursor + 1)
+        self.assertIsNotNone(cursor.last_error_at)
+        self.assertIn("ScanRoundBudgetExceeded", cursor.last_error)
 
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")

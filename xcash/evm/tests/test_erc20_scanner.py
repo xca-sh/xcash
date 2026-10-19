@@ -1,3 +1,4 @@
+import time
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import Mock
@@ -1143,6 +1144,41 @@ class EvmErc20ScannerTests(TestCase):
         self.assertEqual(cursor.last_scanned_block, 116)
         self.assertIsNotNone(cursor.last_error_at)
         self.assertIn("SoftTimeLimitExceeded", cursor.last_error)
+
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs", return_value=[])
+    @patch(
+        "evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number", return_value=200
+    )
+    def test_scan_chain_stops_between_chunks_when_round_budget_exhausted(
+        self,
+        _get_latest_block_number_mock,
+        get_logs_mock,
+    ):
+        """预算耗尽时只在 chunk 之间收尾：首段照常扫完落盘，之后记失败并上抛。
+
+        截止时刻在开扫前就已过，模拟节点极慢：仍须推进一段，否则每轮原地踏步。
+        失败要写进游标，持续撞预算（追不上链头）才会被 /health/scanning 报出来。
+        """
+        from chains.scanning import ScanRoundBudgetExceeded
+
+        Chain.objects.filter(pk=self.chain.pk).update(evm_log_max_block_range=10)
+        self.chain.refresh_from_db(fields=["evm_log_max_block_range"])
+        EvmScanCursor.objects.filter(chain=self.chain).delete()
+        EvmScanCursor.objects.create(chain=self.chain, last_scanned_block=100)
+
+        with self.assertRaises(ScanRoundBudgetExceeded):
+            EvmLogScanner.scan_chain(
+                chain=self.chain, batch_size=100, deadline=time.monotonic() - 1
+            )
+
+        # 窗口从 97 起（回放 4 块），只扫了首段 [97, 106]。
+        self.assertEqual(
+            {call.kwargs["from_block"] for call in get_logs_mock.call_args_list}, {97}
+        )
+        cursor = EvmScanCursor.objects.get(chain=self.chain)
+        self.assertEqual(cursor.last_scanned_block, 106)
+        self.assertIsNotNone(cursor.last_error_at)
+        self.assertIn("ScanRoundBudgetExceeded", cursor.last_error)
 
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
