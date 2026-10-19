@@ -1,7 +1,8 @@
 """Tron 主动交易在 chain-runner 链循环中的两步：终局轮询与派发，以及二者共用的回执判定。
 
-当前派发、广播与回执确认仍由 tron.tasks 中的 Celery 任务负责（复用这里的回执判定），
-这两步暂为空实现，接管后再填入逻辑。
+同一条链只有一个链线程在发交易（见 chains.runner），同一发送地址天然串行，不再需要
+Celery 广播任务、发送地址锁、首播接力与 beat 周期补偿。新建任务由 TronTxTask.schedule
+在事务内发 PG 通知，链线程被唤醒后立即补跑派发；派发永远按库里的任务状态工作。
 """
 
 import time
@@ -10,9 +11,11 @@ from dataclasses import dataclass
 import structlog
 from django.db import transaction as db_transaction
 from django.db.models import Q
+from django.utils import timezone
 from tron.client import TronClientError
 from tron.client import TronHttpClient
 from tron.models import TRON_MAX_BROADCAST_HASHES
+from tron.models import TronTxTask
 from tron.saas_gas_billing import notify_vault_slot_collect_gas_fee
 from tron.saas_gas_billing import notify_vault_slot_deploy_gas_fee
 
@@ -24,6 +27,7 @@ from chains.models import Chain
 from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
+from chains.scanning import deadline_passed
 from chains.vault_slot_balances import refresh_vault_slot_balance_for_collect_task
 from chains.vault_slots import mark_deployed_by_task
 from chains.vault_slots import mark_deployed_if_on_chain_for_task
@@ -33,8 +37,12 @@ logger = structlog.get_logger()
 
 TRON_RECEIPT_TX_TASK_TYPES = (TxTaskType.VaultSlotDeploy, TxTaskType.VaultSlotCollect)
 TRON_MISSING_TX_FINALITY_GRACE_MS = 5 * 60 * 1000
-# 同一任务两次广播尝试的最小间隔；dispatch 补偿与首播接力共用，避免反复投递刚失败的任务。
+# 同一任务两次广播尝试的最小间隔，避免节点故障时每轮都对刚失败的任务空打一遍。
 TRON_BROADCAST_RETRY_AFTER_MINUTES = 2
+# 单任务两次回执查询的最小间隔。轮询步骤每轮（约 6s）都会跑，按 updated_at 过滤后单任务
+# 仍是每 60s 查一次；mark_submitted 会刷新 updated_at，首查落在广播后约 60s，正好越过
+# Tron 约 57s 的固化时间。
+TRON_RECEIPT_RECHECK_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -257,8 +265,90 @@ def process_tron_receipt_task(task: TxTask) -> bool:
 
 
 def poll_tron_chain_round(chain: Chain, deadline: float) -> None:
-    """按回执收口本链在途的主动交易。"""
+    """按回执收口本链在途的部署 / 归集。
+
+    部署不产生用户资产入账，归集是 slot→vault（收款方为系统外 vault），二者都不会被扫描器
+    当作「打入系统观察地址」的入账观测，无法靠扫描器确认；统一在此用 adapter.tx_result
+    查回执推进终局，并在成功终局时按类型回调 SaaS 计费。
+    """
+    tasks = (
+        TxTask.objects.select_related("chain", "sender")
+        .prefetch_related("tx_hashes")
+        .filter(
+            chain=chain,
+            tx_type__in=TRON_RECEIPT_TX_TASK_TYPES,
+            status__in=(TxTaskStatus.QUEUED, TxTaskStatus.SUBMITTED),
+            updated_at__lt=ago(seconds=TRON_RECEIPT_RECHECK_SECONDS),
+        )
+        .order_by("updated_at")
+    )
+    for index, task in enumerate(tasks):
+        if index and deadline_passed(deadline):
+            return
+        try:
+            process_tron_receipt_task(task)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Tron 主动交易回执收口失败", chain=chain.code, tx_task_id=task.pk
+            )
+        finally:
+            # MISSING、确认数不足或 RPC 错误都要刷新 updated_at 轮转到队尾，否则预算不够
+            # 时固定最老的几条会永久占住队首，后面的部署/归集永远得不到确认机会。
+            TxTask.objects.filter(
+                pk=task.pk,
+                status__in=(TxTaskStatus.QUEUED, TxTaskStatus.SUBMITTED),
+            ).update(updated_at=timezone.now())
 
 
 def dispatch_tron_chain_round(chain: Chain, deadline: float) -> None:
-    """派发本链待发的主动交易，并重播已过期的在途交易。"""
+    """派发本链待发的主动交易，并重签重播已过期的在途交易。
+
+    同一条链只有一个链线程在发交易，同一发送地址自然串行——这是能量预检成立的前提：
+    预检时储备能量不能被并发的另一笔交易消耗。Tron 没有 nonce 顺序约束，一笔失败不挡
+    后面的任务；刚失败过的按 TRON_BROADCAST_RETRY_AFTER_MINUTES 退避。
+    """
+    now_ms = int(time.time() * 1000)
+    tasks = (
+        TronTxTask.objects.select_related("base_task", "sender")
+        .filter(
+            Q(base_task__status=TxTaskStatus.QUEUED)
+            | Q(base_task__status=TxTaskStatus.SUBMITTED, expiration__lte=now_ms),
+            broadcast_retry_due_q(),
+            chain=chain,
+        )
+        .order_by("created_at")
+    )
+    for index, task in enumerate(tasks):
+        if index and deadline_passed(deadline):
+            return
+        task.chain = chain
+        broadcast_once(task)
+
+
+def broadcast_once(tx_task: TronTxTask) -> None:
+    """处理一笔待发任务：先按已知 hash 查回执，未上链才首播或重签重播。"""
+    try:
+        # 两条分支都必须先查链上回执再决定是否发交易。SUBMITTED 重播此前直接重签重播，
+        # 而 Tron 的 expiration 只有 60s、固化却要约 57s，回执确认又有自己的节奏——交易
+        # 往往已经上链、只是还没被确认看到，此时重播等于对同一笔业务再发一次：白烧能量，
+        # 且 gas 成本会按重播产生的新 hash 上报、首笔漏报。
+        if tx_task.base_task.status in (TxTaskStatus.QUEUED, TxTaskStatus.SUBMITTED):
+            if process_tron_receipt_task(tx_task.base_task):
+                return
+            # 回执检查可能已推进状态（如失败终局但未收口成功），按最新状态决定后续动作。
+            tx_task.base_task.refresh_from_db(fields=["status"])
+        if tx_task.base_task.status == TxTaskStatus.QUEUED:
+            tx_task.broadcast()
+        elif tx_task.base_task.status == TxTaskStatus.SUBMITTED:
+            tx_task.rebroadcast_expired_submitted()
+    except TronClientError as exc:
+        logger.warning(
+            "Tron 任务广播失败",
+            task_pk=tx_task.pk,
+            chain=tx_task.chain.code,
+            error=str(exc),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Tron 任务广播异常", task_pk=tx_task.pk, chain=tx_task.chain.code
+        )

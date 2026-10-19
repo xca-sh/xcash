@@ -15,6 +15,7 @@ from chains.models import Address
 from chains.models import TxHash
 from chains.models import TxTask
 from chains.models import TxTaskStatus
+from chains.wakeup import notify_chain_tx_pending
 from common.fields import EvmAddressField
 from common.models import UndeletableModel
 from evm.constants import EVM_PIPELINE_DEPTH
@@ -384,13 +385,10 @@ class EvmTxTask(UndeletableModel):
         首次签名和首个 tx_hash 生成延后到 broadcast()；内部稳定身份只依赖
         (sender, chain, nonce)。
 
-        事务提交后直接投递首次广播，不再等 dispatch_evm_tx_tasks 轮询。nonce 顺序与
-        pipeline 深度仍由广播任务入口复核：更低 nonce 尚未提交或 pipeline 已满时直接
-        返回，由前一笔广播成功后的链式接力或 dispatch 补偿放行。外层事务回滚时
-        on_commit 回调随之丢弃，不会投递悬空任务。
+        广播由所在链的 chain-runner 线程按 nonce 顺序完成（evm.tx_loop）。这里在同一
+        事务内发 PG 通知唤醒它立即派发：通知只在最外层事务提交时投递，外层回滚即丢弃，
+        链线程醒来查库一定看得到本任务，也不会去发悬空任务。
         """
-        from evm.tasks import _broadcast_evm_task  # noqa: PLC0415
-
         if intent.value != 0:
             raise ValueError("EVM task value must be 0")
 
@@ -421,7 +419,7 @@ class EvmTxTask(UndeletableModel):
                 data=intent.data,
                 gas=intent.gas,
             )
-            db_transaction.on_commit(lambda pk=task.pk: _broadcast_evm_task.delay(pk))
+            notify_chain_tx_pending(intent.chain.pk)
             return task
 
     @staticmethod

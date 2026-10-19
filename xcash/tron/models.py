@@ -23,6 +23,7 @@ from chains.models import TxHash
 from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
+from chains.wakeup import notify_chain_tx_pending
 from common.fields import AddressField
 from common.fields import HashField
 from common.models import UndeletableModel
@@ -176,18 +177,18 @@ class TronTxTask(UndeletableModel):
         self.execute_broadcast()
 
     def stop_if_rebroadcast_limit_reached(self) -> bool:
-        """重签累计的 TxHash 数达上限时暂停重签，等待回执确认任务收口。
+        """重签累计的 TxHash 数达上限时暂停重签，等待回执轮询收口。
 
         Tron 无 nonce，每次广播/重播都会生成新 txID 并追加一条 TxHash。无论任务卡在
         QUEUED（广播环节持续失败、始终进不了内存池）还是 SUBMITTED（过期重播但迟迟
         不上链），都必须共享同一上限：否则 TxHash 无限增长，且回执确认要按全部历史
         hash 逐一查询，RPC 成本随之线性膨胀。达到上限只停止继续重签，不能仅凭尝试
-        次数判定链上失败；最终状态统一由回执确认任务按所有历史 hash 的链上事实收口。
+        次数判定链上失败；最终状态统一由回执轮询按所有历史 hash 的链上事实收口。
         """
         if not self.rebroadcast_hash_limit_reached():
             return False
-        # dispatch 每次只取最老任务；暂停重签也要刷新尝试时间，避免 capped 任务
-        # 每轮都占据队首，饿死其他发送任务。
+        # 派发按创建时间顺序处理到期任务；暂停重签也要刷新尝试时间，让 capped 任务
+        # 按重试间隔退避，不在每轮都白占派发预算。
         self.record_broadcast_attempt()
         logger.warning(
             "Tron 任务重签次数达到上限，暂停重签并等待回执终局",
@@ -473,14 +474,11 @@ class TronTxTask(UndeletableModel):
 
     @classmethod
     def schedule(cls, intent: TronTxIntent) -> TronTxTask:
-        """创建待执行的 Tron 主动交易任务，事务提交后直接投递首次广播。
+        """创建待执行的 Tron 主动交易任务，并唤醒所在链的 chain-runner 线程立即派发。
 
-        不再等 dispatch_tron_tx_tasks 轮询。同发送地址的广播仍由广播任务里的发送地址锁
-        串行化：同批建出的任务各自投递后，除持锁者外都会撞锁跳过，由持锁者首播成功后
-        接力投递下一笔；接力断开的（广播失败、消息丢失）由 dispatch 周期补偿。
+        广播由链线程串行完成（tron.tx_loop），同一发送地址天然不会并发广播。唤醒通知在
+        同一事务内发出，只在最外层事务提交时投递，回滚即丢弃。
         """
-        from tron.tasks import broadcast_tron_task  # noqa: PLC0415
-
         if intent.verify_fn is not None:
             intent.verify_fn()
         with db_transaction.atomic():
@@ -499,5 +497,5 @@ class TronTxTask(UndeletableModel):
                 parameter=intent.parameter,
                 fee_limit=intent.fee_limit,
             )
-            db_transaction.on_commit(lambda pk=task.pk: broadcast_tron_task.delay(pk))
+            notify_chain_tx_pending(intent.chain.pk)
             return task

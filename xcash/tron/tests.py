@@ -13,7 +13,6 @@ import eth_abi
 import httpx
 from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.admin.sites import AdminSite
-from django.core.cache import cache
 from django.db import IntegrityError
 from django.test import SimpleTestCase
 from django.test import TestCase
@@ -30,10 +29,10 @@ from tron.models import TronWatchCursor
 from tron.resources import TronResourceGuardError
 from tron.resources import TronSimulationRevertError
 from tron.resources import estimate_contract_call_energy
-from tron.tasks import TRON_BROADCAST_LOCK_TIMEOUT_SECONDS
-from tron.tasks import TRON_SENDER_BROADCAST_LOCK_TIMEOUT_SECONDS
-from tron.tasks import broadcast_tron_task
-from tron.tasks import confirm_tron_receipt_tx_tasks
+from tron.tx_loop import TRON_RECEIPT_RECHECK_SECONDS
+from tron.tx_loop import broadcast_once
+from tron.tx_loop import dispatch_tron_chain_round
+from tron.tx_loop import poll_tron_chain_round
 from web3 import Web3
 
 from chains.adapters import TxCheckResult
@@ -55,6 +54,7 @@ from chains.models import VaultSlot
 from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.models import Wallet
+from chains.tests_fixtures import make_tron_chain
 from currencies.models import Crypto
 from currencies.models import CryptoOnChain
 from currencies.models import Fiat
@@ -1331,16 +1331,28 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
         task.base_task.refresh_from_db()
         self.assertEqual(task.base_task.status, TxTaskStatus.QUEUED)
 
-    def test_broadcast_lock_timeouts_cover_worst_case_http_budget(self):
-        self.assertEqual(
-            TRON_SENDER_BROADCAST_LOCK_TIMEOUT_SECONDS,
-            TRON_BROADCAST_LOCK_TIMEOUT_SECONDS,
+    def broadcast_once(self, task: TronTxTask) -> None:
+        broadcast_once(
+            TronTxTask.objects.select_related("base_task", "chain", "sender").get(
+                pk=task.pk
+            )
         )
-        self.assertGreaterEqual(TRON_BROADCAST_LOCK_TIMEOUT_SECONDS, 150)
+
+    def dispatch(self, *, deadline: float | None = None) -> list[int]:
+        """跑一次派发步骤，返回按顺序交给 broadcast_once 的任务 pk。"""
+        handled = []
+        with patch(
+            "tron.tx_loop.broadcast_once",
+            side_effect=lambda task: handled.append(task.pk),
+        ):
+            dispatch_tron_chain_round(
+                self.chain, time.monotonic() + 60 if deadline is None else deadline
+            )
+        return handled
 
     @patch("tron.models.TronTxTask.rebroadcast_expired_submitted")
     @patch("tron.models.TronTxTask.broadcast")
-    def test_broadcast_task_routes_submitted_to_rebroadcast(
+    def test_broadcast_once_routes_submitted_to_rebroadcast(
         self,
         broadcast,
         rebroadcast_expired_submitted,
@@ -1350,14 +1362,14 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
             status=TxTaskStatus.SUBMITTED,
         )
 
-        broadcast_tron_task.run(task.pk)
+        self.broadcast_once(task)
 
         broadcast.assert_not_called()
         rebroadcast_expired_submitted.assert_called_once()
 
     @patch("tron.models.TronTxTask.broadcast")
     @patch("tron.tx_loop.AdapterFactory.get_adapter")
-    def test_broadcast_task_recovers_queued_known_hash_before_rebroadcast(
+    def test_broadcast_once_recovers_queued_known_hash_before_rebroadcast(
         self,
         get_adapter,
         broadcast,
@@ -1373,7 +1385,7 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
         )
         get_adapter.return_value = adapter
 
-        broadcast_tron_task.run(task.pk)
+        self.broadcast_once(task)
 
         broadcast.assert_not_called()
         task.base_task.refresh_from_db()
@@ -1381,44 +1393,87 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
         self.assertEqual(task.base_task.status, TxTaskStatus.SUCCEEDED)
         self.assertEqual(task.base_task.tx_hash, tx_hash)
 
-    @patch("tron.tasks.cache")
     @patch("tron.models.TronTxTask.broadcast")
-    def test_broadcast_task_skips_when_sender_lock_is_held(
-        self,
-        broadcast,
-        cache_mock,
-    ):
-        task = self.make_task()
-        cache_mock.add.return_value = False
+    def test_broadcast_once_contains_node_errors(self, broadcast):
+        broadcast.side_effect = TronClientError("node unavailable")
 
-        broadcast_tron_task.run(task.pk)
+        self.broadcast_once(self.make_task())
 
-        broadcast.assert_not_called()
-        cache_mock.delete.assert_not_called()
+        broadcast.assert_called_once()
 
-    @patch("tron.tasks.broadcast_tron_task.delay")
-    def test_dispatch_tron_tx_tasks_dispatches_one_task_per_tick(self, delay_mock):
-        from tron.tasks import dispatch_tron_tx_tasks
+    def test_dispatch_handles_all_due_tasks_of_the_chain_in_created_order(self):
+        # 同一条链的待发任务在一轮内依次处理（取代原先的发送地址锁 + 首播接力）：
+        # QUEUED 与已过期的 SUBMITTED 都要处理；刚失败过的退避、未过期的在途不动。
+        other_chain = make_tron_chain(code=ChainCode.Nile)
+        base_time = timezone.now() - timedelta(minutes=10)
+        first = self.make_task()
+        recently_failed = self.make_task()
+        expired_submitted = self.make_task()
+        live_submitted = self.make_task()
+        last = self.make_task()
+        for offset, task in enumerate(
+            (first, recently_failed, expired_submitted, live_submitted, last)
+        ):
+            TronTxTask.objects.filter(pk=task.pk).update(
+                created_at=base_time + timedelta(seconds=offset),
+            )
+        TronTxTask.objects.filter(pk=recently_failed.pk).update(
+            last_attempt_at=timezone.now(),
+        )
+        now_ms = int(time.time() * 1000)
+        TxTask.objects.filter(
+            pk__in=[expired_submitted.base_task_id, live_submitted.base_task_id]
+        ).update(status=TxTaskStatus.SUBMITTED)
+        TronTxTask.objects.filter(pk=expired_submitted.pk).update(
+            expiration=now_ms - 1_000
+        )
+        TronTxTask.objects.filter(pk=live_submitted.pk).update(
+            expiration=now_ms + 60_000
+        )
+        other_base = TxTask.objects.create(
+            chain=other_chain,
+            sender=self.sender,
+            tx_type=TxTaskType.VaultSlotCollect,
+            status=TxTaskStatus.QUEUED,
+        )
+        TronTxTask.objects.create(
+            base_task=other_base,
+            sender=self.sender,
+            chain=other_chain,
+            to="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+            function_selector="collect(address)",
+            parameter="00" * 32,
+            fee_limit=5_000_000,
+        )
 
+        self.assertEqual(self.dispatch(), [first.pk, expired_submitted.pk, last.pk])
+
+    @patch("tron.models.TronTxTask.broadcast")
+    def test_dispatch_keeps_going_after_one_task_fails(self, broadcast):
+        # Tron 没有 nonce 顺序约束：一笔节点报错不挡后面的任务。
+        first = self.make_task()
+        self.make_task()
+        TronTxTask.objects.filter(pk=first.pk).update(
+            created_at=timezone.now() - timedelta(seconds=10)
+        )
+        broadcast.side_effect = [TronClientError("node unavailable"), None]
+
+        dispatch_tron_chain_round(self.chain, time.monotonic() + 60)
+
+        self.assertEqual(broadcast.call_count, 2)
+
+    def test_dispatch_budget_is_checked_only_between_tasks(self):
         first = self.make_task()
         second = self.make_task()
         TronTxTask.objects.filter(pk=first.pk).update(
-            created_at=timezone.now() - timedelta(seconds=10),
-            last_attempt_at=None,
-        )
-        TronTxTask.objects.filter(pk=second.pk).update(
-            created_at=timezone.now() - timedelta(seconds=5),
-            last_attempt_at=None,
+            created_at=timezone.now() - timedelta(seconds=10)
         )
 
-        with self.captureOnCommitCallbacks(execute=True):
-            dispatch_tron_tx_tasks.run()
+        self.assertEqual(self.dispatch(deadline=time.monotonic() - 1), [first.pk])
+        TronTxTask.objects.filter(pk=first.pk).update(last_attempt_at=timezone.now())
+        self.assertEqual(self.dispatch(deadline=time.monotonic() - 1), [second.pk])
 
-        delay_mock.assert_called_once_with(first.pk)
-
-    @patch("tron.tasks.broadcast_tron_task.delay")
-    def test_schedule_delivers_first_broadcast_only_after_commit(self, delay_mock):
-        # 首播在事务提交后直接投递，不再等 dispatch 轮询。
+    def test_schedule_wakes_chain_loop_without_publishing_to_celery(self):
         from tron.intents import TronTxIntent
 
         intent = TronTxIntent(
@@ -1430,87 +1485,14 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
             fee_limit=5_000_000,
             tx_type=TxTaskType.VaultSlotCollect,
         )
-        with self.captureOnCommitCallbacks(execute=False) as callbacks:
-            task = TronTxTask.schedule(intent)
-
-        delay_mock.assert_not_called()
-        for callback in callbacks:
-            callback()
-        delay_mock.assert_called_once_with(task.pk)
-
-    @patch("tron.tasks.broadcast_tron_task.delay")
-    @patch("tron.models.TronTxTask.broadcast")
-    def test_broadcast_task_chains_next_queued_after_lock_release(
-        self,
-        broadcast,
-        delay_mock,
-    ):
-        # 同批任务除持锁者外都撞锁跳过，首播成功后必须接力同发送地址最早的可重试任务：
-        # 跳过刚失败过的（留给 dispatch 退避）与其他发送地址的任务，且投递时锁已释放，
-        # 否则接力的任务会撞上本任务尚未删除的锁而跳过。
-        from tron.tasks import sender_broadcast_lock_key
-
-        other_sender = Address.objects.create(
-            wallet=self.wallet,
-            chain_type=ChainType.TRON,
-            usage=AddressUsage.HotWallet,
-            bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
-            address_index=1,
-            address="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
-        )
-        base_time = timezone.now() - timedelta(minutes=10)
-        other_sender_task = self.make_task(sender=other_sender)
-        current = self.make_task()
-        recently_failed = self.make_task()
-        expected_next = self.make_task()
-        later = self.make_task()
-        for offset, task in enumerate(
-            (other_sender_task, current, recently_failed, expected_next, later)
+        with (
+            patch("tron.models.notify_chain_tx_pending") as notify,
+            patch("celery.app.task.Task.apply_async") as apply_async,
         ):
-            TronTxTask.objects.filter(pk=task.pk).update(
-                created_at=base_time + timedelta(seconds=offset),
-            )
-        TronTxTask.objects.filter(pk=recently_failed.pk).update(
-            last_attempt_at=timezone.now(),
-        )
-        lock_key = sender_broadcast_lock_key(
-            chain_id=self.chain.pk,
-            sender_id=self.sender.pk,
-        )
-        lock_values_at_delay = []
-        delay_mock.side_effect = lambda pk: lock_values_at_delay.append(
-            cache.get(lock_key)
-        )
+            TronTxTask.schedule(intent)
 
-        def mark_submitted():
-            TxTask.objects.filter(pk=current.base_task_id).update(
-                status=TxTaskStatus.SUBMITTED,
-            )
-
-        broadcast.side_effect = mark_submitted
-
-        broadcast_tron_task.run(current.pk)
-
-        delay_mock.assert_called_once_with(expected_next.pk)
-        self.assertEqual(lock_values_at_delay, [None])
-
-    @patch("tron.tasks.broadcast_tron_task.delay")
-    @patch("tron.models.TronTxTask.broadcast")
-    def test_broadcast_task_does_not_chain_when_first_broadcast_fails(
-        self,
-        broadcast,
-        delay_mock,
-    ):
-        # 首播失败（节点异常、资源不足）任务留在 QUEUED，不接力：交给 dispatch 按尝试
-        # 间隔补偿，避免节点故障时把整批任务连环空打一遍。
-        current = self.make_task()
-        self.make_task()
-        broadcast.side_effect = TronClientError("node unavailable")
-
-        broadcast_tron_task.run(current.pk)
-
-        broadcast.assert_called_once()
-        delay_mock.assert_not_called()
+        notify.assert_called_once_with(self.chain.pk)
+        apply_async.assert_not_called()
 
 
 class TronSimulationRevertClassificationTests(SimpleTestCase):
@@ -1764,8 +1746,6 @@ class TronTxTaskSimulationRevertTests(TestCase):
 
     @patch("tron.models.TronHttpClient")
     def test_failed_task_drops_out_of_dispatch_queue(self, client_class):
-        from tron.tasks import dispatch_tron_tx_tasks
-
         task = self.make_task()
         self.prime_streak(
             task,
@@ -1780,13 +1760,10 @@ class TronTxTaskSimulationRevertTests(TestCase):
             last_attempt_at=None,
         )
 
-        with (
-            patch("tron.tasks.broadcast_tron_task.delay") as delay_mock,
-            self.captureOnCommitCallbacks(execute=True),
-        ):
-            dispatch_tron_tx_tasks.run()
+        with patch("tron.tx_loop.broadcast_once") as broadcast_once_mock:
+            dispatch_tron_chain_round(self.chain, time.monotonic() + 60)
 
-        delay_mock.assert_not_called()
+        broadcast_once_mock.assert_not_called()
 
     @patch("tron.models.TronHttpClient")
     def test_energy_insufficiency_resets_revert_streak(self, client_class):
@@ -3210,7 +3187,7 @@ class TronScanRoundTests(TestCase):
 
 class TronReceiptConfirmTaskTests(TestCase):
     """部署与归集都不产生「打入系统观察地址」的入账,统一由
-    confirm_tron_receipt_tx_tasks 按回执收口。
+    链循环的轮询步骤 poll_tron_chain_round 按回执收口。
 
     核心回归:归集(collect)任务能被确认终局并触发归集 gas 计费回调——此前 collect
     既不终局也不计费,会被 dispatch 无限重广播。
@@ -3260,6 +3237,14 @@ class TronReceiptConfirmTaskTests(TestCase):
             address="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
             salt=b"\x01" * 32,
         )
+
+    def poll(self):
+        """跑一次轮询步骤。新建任务的 updated_at 就是现在，先统一拨到已到回执间隔。"""
+        recheck_due = timezone.now() - timedelta(seconds=TRON_RECEIPT_RECHECK_SECONDS)
+        TxTask.objects.filter(chain=self.chain, updated_at__gt=recheck_due).update(
+            updated_at=recheck_due - timedelta(seconds=1)
+        )
+        poll_tron_chain_round(self.chain, time.monotonic() + 60)
 
     def create_collect_task(
         self,
@@ -3437,7 +3422,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         )
         get_adapter.return_value = adapter
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.SUCCEEDED)
@@ -3467,7 +3452,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         )
         get_adapter.return_value = adapter
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.SUCCEEDED)
@@ -3495,7 +3480,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         )
         get_adapter.return_value = adapter
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.slot.refresh_from_db()
@@ -3524,7 +3509,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         )
         get_adapter.return_value = adapter
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.FAILED)
@@ -3562,7 +3547,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         adapter.tx_result.side_effect = tx_result
         get_adapter.return_value = adapter
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.SUCCEEDED)
@@ -3608,7 +3593,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         adapter.tx_result.side_effect = tx_result
         get_adapter.return_value = adapter
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.SUBMITTED)
@@ -3645,7 +3630,7 @@ class TronReceiptConfirmTaskTests(TestCase):
             }
         }
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.FAILED)
@@ -3675,7 +3660,7 @@ class TronReceiptConfirmTaskTests(TestCase):
             }
         }
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.SUBMITTED)
@@ -3694,7 +3679,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         adapter.tx_result.return_value = TxCheckResult(status=TxCheckStatus.MISSING)
         get_adapter.return_value = adapter
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.SUBMITTED)
@@ -3720,7 +3705,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         adapter.tx_result.side_effect = tx_result
         get_adapter.return_value = adapter
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.SUBMITTED)
@@ -3735,19 +3720,35 @@ class TronReceiptConfirmTaskTests(TestCase):
         adapter.tx_result.return_value = TxCheckResult(status=TxCheckStatus.MISSING)
         get_adapter.return_value = adapter
 
-        confirm_tron_receipt_tx_tasks()
+        self.poll()
 
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.SUBMITTED)
         self.assertGreater(base_task.updated_at, stale_updated_at)
 
     @patch("tron.tx_loop.AdapterFactory.get_adapter")
-    def test_confirm_rotates_oldest_missing_batch_and_reaches_later_task(
+    def test_confirm_skips_tasks_checked_within_recheck_interval(self, get_adapter):
+        # 轮询步骤每轮都跑，单任务仍按 60s 间隔查回执，节点 API 调用量不随轮次放大。
+        base_task = self.create_collect_task()
+        TxTask.objects.filter(pk=base_task.pk).update(
+            updated_at=timezone.now()
+            - timedelta(seconds=TRON_RECEIPT_RECHECK_SECONDS - 5)
+        )
+        adapter = Mock()
+        get_adapter.return_value = adapter
+
+        poll_tron_chain_round(self.chain, time.monotonic() + 60)
+
+        adapter.tx_result.assert_not_called()
+
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
+    def test_confirm_rotates_when_budget_runs_out_and_reaches_later_task(
         self,
         get_adapter,
     ):
+        # 预算只够一笔时先查最老的并轮转到队尾，下一轮轮到下一笔，不会被固定的几笔占死。
         tasks = []
-        for index in range(33):
+        for index in range(3):
             task = TxTask.objects.create(
                 chain=self.chain,
                 sender=self.sender,
@@ -3755,26 +3756,41 @@ class TronReceiptConfirmTaskTests(TestCase):
                 status=TxTaskStatus.SUBMITTED,
             )
             task.append_tx_hash(f"{index + 100:064x}")
+            TxTask.objects.filter(pk=task.pk).update(
+                updated_at=timezone.now() - timedelta(minutes=10 - index)
+            )
             tasks.append(task)
         adapter = Mock()
         adapter.tx_result.return_value = TxCheckResult(status=TxCheckStatus.MISSING)
         get_adapter.return_value = adapter
 
-        confirm_tron_receipt_tx_tasks()
+        checked = []
+        for _ in range(3):
+            adapter.tx_result.reset_mock()
+            poll_tron_chain_round(self.chain, time.monotonic() - 1)
+            checked.append(adapter.tx_result.call_args.kwargs["tx_hash"])
 
-        first_batch_hashes = {
-            call.kwargs["tx_hash"] for call in adapter.tx_result.call_args_list
-        }
-        self.assertEqual(len(first_batch_hashes), 32)
-        self.assertNotIn(tasks[-1].tx_hash, first_batch_hashes)
+        self.assertEqual(checked, [task.tx_hash for task in tasks])
 
-        adapter.tx_result.reset_mock()
-        confirm_tron_receipt_tx_tasks()
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
+    def test_confirm_only_touches_tasks_of_the_given_chain(self, get_adapter):
+        other_chain = make_tron_chain(code=ChainCode.Nile)
+        other_task = TxTask.objects.create(
+            chain=other_chain,
+            sender=self.sender,
+            tx_type=TxTaskType.VaultSlotCollect,
+            status=TxTaskStatus.SUBMITTED,
+        )
+        other_task.append_tx_hash("c" * 64)
+        TxTask.objects.filter(pk=other_task.pk).update(
+            updated_at=timezone.now() - timedelta(hours=1)
+        )
+        adapter = Mock()
+        get_adapter.return_value = adapter
 
-        second_batch_hashes = {
-            call.kwargs["tx_hash"] for call in adapter.tx_result.call_args_list
-        }
-        self.assertIn(tasks[-1].tx_hash, second_batch_hashes)
+        poll_tron_chain_round(self.chain, time.monotonic() + 60)
+
+        adapter.tx_result.assert_not_called()
 
 
 @patch.dict(

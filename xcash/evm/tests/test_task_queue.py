@@ -1,7 +1,9 @@
+"""EVM 主动交易派发步骤：nonce 顺序、pipeline 深度、队首退避、预算与链隔离。"""
+
+import time
 from datetime import timedelta
 from unittest.mock import patch
 
-from django.core.cache import cache
 from django.test import TestCase
 from django.utils import timezone
 from web3 import Web3
@@ -9,21 +11,21 @@ from web3 import Web3
 from chains.constants import ChainCode
 from chains.models import Address
 from chains.models import AddressUsage
+from chains.models import Chain
 from chains.models import ChainType
 from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
 from chains.models import Wallet
 from currencies.models import Crypto
+from evm.constants import EVM_PIPELINE_DEPTH
 from evm.models import EvmTxTask
 from evm.tests._fixtures import make_evm_chain
+from evm.tx_loop import dispatch_evm_chain_round
 
 
 class EvmTaskQueueTests(TestCase):
-    queue_lock_key = "dispatch_evm_tx_tasks-locked"
-
     def setUp(self):
-        self._clear_singleton_locks()
         self.wallet = Wallet.objects.create()
         self.native = Crypto.objects.create(
             name="Ethereum Queue",
@@ -34,19 +36,17 @@ class EvmTaskQueueTests(TestCase):
             code=ChainCode.Ethereum,
             rpc="http://ethq.local",
         )
-        self.addr = Address.objects.create(
+        self.addr = self._create_sender(address_index=0, suffix="f1")
+
+    def _create_sender(self, *, address_index: int, suffix: str) -> Address:
+        return Address.objects.create(
             wallet=self.wallet,
             chain_type=ChainType.EVM,
             usage=AddressUsage.HotWallet,
             bip44_account=1,
-            address_index=0,
-            address=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000f1"
-            ),
+            address_index=address_index,
+            address=Web3.to_checksum_address("0x" + "0" * 38 + suffix),
         )
-
-    def _clear_singleton_locks(self):
-        cache.delete(self.queue_lock_key)
 
     def _create_evm_task(
         self,
@@ -55,16 +55,18 @@ class EvmTaskQueueTests(TestCase):
         status: str,
         nonce: int | None = None,
         address: Address | None = None,
+        chain: Chain | None = None,
     ) -> EvmTxTask:
-        # 任务级测试直接手工落库，聚焦"队列如何挑任务"和"终局任务是否被错误重播"。
+        # 任务级测试直接手工落库，聚焦"派发如何挑任务"和"终局任务是否被错误重播"。
         task_address = address or self.addr
-        next_nonce = self._next_test_nonce(task_address)
+        task_chain = chain or self.chain
+        next_nonce = self._next_test_nonce(task_address, task_chain)
         if nonce is not None and nonce > next_nonce:
             # 触发器要求 nonce 连续，自动填充中间的空洞
-            self._fill_nonce_gap(task_address, next_nonce, nonce)
+            self._fill_nonce_gap(task_address, task_chain, next_nonce, nonce)
         target_nonce = next_nonce if nonce is None else nonce
         base_task = TxTask.objects.create(
-            chain=self.chain,
+            chain=task_chain,
             sender=task_address,
             tx_type=TxTaskType.VaultSlotCollect,
             tx_hash=tx_hash,
@@ -73,7 +75,7 @@ class EvmTaskQueueTests(TestCase):
         return EvmTxTask.objects.create(
             base_task=base_task,
             sender=task_address,
-            chain=self.chain,
+            chain=task_chain,
             nonce=target_nonce,
             to=Web3.to_checksum_address("0x00000000000000000000000000000000000000f2"),
             value=0,
@@ -82,19 +84,21 @@ class EvmTaskQueueTests(TestCase):
             gas_price=1,
         )
 
-    def _next_test_nonce(self, address: Address) -> int:
+    def _next_test_nonce(self, address: Address, chain: Chain) -> int:
         from django.db.models import Max
 
-        max_nonce = EvmTxTask.objects.filter(
-            sender=address, chain=self.chain
-        ).aggregate(m=Max("nonce"))["m"]
+        max_nonce = EvmTxTask.objects.filter(sender=address, chain=chain).aggregate(
+            m=Max("nonce")
+        )["m"]
         return 0 if max_nonce is None else max_nonce + 1
 
-    def _fill_nonce_gap(self, address: Address, start: int, end: int) -> None:
+    def _fill_nonce_gap(
+        self, address: Address, chain: Chain, start: int, end: int
+    ) -> None:
         """填充 [start, end) 区间的 nonce，满足触发器连续性约束。"""
         for n in range(start, end):
             filler_base = TxTask.objects.create(
-                chain=self.chain,
+                chain=chain,
                 sender=address,
                 tx_type=TxTaskType.VaultSlotCollect,
                 status=TxTaskStatus.SUCCEEDED,
@@ -102,7 +106,7 @@ class EvmTaskQueueTests(TestCase):
             EvmTxTask.objects.create(
                 base_task=filler_base,
                 sender=address,
-                chain=self.chain,
+                chain=chain,
                 nonce=n,
                 to=Web3.to_checksum_address(
                     "0x00000000000000000000000000000000000000f2"
@@ -113,95 +117,165 @@ class EvmTaskQueueTests(TestCase):
                 gas_price=1,
             )
 
-    @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_tx_task_skips_finalized_tx_task(self, broadcast_mock):
-        # 已终局的链上任务不应再次广播，否则会把成功/失败终态重新拉回执行面。
-        from evm.tasks import _broadcast_evm_task
+    def _queued(self, count: int, **kwargs) -> list[EvmTxTask]:
+        tasks = []
+        for _ in range(count):
+            self.hash_seq = getattr(self, "hash_seq", 0x9000) + 1
+            tasks.append(
+                self._create_evm_task(
+                    tx_hash=f"0x{self.hash_seq:064x}",
+                    status=TxTaskStatus.QUEUED,
+                    **kwargs,
+                )
+            )
+        return tasks
 
-        tx_task = self._create_evm_task(
-            tx_hash="0x" + "a" * 64,
-            status=TxTaskStatus.SUCCEEDED,
+    def dispatch(
+        self,
+        *,
+        chain: Chain | None = None,
+        deadline: float | None = None,
+        lands_in: str | None = TxTaskStatus.SUBMITTED,
+        error: Exception | None = None,
+    ) -> list[int]:
+        """跑一次派发步骤，返回按顺序被广播的任务 pk。
+
+        broadcast() 被替换为：记录调用，并把任务推进到 lands_in（None 表示保持 QUEUED，
+        即 pre-flight 未过）；给了 error 则直接抛出。
+        """
+        broadcasted = []
+
+        def fake_broadcast(task):
+            broadcasted.append(task.pk)
+            if error is not None:
+                raise error
+            if lands_in is not None:
+                TxTask.objects.filter(pk=task.base_task_id).update(status=lands_in)
+
+        with patch.object(
+            EvmTxTask, "broadcast", autospec=True, side_effect=fake_broadcast
+        ):
+            dispatch_evm_chain_round(
+                chain or self.chain,
+                time.monotonic() + 60 if deadline is None else deadline,
+            )
+        return broadcasted
+
+    def test_dispatches_queued_nonces_in_order_within_one_round(self):
+        # 一轮内按 nonce 连续发出，积压不必等任何接力或下一轮。
+        tasks = self._queued(4)
+
+        self.assertEqual(self.dispatch(), [task.pk for task in tasks])
+
+    def test_submitted_and_finalized_tasks_are_never_dispatched(self):
+        self._create_evm_task(tx_hash="0x" + "c" * 64, status=TxTaskStatus.SUBMITTED)
+        self._create_evm_task(tx_hash="0x" + "e" * 64, status=TxTaskStatus.SUCCEEDED)
+        queued = self._create_evm_task(
+            tx_hash="0x" + "b" * 64, status=TxTaskStatus.QUEUED
         )
 
-        _broadcast_evm_task.run(tx_task.pk)
+        # SUBMITTED 的重播只走轮询步骤的超时路径，派发不能绕过重播间隔。
+        self.assertEqual(self.dispatch(), [queued.pk])
 
-        broadcast_mock.assert_not_called()
-
-    @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_tx_task_skips_submitted_to_avoid_immediate_rebroadcast(
-        self, broadcast_mock
-    ):
-        # 普通 Celery 广播入口只负责 QUEUED 首次发送；SUBMITTED 重播必须走
-        # poller 的超时收口路径，避免重复消息绕过重播间隔。
-        from evm.tasks import _broadcast_evm_task
-
-        tx_task = self._create_evm_task(
-            tx_hash="0x" + "aa" * 32,
-            status=TxTaskStatus.SUBMITTED,
-        )
-
-        _broadcast_evm_task.run(tx_task.pk)
-
-        broadcast_mock.assert_not_called()
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    def test_dispatch_due_evm_tx_tasks_dispatches_only_queued_unknown_tasks(
-        self, delay_mock
-    ):
-        # dispatch 只放行 QUEUED 任务；SUBMITTED / recent / finalized 不应被选中。
-        from evm.tasks import dispatch_evm_tx_tasks
-
-        other_addr = Address.objects.create(
-            wallet=self.wallet,
-            chain_type=ChainType.EVM,
-            usage=AddressUsage.HotWallet,
-            bip44_account=1,
-            address_index=2,
-            address=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000f4"
-            ),
-        )
-
-        due_queued = self._create_evm_task(
-            tx_hash="0x" + "b" * 64,
-            status=TxTaskStatus.QUEUED,
-        )
-        # SUBMITTED 任务不应被 dispatch 重新选中（已在 mempool 中等待确认）。
+    def test_lower_submitted_nonce_counts_as_consumed(self):
         self._create_evm_task(
-            tx_hash="0x" + "c" * 64,
-            status=TxTaskStatus.SUBMITTED,
-            address=other_addr,
+            tx_hash="0x" + "13" * 32, status=TxTaskStatus.SUBMITTED, nonce=1
         )
-        recent_task = self._create_evm_task(
-            tx_hash="0x" + "d" * 64,
-            status=TxTaskStatus.QUEUED,
-        )
-        finalized_task = self._create_evm_task(
-            tx_hash="0x" + "e" * 64,
-            status=TxTaskStatus.SUCCEEDED,
+        higher = self._create_evm_task(
+            tx_hash="0x" + "14" * 32, status=TxTaskStatus.QUEUED, nonce=2
         )
 
-        stale_created_at = timezone.now() - timedelta(seconds=2)
-        fresh_created_at = timezone.now()
-        EvmTxTask.objects.filter(pk=due_queued.pk).update(
-            created_at=stale_created_at,
-            last_attempt_at=None,
+        self.assertEqual(self.dispatch(), [higher.pk])
+
+    def test_head_left_queued_blocks_higher_nonces_this_round(self):
+        # pre-flight 未过（等补 gas）时队首仍是 QUEUED：更高 nonce 本轮一律不发，
+        # 否则会在前序缺口仍在时把高 nonce 送进 mempool。
+        head, _, _ = self._queued(3)
+
+        self.assertEqual(self.dispatch(lands_in=None), [head.pk])
+
+    def test_head_within_retry_backoff_blocks_whole_sender(self):
+        head, higher = self._queued(2)
+        EvmTxTask.objects.filter(pk=head.pk).update(last_attempt_at=timezone.now())
+
+        self.assertEqual(self.dispatch(), [])
+
+        EvmTxTask.objects.filter(pk=head.pk).update(
+            last_attempt_at=timezone.now() - timedelta(minutes=5)
         )
-        EvmTxTask.objects.filter(pk=recent_task.pk).update(
-            created_at=fresh_created_at,
-            last_attempt_at=None,
-        )
-        EvmTxTask.objects.filter(pk=finalized_task.pk).update(
-            created_at=stale_created_at,
+        self.assertEqual(self.dispatch(), [head.pk, higher.pk])
+
+    def test_broadcast_error_stops_the_sender_without_escaping(self):
+        head, _ = self._queued(2)
+
+        broadcasted = self.dispatch(error=RuntimeError("node down"))
+
+        self.assertEqual(broadcasted, [head.pk])
+
+    def test_each_sender_is_dispatched_from_its_own_head(self):
+        other = self._create_sender(address_index=1, suffix="f3")
+        own = self._queued(2)
+        others = self._queued(2, address=other)
+
+        self.assertCountEqual(self.dispatch(), [task.pk for task in own + others])
+
+    def test_pipeline_full_blocks_and_resumes_after_a_slot_is_freed(self):
+        submitted = [
+            self._create_evm_task(
+                tx_hash=f"0x{index:064x}", status=TxTaskStatus.SUBMITTED
+            )
+            for index in range(EVM_PIPELINE_DEPTH)
+        ]
+        queued = self._create_evm_task(
+            tx_hash="0x" + "b1" * 32, status=TxTaskStatus.QUEUED
         )
 
-        with self.captureOnCommitCallbacks(execute=True):
-            dispatch_evm_tx_tasks.run()
+        self.assertEqual(self.dispatch(), [])
 
-        self.assertEqual(
-            {call.args[0] for call in delay_mock.call_args_list},
-            {due_queued.pk},
+        TxTask.objects.filter(pk=submitted[0].base_task_id).update(
+            status=TxTaskStatus.SUCCEEDED
         )
+        self.assertEqual(self.dispatch(), [queued.pk])
+
+    def test_pipeline_filling_up_mid_round_stops_the_sender(self):
+        for index in range(EVM_PIPELINE_DEPTH - 1):
+            self._create_evm_task(
+                tx_hash=f"0x{index + 0xF0:064x}", status=TxTaskStatus.SUBMITTED
+            )
+        head, _ = self._queued(2)
+
+        self.assertEqual(self.dispatch(), [head.pk])
+
+    def test_budget_is_checked_only_between_broadcasts(self):
+        # 截止时刻已过也至少发出一笔，剩下的下一轮（或下次唤醒）续发。
+        first, second = self._queued(2)
+
+        self.assertEqual(self.dispatch(deadline=time.monotonic() - 1), [first.pk])
+        self.assertEqual(self.dispatch(), [second.pk])
+
+    def test_only_tasks_of_the_given_chain_are_dispatched(self):
+        other_chain = make_evm_chain(code=ChainCode.BSC, rpc="http://bsc.local")
+        own = self._queued(1)
+        self._queued(1, chain=other_chain)
+
+        self.assertEqual(self.dispatch(), [own[0].pk])
+
+    def test_model_broadcast_still_refuses_to_jump_a_lower_queued_nonce(self):
+        # 派发只挑队首，但模型入口自身仍须守住 nonce 顺序，防止其他调用方越过缺口。
+        self._create_evm_task(tx_hash="0x" + "1" * 64, status=TxTaskStatus.QUEUED)
+        higher = self._create_evm_task(
+            tx_hash="0x" + "2" * 64, status=TxTaskStatus.QUEUED
+        )
+
+        with (
+            patch.object(
+                EvmTxTask, "_recover_queued_receipt_if_any", return_value=False
+            ),
+            patch.object(EvmTxTask, "_execute_broadcast") as execute,
+        ):
+            higher.broadcast()
+
+        execute.assert_not_called()
 
     @patch("evm.tasks.logger.warning")
     def test_scan_stuck_queued_evm_tx_tasks_logs_only_nonce_head(self, warning_mock):
@@ -234,504 +308,3 @@ class EvmTaskQueueTests(TestCase):
         self.assertEqual(alerted, 1)
         warning_mock.assert_called_once()
         self.assertEqual(warning_mock.call_args.kwargs["evm_task_id"], stuck_head.pk)
-
-    @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_tx_task_skips_when_lower_queued_nonce_exists(
-        self,
-        broadcast_mock,
-    ):
-        # 同账户更高 nonce 在更低 QUEUED nonce 存在时不应越过广播，保证 nonce 按顺序进入 mempool。
-        from evm.tasks import _broadcast_evm_task
-
-        self._create_evm_task(
-            tx_hash="0x" + "1" * 64,
-            status=TxTaskStatus.QUEUED,
-            nonce=1,
-        )
-        higher_task = self._create_evm_task(
-            tx_hash="0x" + "2" * 64,
-            status=TxTaskStatus.QUEUED,
-            nonce=2,
-        )
-
-        _broadcast_evm_task.run(higher_task.pk)
-
-        broadcast_mock.assert_not_called()
-
-    @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_tx_task_allows_higher_nonce_after_lower_task_enters_submitted(
-        self,
-        broadcast_mock,
-    ):
-        # 更低 nonce 已提交到节点后进入 SUBMITTED，不再作为 queued 缺口阻断高 nonce。
-        from evm.tasks import _broadcast_evm_task
-
-        self._create_evm_task(
-            tx_hash="0x" + "11" * 32,
-            status=TxTaskStatus.SUBMITTED,
-            nonce=1,
-        )
-        higher_task = self._create_evm_task(
-            tx_hash="0x" + "12" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=2,
-        )
-
-        _broadcast_evm_task.run(higher_task.pk)
-
-        broadcast_mock.assert_called_once()
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    def test_dispatch_due_evm_tx_tasks_dispatches_only_lowest_queued_nonce_per_account(
-        self, delay_mock
-    ):
-        # 队列层只应放行每个账户当前最小 QUEUED nonce，避免高 nonce 在前序缺口存在时被反复重试。
-        from evm.tasks import dispatch_evm_tx_tasks
-
-        other_addr = Address.objects.create(
-            wallet=self.wallet,
-            chain_type=ChainType.EVM,
-            usage=AddressUsage.HotWallet,
-            bip44_account=1,
-            address_index=1,
-            address=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000f3"
-            ),
-        )
-        lower_task = self._create_evm_task(
-            tx_hash="0x" + "3" * 64,
-            status=TxTaskStatus.QUEUED,
-            nonce=5,
-        )
-        blocked_higher_task = self._create_evm_task(
-            tx_hash="0x" + "4" * 64,
-            status=TxTaskStatus.QUEUED,
-            nonce=6,
-        )
-        other_account_task = self._create_evm_task(
-            tx_hash="0x" + "5" * 64,
-            status=TxTaskStatus.QUEUED,
-            nonce=1,
-            address=other_addr,
-        )
-
-        stale_created_at = timezone.now() - timedelta(seconds=8)
-        EvmTxTask.objects.filter(
-            pk__in=[lower_task.pk, blocked_higher_task.pk, other_account_task.pk]
-        ).update(
-            created_at=stale_created_at,
-            last_attempt_at=None,
-        )
-
-        with self.captureOnCommitCallbacks(execute=True):
-            dispatch_evm_tx_tasks.run()
-
-        self.assertEqual(
-            {call.args[0] for call in delay_mock.call_args_list},
-            {lower_task.pk, other_account_task.pk},
-        )
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    def test_dispatch_due_evm_tx_tasks_skips_account_whose_head_was_just_attempted(
-        self, delay_mock
-    ):
-        # 队首在 4 分钟退避窗口内时，该账户本轮整体跳过，绝不能顺延放行更高 nonce
-        # ——否则会在前序缺口仍在的情况下把高 nonce 送进 mempool。
-        from evm.tasks import dispatch_evm_tx_tasks
-
-        head_task = self._create_evm_task(
-            tx_hash="0x" + "21" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=1,
-        )
-        higher_task = self._create_evm_task(
-            tx_hash="0x" + "22" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=2,
-        )
-
-        stale_created_at = timezone.now() - timedelta(seconds=8)
-        EvmTxTask.objects.filter(pk=head_task.pk).update(
-            created_at=stale_created_at,
-            last_attempt_at=timezone.now(),
-        )
-        EvmTxTask.objects.filter(pk=higher_task.pk).update(
-            created_at=stale_created_at,
-            last_attempt_at=None,
-        )
-
-        with self.captureOnCommitCallbacks(execute=True):
-            dispatch_evm_tx_tasks.run()
-
-        delay_mock.assert_not_called()
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    def test_dispatch_due_evm_tx_tasks_treats_submitted_as_nonce_consumed(
-        self,
-        delay_mock,
-    ):
-        # SQL 选取最小阻塞 nonce 时，不应把已进入 SUBMITTED 的前序任务继续当作 queued 缺口。
-        from evm.tasks import dispatch_evm_tx_tasks
-
-        lower_submitted_task = self._create_evm_task(
-            tx_hash="0x" + "13" * 32,
-            status=TxTaskStatus.SUBMITTED,
-            nonce=1,
-        )
-        higher_task = self._create_evm_task(
-            tx_hash="0x" + "14" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=2,
-        )
-
-        stale_created_at = timezone.now() - timedelta(seconds=8)
-        stale_attempt_at = timezone.now() - timedelta(minutes=5)
-        EvmTxTask.objects.filter(pk=lower_submitted_task.pk).update(
-            created_at=stale_created_at,
-            last_attempt_at=stale_attempt_at,
-        )
-        EvmTxTask.objects.filter(pk=higher_task.pk).update(
-            created_at=stale_created_at,
-            last_attempt_at=None,
-        )
-
-        with self.captureOnCommitCallbacks(execute=True):
-            dispatch_evm_tx_tasks.run()
-
-        self.assertEqual(
-            [call.args[0] for call in delay_mock.call_args_list],
-            [higher_task.pk],
-        )
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    def test_dispatch_due_evm_tx_tasks_avoids_slice_starvation_from_blocked_high_nonces(
-        self, delay_mock
-    ):
-        # SQL 层应直接挑每账户最小未收口 nonce，避免更高 nonce 候选占满 slice 后被 Python 层全部跳过。
-        from evm.tasks import dispatch_evm_tx_tasks
-
-        other_addr = Address.objects.create(
-            wallet=self.wallet,
-            chain_type=ChainType.EVM,
-            usage=AddressUsage.HotWallet,
-            bip44_account=1,
-            address_index=3,
-            address=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000f5"
-            ),
-        )
-        lower_task = self._create_evm_task(
-            tx_hash="0x" + "6" * 64,
-            status=TxTaskStatus.QUEUED,
-            nonce=1,
-        )
-        blocked_tasks = [
-            self._create_evm_task(
-                tx_hash=f"0x{i:064x}",
-                status=TxTaskStatus.QUEUED,
-                nonce=i,
-            )
-            for i in range(2, 10)
-        ]
-        other_account_task = self._create_evm_task(
-            tx_hash="0x" + "7" * 64,
-            status=TxTaskStatus.QUEUED,
-            nonce=1,
-            address=other_addr,
-        )
-
-        older_created_at = timezone.now() - timedelta(seconds=12)
-        stale_created_at = timezone.now() - timedelta(seconds=8)
-        EvmTxTask.objects.filter(pk=lower_task.pk).update(
-            created_at=stale_created_at,
-            last_attempt_at=None,
-        )
-        EvmTxTask.objects.filter(pk__in=[task.pk for task in blocked_tasks]).update(
-            created_at=older_created_at,
-            last_attempt_at=None,
-        )
-        EvmTxTask.objects.filter(pk=other_account_task.pk).update(
-            created_at=stale_created_at,
-            last_attempt_at=None,
-        )
-
-        with self.captureOnCommitCallbacks(execute=True):
-            dispatch_evm_tx_tasks.run()
-
-        self.assertEqual(
-            {call.args[0] for call in delay_mock.call_args_list},
-            {lower_task.pk, other_account_task.pk},
-        )
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    def test_clear_singleton_locks_allows_queue_dispatch_after_stale_lock(
-        self,
-        delay_mock,
-    ):
-        # singleton 锁残留会让队列任务直接返回；测试夹具必须主动清理，避免用例依赖外部缓存状态。
-        from evm.tasks import dispatch_evm_tx_tasks
-
-        cache.set(self.queue_lock_key, "true", 60)
-        due_task = self._create_evm_task(
-            tx_hash="0x" + "f" * 64,
-            status=TxTaskStatus.QUEUED,
-        )
-        EvmTxTask.objects.filter(pk=due_task.pk).update(
-            created_at=timezone.now() - timedelta(seconds=8),
-            last_attempt_at=None,
-        )
-
-        self._clear_singleton_locks()
-        with self.captureOnCommitCallbacks(execute=True):
-            dispatch_evm_tx_tasks.run()
-
-        self.assertEqual(
-            [call.args[0] for call in delay_mock.call_args_list],
-            [due_task.pk],
-        )
-
-    # ── Nonce 流水线测试 ──────────────────────────────────────────────
-
-    @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_broadcast_allows_when_lower_nonce_is_submitted(
-        self,
-        broadcast_mock,
-    ):
-        # 低 nonce 已提交到 mempool (SUBMITTED) 时，高 nonce 允许广播。
-        from evm.tasks import _broadcast_evm_task
-
-        self._create_evm_task(
-            tx_hash="0x" + "a1" * 32,
-            status=TxTaskStatus.SUBMITTED,
-            nonce=1,
-        )
-        higher_task = self._create_evm_task(
-            tx_hash="0x" + "a2" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=2,
-        )
-
-        _broadcast_evm_task.run(higher_task.pk)
-
-        broadcast_mock.assert_called_once()
-
-    @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_broadcast_blocks_when_pipeline_full(
-        self,
-        broadcast_mock,
-    ):
-        # 同地址同链 SUBMITTED 达到 EVM_PIPELINE_DEPTH 时阻断新广播。
-        from evm.constants import EVM_PIPELINE_DEPTH
-        from evm.tasks import _broadcast_evm_task
-
-        for i in range(EVM_PIPELINE_DEPTH):
-            self._create_evm_task(
-                tx_hash=f"0x{i:064x}",
-                status=TxTaskStatus.SUBMITTED,
-                nonce=i,
-            )
-        next_task = self._create_evm_task(
-            tx_hash="0x" + "b1" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=EVM_PIPELINE_DEPTH,
-        )
-
-        _broadcast_evm_task.run(next_task.pk)
-
-        broadcast_mock.assert_not_called()
-
-    @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_broadcast_resumes_after_pipeline_slot_freed(
-        self,
-        broadcast_mock,
-    ):
-        # pipeline 有空位后恢复广播。
-        from evm.constants import EVM_PIPELINE_DEPTH
-        from evm.tasks import _broadcast_evm_task
-
-        submitted_tasks = [
-            self._create_evm_task(
-                tx_hash=f"0x{i:064x}",
-                status=TxTaskStatus.SUBMITTED,
-                nonce=i,
-            )
-            for i in range(EVM_PIPELINE_DEPTH)
-        ]
-        next_task = self._create_evm_task(
-            tx_hash="0x" + "c1" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=EVM_PIPELINE_DEPTH,
-        )
-
-        # 模拟一笔完成，腾出 pipeline 空位
-        first = submitted_tasks[0]
-        TxTask.objects.filter(pk=first.base_task_id).update(
-            status=TxTaskStatus.SUCCEEDED,
-        )
-
-        _broadcast_evm_task.run(next_task.pk)
-
-        broadcast_mock.assert_called_once()
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    def test_dispatch_allows_queued_when_pipeline_has_room(self, delay_mock):
-        # 同地址已有 SUBMITTED 但未满时，dispatch 仍放行最低 QUEUED nonce。
-        from evm.tasks import dispatch_evm_tx_tasks
-
-        self._create_evm_task(
-            tx_hash="0x" + "d1" * 32,
-            status=TxTaskStatus.SUBMITTED,
-            nonce=0,
-        )
-        queued_task = self._create_evm_task(
-            tx_hash="0x" + "d2" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=1,
-        )
-
-        stale_created_at = timezone.now() - timedelta(seconds=8)
-        EvmTxTask.objects.filter(pk=queued_task.pk).update(
-            created_at=stale_created_at,
-            last_attempt_at=None,
-        )
-
-        with self.captureOnCommitCallbacks(execute=True):
-            dispatch_evm_tx_tasks.run()
-
-        self.assertEqual(
-            [call.args[0] for call in delay_mock.call_args_list],
-            [queued_task.pk],
-        )
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    def test_dispatch_blocks_when_pipeline_full(self, delay_mock):
-        # pipeline 已满时 dispatch 不选该地址的 QUEUED 任务。
-        from evm.constants import EVM_PIPELINE_DEPTH
-        from evm.tasks import dispatch_evm_tx_tasks
-
-        for i in range(EVM_PIPELINE_DEPTH):
-            self._create_evm_task(
-                tx_hash=f"0x{0xE0 + i:064x}",
-                status=TxTaskStatus.SUBMITTED,
-                nonce=i,
-            )
-        blocked_task = self._create_evm_task(
-            tx_hash="0x" + "e1" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=EVM_PIPELINE_DEPTH,
-        )
-
-        stale_created_at = timezone.now() - timedelta(seconds=8)
-        EvmTxTask.objects.filter(pk=blocked_task.pk).update(
-            created_at=stale_created_at,
-            last_attempt_at=None,
-        )
-
-        with self.captureOnCommitCallbacks(execute=True):
-            dispatch_evm_tx_tasks.run()
-
-        delay_mock.assert_not_called()
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_chain_dispatch_triggers_next_queued_after_broadcast(
-        self,
-        broadcast_mock,
-        delay_mock,
-    ):
-        # 广播成功后应链式调度同地址下一个 QUEUED nonce，无需等待下一轮 dispatch 周期。
-        from evm.tasks import _broadcast_evm_task
-
-        current_task = self._create_evm_task(
-            tx_hash="0x" + "f1" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=0,
-        )
-        next_task = self._create_evm_task(
-            tx_hash="0x" + "f2" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=1,
-        )
-
-        def mark_submitted(*args, **kwargs):
-            TxTask.objects.filter(pk=current_task.base_task_id).update(
-                status=TxTaskStatus.SUBMITTED,
-            )
-
-        broadcast_mock.side_effect = mark_submitted
-
-        _broadcast_evm_task.run(current_task.pk)
-
-        broadcast_mock.assert_called_once()
-        delay_mock.assert_called_once_with(next_task.pk)
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_chain_dispatch_skips_when_current_task_remains_queued(
-        self,
-        broadcast_mock,
-        delay_mock,
-    ):
-        # pre-flight 阻断会让当前任务保持 QUEUED 并依赖 last_attempt_at 节流；
-        # 链式调度不能立刻把同一个最低 nonce 再投递一次。
-        from evm.tasks import _broadcast_evm_task
-
-        current_task = self._create_evm_task(
-            tx_hash="0x" + "f5" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=0,
-        )
-        self._create_evm_task(
-            tx_hash="0x" + "f6" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=1,
-        )
-
-        _broadcast_evm_task.run(current_task.pk)
-
-        broadcast_mock.assert_called_once()
-        delay_mock.assert_not_called()
-
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    @patch("evm.tasks.EvmTxTask.broadcast")
-    def test_chain_dispatch_stops_when_pipeline_full(
-        self,
-        broadcast_mock,
-        delay_mock,
-    ):
-        # pipeline 满时链式调度不应继续派发。
-        from evm.constants import EVM_PIPELINE_DEPTH
-        from evm.tasks import _broadcast_evm_task
-
-        # 创建 EVM_PIPELINE_DEPTH - 1 个已在 mempool 的任务
-        for i in range(EVM_PIPELINE_DEPTH - 1):
-            self._create_evm_task(
-                tx_hash=f"0x{0xF0 + i:064x}",
-                status=TxTaskStatus.SUBMITTED,
-                nonce=i,
-            )
-        # 当前任务广播后 pipeline 刚好满
-        current_task = self._create_evm_task(
-            tx_hash="0x" + "f3" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=EVM_PIPELINE_DEPTH - 1,
-        )
-        # 还有一个排队中的任务
-        self._create_evm_task(
-            tx_hash="0x" + "f4" * 32,
-            status=TxTaskStatus.QUEUED,
-            nonce=EVM_PIPELINE_DEPTH,
-        )
-
-        def mark_submitted(*args, **kwargs):
-            TxTask.objects.filter(pk=current_task.base_task_id).update(
-                status=TxTaskStatus.SUBMITTED,
-            )
-
-        broadcast_mock.side_effect = mark_submitted
-
-        _broadcast_evm_task.run(current_task.pk)
-
-        broadcast_mock.assert_called_once()
-        # pipeline 满，不应链式调度下一个
-        delay_mock.assert_not_called()

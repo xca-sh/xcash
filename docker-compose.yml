@@ -135,8 +135,8 @@ services:
     # 普通部署自动迁移并初始化；upgrade.sh 准备成功后用临时 override 跳过重复初始化。
     command: /start
 
-  # 业务 worker：消费 celery 队列。链扫描不在 Celery 内运行（见 chain-runner），
-  # 链节点劣化不会占用广播、确认、Webhook 这些业务任务的执行容量。
+  # 业务 worker：消费 celery 队列。链扫描与主动交易的派发、广播、终局轮询都不在 Celery
+  # 内运行（见 chain-runner），链节点劣化不会占用确认、Webhook 这些业务任务的执行容量。
   worker:
     <<: *django-base
     container_name: xcash_worker
@@ -149,10 +149,11 @@ services:
     stop_grace_period: 330s
     command: /start-worker
 
-  # 链扫描：常驻进程，每条活跃链一个线程循环扫描（xcash/chains/runner.py）。
-  # 同一条链由 PG advisory lock 保证只有一个循环在跑；--scale 多开时后到的实例抢不到锁
-  # 就空转待命，前一个退出后数秒内接管。默认单实例，container_name 保持固定；将来需要
-  # 多开时先移除 container_name。
+  # 链扫描与主动交易：常驻进程，每条活跃链一个线程，循环执行扫描 → 终局轮询 → 派发
+  # （xcash/chains/runner.py）。同一条链由 PG advisory lock 保证只有一个循环在跑；--scale
+  # 多开时后到的实例抢不到锁就空转待命，前一个退出后数秒内接管。交接的几秒窗口里两个
+  # 实例可能同时派发：EVM 同一 nonce 至多一笔上链，Tron 最坏对幂等的部署/归集多发一笔、
+  # 多烧一次能量。默认单实例，container_name 保持固定；将来需要多开时先移除 container_name。
   chain-runner:
     <<: *django-base
     container_name: xcash_chain_runner

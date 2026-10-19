@@ -83,7 +83,7 @@ uv run celery -A config.celery worker \
   -n business@%h &
 child_pids+=("$!")
 
-# ── 4. chain-runner — 按链常驻扫描 ───────────────────────────
+# ── 4. chain-runner — 按链常驻扫描与主动交易 ─────────────────
 uv run python manage.py run_chains &
 child_pids+=("$!")
 

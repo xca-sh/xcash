@@ -26,7 +26,7 @@ help:
 	@echo "  make dev-ps                查看依赖容器状态"
 	@echo "  make dev-web               宿主机启动 Django"
 	@echo "  make dev-worker            宿主机启动业务 Celery worker"
-	@echo "  make dev-chain-runner      宿主机启动链扫描常驻进程"
+	@echo "  make dev-chain-runner      宿主机启动链扫描与主动交易常驻进程"
 	@echo "  make dev-beat              宿主机启动 Celery beat"
 	@echo "  make dev-manage ARGS='check'"
 	@echo "  make dev-mm                宿主机执行 Django makemigrations"

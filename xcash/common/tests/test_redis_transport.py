@@ -38,8 +38,7 @@ from config.worker_health import record_chain_runner_heartbeat
 from config.worker_health import stale_worker_groups
 from core.management.commands.wait_for_runtime import missing_consumer_groups
 
-PERIODIC_TASK = "evm.tasks.poll_active_evm_chains"
-BUSINESS_TASK = "evm.tasks.dispatch_evm_tx_tasks"
+PERIODIC_TASK = "core.tasks.report_business_worker_health"
 
 
 @pytest.fixture
@@ -140,7 +139,7 @@ def test_beat_stopped_worker_keeps_one_message_per_entry(broker):
     )
     # 共享业务队列仍可逐条保存带参数消息，不能跟着合并。
     for index in range(10):
-        broker.app.send_task("evm.tasks.poll_evm_chain_tx_tasks", args=[index])
+        broker.app.send_task("chains.tasks.process_transfer", args=[index])
         broker.app.send_task("webhooks.tasks.deliver", args=[index])
     assert broker.channel.queue_declare("celery").message_count == 20
 
@@ -316,7 +315,7 @@ def test_global_prefix_is_used_for_every_priority_bucket(broker):
 @pytest.mark.parametrize("group", ["celery"])
 def test_real_worker_consumes_its_periodic_group_and_next_tick(broker, tmp_path, group):
     """走生产 Worker 启动顺序和异步 BRPOP，防止只测发布而漏订阅新队列。"""
-    own_task = BUSINESS_TASK
+    own_task = PERIODIC_TASK
     for _ in range(20):
         broker.app.tasks[own_task].delay()
     receipt_key = f"{broker.prefix}receipts"

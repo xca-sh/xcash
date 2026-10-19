@@ -1,6 +1,9 @@
+import time
 from unittest.mock import patch
 
+from django.db import transaction
 from django.test import TestCase
+from django.test import TransactionTestCase
 from web3 import Web3
 
 from chains.constants import ChainCode
@@ -11,10 +14,12 @@ from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
 from chains.models import Wallet
+from chains.runner import ChainLocks
 from currencies.models import Crypto
 from evm.intents import EvmTxIntent
 from evm.models import EvmTxTask
 from evm.tests._fixtures import make_evm_chain
+from evm.tx_loop import dispatch_evm_chain_round
 
 
 class EvmTxTaskScheduleTests(TestCase):
@@ -123,36 +128,35 @@ class EvmTxTaskScheduleTests(TestCase):
         self.assertEqual(TxTask.objects.count(), 0)
         self.assertEqual(EvmTxTask.objects.count(), 0)
 
-    @patch("evm.tasks._broadcast_evm_task.delay")
-    def test_schedule_delivers_first_broadcast_only_after_commit(self, delay_mock):
-        # 首播在事务提交后直接投递，不再等 dispatch 轮询；提交前投递会让 worker
-        # 读到尚未提交的任务（DoesNotExist），或在外层回滚后广播悬空任务。
-        with self.captureOnCommitCallbacks(execute=False) as callbacks:
-            task = EvmTxTask.schedule(self._intent())
+    def test_schedule_wakes_chain_loop_without_publishing_to_celery(self):
+        # 首播不再经 Celery：在建任务的同一事务内发 PG 通知，唤醒该链的 chain-runner 线程。
+        with (
+            patch("evm.models.notify_chain_tx_pending") as notify,
+            patch("celery.app.task.Task.apply_async") as apply_async,
+        ):
+            EvmTxTask.schedule(self._intent())
 
-        delay_mock.assert_not_called()
-        for callback in callbacks:
-            callback()
-        delay_mock.assert_called_once_with(task.pk)
+        notify.assert_called_once_with(self.chain.pk)
+        apply_async.assert_not_called()
 
-    def test_direct_delivery_keeps_nonce_order_for_back_to_back_schedules(self):
-        # 同地址连续建两笔任务会各自投递；高 nonce 那笔必须被广播入口阻断，等低 nonce
-        # 首播成功后由链式接力放行，不能抢先进入 mempool。
-        from evm.tasks import _broadcast_evm_task
+    def test_back_to_back_schedules_are_broadcast_in_nonce_order(self):
+        # 同地址连续建的两笔任务由链线程按 nonce 顺序发出，高 nonce 不会抢先进入 mempool。
+        first = EvmTxTask.schedule(self._intent())
+        second = EvmTxTask.schedule(self._intent())
+        broadcasted = []
 
-        with patch("evm.tasks._broadcast_evm_task.delay") as delay_mock:
-            with self.captureOnCommitCallbacks(execute=True):
-                first = EvmTxTask.schedule(self._intent())
-            with self.captureOnCommitCallbacks(execute=True):
-                second = EvmTxTask.schedule(self._intent())
+        def fake_broadcast(task):
+            broadcasted.append(task.nonce)
+            TxTask.objects.filter(pk=task.base_task_id).update(
+                status=TxTaskStatus.SUBMITTED
+            )
 
-        self.assertEqual(
-            [call.args[0] for call in delay_mock.call_args_list],
-            [first.pk, second.pk],
-        )
-        with patch.object(EvmTxTask, "broadcast") as broadcast_mock:
-            _broadcast_evm_task.run(second.pk)
-        broadcast_mock.assert_not_called()
+        with patch.object(
+            EvmTxTask, "broadcast", autospec=True, side_effect=fake_broadcast
+        ):
+            dispatch_evm_chain_round(self.chain, time.monotonic() + 60)
+
+        self.assertEqual(broadcasted, [first.nonce, second.nonce])
 
     def test_schedule_rejects_non_zero_value(self):
         with self.assertRaisesRegex(ValueError, "value must be 0"):
@@ -160,3 +164,52 @@ class EvmTxTaskScheduleTests(TestCase):
 
         self.assertEqual(TxTask.objects.count(), 0)
         self.assertEqual(EvmTxTask.objects.count(), 0)
+
+
+class EvmTxTaskScheduleWakeupTests(TransactionTestCase):
+    """唤醒通知必须与建任务同事务提交：TestCase 的外层事务从不提交，只能用 TransactionTestCase。"""
+
+    def setUp(self):
+        Crypto.objects.create(
+            name="Wakeup Ether", symbol="ETHWK", coingecko_id="wakeup-ether"
+        )
+        self.chain = make_evm_chain(
+            code=ChainCode.Ethereum, rpc="http://localhost:8545"
+        )
+        self.address = Address.objects.create(
+            wallet=Wallet.objects.create(),
+            chain_type=ChainType.EVM,
+            usage=AddressUsage.HotWallet,
+            bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
+            address_index=0,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000a01"
+            ),
+        )
+        self.listener = ChainLocks()
+        self.addCleanup(self.listener.close)
+
+    def intent(self):
+        return EvmTxIntent(
+            sender=self.address,
+            chain=self.chain,
+            to=Web3.to_checksum_address("0x0000000000000000000000000000000000000b02"),
+            value=0,
+            data="0x",
+            gas=21_000,
+            tx_type=TxTaskType.VaultSlotCollect,
+            verify_fn=None,
+        )
+
+    def test_committed_schedule_wakes_the_chain_loop(self):
+        EvmTxTask.schedule(self.intent())
+
+        self.assertEqual(self.listener.wait_for_notifies(5), [str(self.chain.pk)])
+
+    def test_schedule_rolled_back_with_outer_transaction_sends_nothing(self):
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            EvmTxTask.schedule(self.intent())
+            raise RuntimeError("business rollback")
+
+        self.assertEqual(self.listener.wait_for_notifies(0.3), [])
+        self.assertFalse(EvmTxTask.objects.exists())

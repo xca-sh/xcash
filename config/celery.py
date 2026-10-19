@@ -70,24 +70,6 @@ FALLBACK_PROCESS_TRANSFER_SCHEDULE_SECONDS = get_int_default(
     "CELERY_FALLBACK_PROCESS_TRANSFER_SCHEDULE_SECONDS",
     20,
 )
-# EVM / Tron 交易派发周期（两条链共用）。首播已在任务建好提交后直接投递、广播成功后
-# 链式接力，派发只做补偿重试与 Tron 过期重播，故不必高频轮询。Tron 派发每轮只放行
-# 一笔，周期决定其补偿吞吐，取区间下限 10s。
-EVM_BROADCAST_SCHEDULE_SECONDS = get_int_default(
-    "CELERY_EVM_BROADCAST_SCHEDULE_SECONDS",
-    10,
-)
-EVM_NON_TRANSFER_CONFIRM_SCHEDULE_SECONDS = get_int_default(
-    "CELERY_EVM_NON_TRANSFER_CONFIRM_SCHEDULE_SECONDS",
-    60,
-)
-# EVM 在途主动交易（部署/归集）的终局轮询周期。该轮询原先内联在扫描任务里，
-# 扫描一出异常就整段跳过；拆出来独立调度后周期取 15s——EvmTaskPoller 自身按
-# EVM_PENDING_RECEIPT_POLL_DELAY(32s) 过滤刚广播的任务，再快也没有额外收益。
-EVM_TX_TASK_POLL_SCHEDULE_SECONDS = get_int_default(
-    "CELERY_EVM_TX_TASK_POLL_SCHEDULE_SECONDS",
-    15,
-)
 VAULT_SLOT_COLLECT_SCHEDULE_SECONDS = get_int_default(
     "CELERY_VAULT_SLOT_COLLECT_SCHEDULE_SECONDS",
     60,
@@ -150,18 +132,11 @@ chains_tasks = {
 # ---------------------------
 # evm app
 # ---------------------------
+# EVM / Tron 主动交易的派发、广播与终局轮询由 chain-runner 的按链循环负责，不经 beat。
 evm_tasks = {
-    "dispatch_evm_tx_tasks": {
-        "task": "evm.tasks.dispatch_evm_tx_tasks",
-        "schedule": EVM_BROADCAST_SCHEDULE_SECONDS,
-    },
     "scan_stuck_queued_evm_tx_tasks": {
         "task": "evm.tasks.scan_stuck_queued_evm_tx_tasks",
         "schedule": OPERATIONAL_RISKS_SCHEDULE_SECONDS,
-    },
-    "poll_active_evm_chains": {
-        "task": "evm.tasks.poll_active_evm_chains",
-        "schedule": EVM_TX_TASK_POLL_SCHEDULE_SECONDS,
     },
 }
 
@@ -172,20 +147,6 @@ currencies_tasks = {
     "refresh_crypto_prices": {
         "task": "currencies.tasks.refresh_crypto_prices",
         "schedule": CRYPTO_PRICE_REFRESH_SCHEDULE_SECONDS,
-    },
-}
-
-# ---------------------------
-# tron app
-# ---------------------------
-tron_tasks = {
-    "dispatch_tron_tx_tasks": {
-        "task": "tron.tasks.dispatch_tron_tx_tasks",
-        "schedule": EVM_BROADCAST_SCHEDULE_SECONDS,
-    },
-    "confirm_tron_receipt_tx_tasks": {
-        "task": "tron.tasks.confirm_tron_receipt_tx_tasks",
-        "schedule": EVM_NON_TRANSFER_CONFIRM_SCHEDULE_SECONDS,
     },
 }
 
@@ -231,7 +192,6 @@ app.conf.beat_schedule = {
     **webhooks_tasks,
     **chains_tasks,
     **evm_tasks,
-    **tron_tasks,
     **currencies_tasks,
     **celery_internal_tasks,
     **invoices_tasks,

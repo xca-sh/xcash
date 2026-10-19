@@ -9,6 +9,7 @@ from chains.models import Chain
 from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
+from chains.scanning import deadline_passed
 from chains.vault_slots import mark_deployed_if_on_chain_for_task
 from common.time import ago
 from evm.constants import EVM_PENDING_REBROADCAST_TIMEOUT
@@ -34,7 +35,12 @@ class EvmTaskPoller:
     """
 
     @classmethod
-    def poll_chain(cls, *, chain: Chain) -> None:
+    def poll_chain(cls, *, chain: Chain, deadline: float | None = None) -> None:
+        """轮询本链全部到期的在途任务；deadline 只在任务之间检查，第一笔之前不检查。
+
+        按 (sender, nonce) 升序推进：预算不够时先处理低 nonce，EVM 回执本就按 nonce 顺序
+        上链，高 nonce 晚一轮处理没有代价。
+        """
         queryset = (
             EvmTxTask.objects.select_related("base_task", "sender")
             .filter(
@@ -45,7 +51,9 @@ class EvmTaskPoller:
             .order_by("sender_id", "nonce", "created_at")
         )
 
-        for evm_task in queryset:
+        for index, evm_task in enumerate(queryset):
+            if index and deadline_passed(deadline):
+                return
             # 复用本轮已加载的链：否则每条任务首次访问 evm_task.chain 都要多查一次库、
             # 拿到新的 Chain 实例。确认数按本轮开始时的链高计算，只会偏保守、不会提前终局。
             evm_task.chain = chain

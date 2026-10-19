@@ -1,3 +1,4 @@
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -1112,6 +1113,43 @@ class EvmTxTaskTests(TestCase):
         chain.latest_block_number = 100
 
         EvmTaskPoller.poll_chain(chain=chain)
+
+        chain.w3.eth.get_transaction_receipt.assert_called_once_with(base_task.tx_hash)
+
+    def test_poll_chain_stops_between_tasks_once_deadline_passed(self):
+        """预算只在任务之间检查：截止时刻已过也先处理最低 nonce，其余留给下一轮。"""
+        from evm.poller import EvmTaskPoller
+
+        chain = make_evm_chain(code=ChainCode.Ethereum)
+        base_task, tx_task = self._make_recover_task(
+            chain=chain, receipt_status=1, block_number=100
+        )
+        higher_base = TxTask.objects.create(
+            chain=chain,
+            sender=tx_task.sender,
+            tx_type=TxTaskType.VaultSlotCollect,
+            tx_hash="0x" + "8" * 64,
+            status=TxTaskStatus.SUBMITTED,
+        )
+        EvmTxTask.objects.create(
+            base_task=higher_base,
+            sender=tx_task.sender,
+            chain=chain,
+            nonce=1,
+            to=tx_task.to,
+            value=0,
+            gas=21_000,
+            data="0xdeadbeef",
+            gas_price=1,
+            signed_payload="0x7261772d6279746573",
+        )
+        TxTask.objects.filter(pk=base_task.pk).update(status=TxTaskStatus.SUBMITTED)
+        EvmTxTask.objects.filter(sender=tx_task.sender, chain=chain).update(
+            last_attempt_at=timezone.now() - timedelta(seconds=60)
+        )
+        chain.latest_block_number = 100
+
+        EvmTaskPoller.poll_chain(chain=chain, deadline=time.monotonic() - 1)
 
         chain.w3.eth.get_transaction_receipt.assert_called_once_with(base_task.tx_hash)
 

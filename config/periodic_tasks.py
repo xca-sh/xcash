@@ -9,9 +9,6 @@ WORKER_HEALTH_TASK_GROUPS = {
 }
 
 PERIODIC_TASK_GROUPS = {
-    "evm.tasks.dispatch_evm_tx_tasks": "celery",
-    "tron.tasks.dispatch_tron_tx_tasks": "celery",
-    "evm.tasks.poll_active_evm_chains": "celery",
     **WORKER_HEALTH_TASK_GROUPS,
 }
 

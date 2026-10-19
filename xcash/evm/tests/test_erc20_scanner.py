@@ -1204,14 +1204,6 @@ class EvmErc20ScannerTests(TestCase):
         self.chain.refresh_from_db()
         self.assertEqual(self.chain.latest_block_number, 200)
 
-    @patch("evm.tasks.EvmTaskPoller.poll_chain")
-    def test_poll_evm_chain_tx_tasks_polls_active_chain(self, poll_chain_mock):
-        from evm.tasks import poll_evm_chain_tx_tasks
-
-        poll_evm_chain_tx_tasks(self.chain.pk)
-
-        poll_chain_mock.assert_called_once()
-
     @patch("chains.tasks.block_number_updated.delay")
     @patch("evm.scanner.logs.EvmLogScanner.scan_range")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")

@@ -55,12 +55,11 @@ class PerformanceProfileTests(SimpleTestCase):
         self.assertIn("export GUNICORN_WORKERS=9", completed.stdout)
         self.assertIn("export GUNICORN_THREADS=5", completed.stdout)
 
-    def test_celery_tx_dispatch_schedule_overridable(self):
-        # 交易派发周期可由 CELERY_EVM_BROADCAST_SCHEDULE_SECONDS 覆盖；
-        # EVM 与 Tron 两个派发器共用同一节奏。
+    def test_celery_beat_schedule_overridable(self):
+        # beat 周期可由 CELERY_*_SCHEDULE_SECONDS 环境变量覆盖。
         env = {
             **os.environ,
-            "CELERY_EVM_BROADCAST_SCHEDULE_SECONDS": "13",
+            "CELERY_FALLBACK_PROCESS_TRANSFER_SCHEDULE_SECONDS": "13",
             "DJANGO_SETTINGS_MODULE": "config.settings.test",
         }
         completed = subprocess.run(
@@ -69,11 +68,9 @@ class PerformanceProfileTests(SimpleTestCase):
                 "-c",
                 (
                     "from config.celery import app;"
-                    "evm = app.conf.beat_schedule['dispatch_evm_tx_tasks'];"
-                    "tron = app.conf.beat_schedule['dispatch_tron_tx_tasks'];"
-                    "print(evm['task']);"
-                    "print(evm['schedule']);"
-                    "print(tron['schedule'])"
+                    "entry = app.conf.beat_schedule['fallback_process_transfer'];"
+                    "print(entry['task']);"
+                    "print(entry['schedule'])"
                 ),
             ],
             check=True,
@@ -84,5 +81,5 @@ class PerformanceProfileTests(SimpleTestCase):
 
         self.assertEqual(
             completed.stdout.splitlines(),
-            ["evm.tasks.dispatch_evm_tx_tasks", "13", "13"],
+            ["chains.tasks.fallback_process_transfer", "13"],
         )
