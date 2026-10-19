@@ -24,9 +24,10 @@ from webhooks.models import WebhookEvent
 
 logger = structlog.get_logger()
 
-# 扫描停滞多久判定为异常。各链 scan_interval_seconds 最长 10s、单轮预算 40s（看门狗
-# 硬上限 180s 会直接重启 chain-runner），正常态 last_scanned_at 落后不会超过 60s；取
-# 300s 既不会因单次 RPC 抖动误报，又能把「扫描彻底停摆」的发现时间压在 5 分钟内。
+# 扫描停滞多久判定为异常。各链 scan_interval_seconds 最长 10s，一轮内扫描预算 40s、
+# 终局轮询与派发各 20s（单步超过看门狗硬上限 300s 会直接重启 chain-runner），正常态
+# last_scanned_at 落后不会超过 60s；取 300s 既不会因单次 RPC 抖动误报，又能把「扫描
+# 彻底停摆」的发现时间压在 5 分钟内。
 SCAN_STALL_ALERT_AFTER_SECONDS = get_int_default(
     "SCAN_STALL_ALERT_AFTER_SECONDS",
     300,

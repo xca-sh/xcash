@@ -7,7 +7,8 @@ deposits）。这些上层模块在各自 AppConfig.ready() 里把实现登记�
 的分层契约锁定，见 pyproject.toml 的 [tool.importlinter]）。
 
 三类扩展点：
-- 链族 ChainFamily：链适配器、VaultSlot 后端与单轮扫描。新增链族 = 新建 app 并登记，不改 chains。
+- 链族 ChainFamily：链适配器、VaultSlot 后端，以及链循环每轮的扫描、终局轮询与派发三步。
+  新增链族 = 新建 app 并登记，不改 chains。
 - 入账业务处理器 TransferHandler：把一笔外部入账匹配为某类业务，确认后推进该业务。
 - 收款地址来源 RecipientAddressSource：VaultSlot 之外、扫描器也必须识别的业务收款地址。
 
@@ -66,9 +67,14 @@ class ChainFamily:
     # 登记类而非实例：沿用原 AdapterFactory 每次调用新建实例的语义，避免跨调用共享状态。
     adapter_class: type[AdapterInterface]
     vault_slot_backend: VaultSlotBackend
-    # 扫描本链一轮入账，参数为 (chain, deadline)；deadline 是本轮截止时刻（monotonic），
-    # 语义见 chains.scanning。由 chains.runner 的按链常驻循环调用，RPC 失败自行记录后返回。
+    # 以下三步由 chains.runner 的按链常驻循环每轮依次调用，参数均为 (chain, deadline)；
+    # deadline 是本步截止时刻（monotonic），只在单元之间检查，语义见 chains.scanning。
+    # 扫描本链一轮入账；RPC 失败自行记录后返回。
     scan_round: Callable[[Chain, float], None]
+    # 轮询本链在途主动交易的链上终局，必要时重播。
+    poll_round: Callable[[Chain, float], None]
+    # 派发本链待发的主动交易。
+    dispatch_round: Callable[[Chain, float], None]
 
 
 @dataclass(frozen=True, kw_only=True)

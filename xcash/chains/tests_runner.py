@@ -1,4 +1,4 @@
-"""chain-runner：按链锁互斥、循环启停与链集合对齐、看门狗、锁失效与单轮容错。"""
+"""chain-runner：按链锁互斥、循环启停与链集合对齐、看门狗、锁失效、单步容错与唤醒。"""
 
 import threading
 import time
@@ -9,18 +9,24 @@ from unittest.mock import patch
 
 import psycopg
 from django.db import DatabaseError
+from django.db import transaction
 from django.test import TestCase
+from django.test import TransactionTestCase
 from django.utils import timezone
 
 from chains.constants import ChainCode
 from chains.models import Chain
-from chains.runner import SCAN_ROUND_HARD_LIMIT_SECONDS
+from chains.runner import CHAIN_STEP_HARD_LIMIT_SECONDS
 from chains.runner import ChainLocks
 from chains.runner import ChainLoop
 from chains.runner import ChainRunner
 from chains.runner import scannable_chains
+from chains.scanning import SCAN_ROUND_BUDGET_SECONDS
+from chains.scanning import TX_DISPATCH_BUDGET_SECONDS
+from chains.scanning import TX_POLL_BUDGET_SECONDS
 from chains.tests_fixtures import make_evm_chain
 from chains.tests_fixtures import make_tron_chain
+from chains.wakeup import notify_chain_tx_pending
 
 
 class FakeLocks:
@@ -48,15 +54,19 @@ class FakeLoop:
         self.chain_pk = chain.pk
         self.chain_code = chain.code
         self.stop_event = threading.Event()
-        self.round_started_at = None
+        self.step_started_at = None
         self.alive = False
         self.joined = False
+        self.woken = 0
 
     def start(self):
         self.alive = True
 
     def stop(self):
         self.stop_event.set()
+
+    def wake(self):
+        self.woken += 1
 
     def is_alive(self):
         return self.alive
@@ -231,17 +241,17 @@ class ChainRunnerTickTests(TestCase):
         self.exit_process.assert_not_called()
 
     @patch("chains.runner.faulthandler.dump_traceback")
-    def test_watchdog_exits_when_a_round_exceeds_hard_limit(self, dump_traceback):
+    def test_watchdog_exits_when_a_step_exceeds_hard_limit(self, dump_traceback):
         self.runner.reconcile([self.evm])
         loop = self.runner.loops[self.evm.pk]
 
-        loop.round_started_at = self.now - SCAN_ROUND_HARD_LIMIT_SECONDS
+        loop.step_started_at = self.now - CHAIN_STEP_HARD_LIMIT_SECONDS
         self.assertFalse(self.runner.check_watchdog())
-        loop.round_started_at = None
+        loop.step_started_at = None
         self.assertFalse(self.runner.check_watchdog())
         self.exit_process.assert_not_called()
 
-        loop.round_started_at = self.now - SCAN_ROUND_HARD_LIMIT_SECONDS - 1
+        loop.step_started_at = self.now - CHAIN_STEP_HARD_LIMIT_SECONDS - 1
         self.assertTrue(self.runner.check_watchdog())
         self.exit_process.assert_called_once_with(1)
         dump_traceback.assert_called_once_with(all_threads=True)
@@ -252,10 +262,17 @@ class ChainLoopRoundTests(TestCase):
         self.chain = make_evm_chain(code=ChainCode.Ethereum)
         self.stale = timezone.now() - timedelta(hours=1)
         Chain.objects.filter(pk=self.chain.pk).update(last_scanned_at=self.stale)
-        self.scan_round = Mock()
+        self.calls = []
+        self.scan_round = Mock(side_effect=lambda *_: self.calls.append("scan"))
+        self.poll_round = Mock(side_effect=lambda *_: self.calls.append("poll"))
+        self.dispatch_round = Mock(side_effect=lambda *_: self.calls.append("dispatch"))
         family = patch(
             "chains.runner.get_chain_family",
-            return_value=SimpleNamespace(scan_round=self.scan_round),
+            return_value=SimpleNamespace(
+                scan_round=self.scan_round,
+                poll_round=self.poll_round,
+                dispatch_round=self.dispatch_round,
+            ),
         )
         family.start()
         self.addCleanup(family.stop)
@@ -263,34 +280,134 @@ class ChainLoopRoundTests(TestCase):
     def last_scanned_at(self):
         return Chain.objects.get(pk=self.chain.pk).last_scanned_at
 
-    def test_unexpected_error_is_contained_and_still_marks_scanned(self):
+    def test_round_runs_scan_then_poll_then_dispatch(self):
+        ChainLoop(self.chain).run_once()
+
+        self.assertEqual(self.calls, ["scan", "poll", "dispatch"])
+
+    def test_failing_step_never_skips_the_steps_after_it(self):
+        # 终局轮询曾挂在扫描之后、随扫描异常整段跳过，部署/归集因此永不终局。
         self.scan_round.side_effect = RuntimeError("scanner exploded")
+        self.poll_round.side_effect = RuntimeError("poller exploded")
+        self.dispatch_round.side_effect = RuntimeError("dispatcher exploded")
         loop = ChainLoop(self.chain)
 
         loop.run_once()
 
+        self.scan_round.assert_called_once()
+        self.poll_round.assert_called_once()
+        self.dispatch_round.assert_called_once()
         self.assertGreater(self.last_scanned_at(), self.stale)
-        self.assertIsNone(loop.round_started_at)
+        self.assertIsNone(loop.step_started_at)
+
+    def test_each_step_gets_its_own_budget_from_its_own_start(self):
+        # 扫描落后链头时会把自己的预算用满，轮询与派发不能因此拿到已过期的截止时刻。
+        with patch(
+            "chains.runner.step_deadline",
+            side_effect=lambda *, budget_seconds: budget_seconds,
+        ) as deadline:
+            ChainLoop(self.chain).run_once()
+
+        self.assertEqual(
+            [call.kwargs["budget_seconds"] for call in deadline.call_args_list],
+            [
+                SCAN_ROUND_BUDGET_SECONDS,
+                TX_POLL_BUDGET_SECONDS,
+                TX_DISPATCH_BUDGET_SECONDS,
+            ],
+        )
+        self.assertEqual(self.scan_round.call_args.args[1], SCAN_ROUND_BUDGET_SECONDS)
+        self.assertEqual(self.poll_round.call_args.args[1], TX_POLL_BUDGET_SECONDS)
+        self.assertEqual(
+            self.dispatch_round.call_args.args[1], TX_DISPATCH_BUDGET_SECONDS
+        )
+
+    def test_watchdog_clock_restarts_at_every_step(self):
+        loop = ChainLoop(self.chain)
+        started = {}
+
+        def record(name):
+            def step(*_):
+                started[name] = loop.step_started_at
+                time.sleep(0.01)
+
+            return step
+
+        self.scan_round.side_effect = record("scan")
+        self.poll_round.side_effect = record("poll")
+        self.dispatch_round.side_effect = record("dispatch")
+
+        loop.run_once()
+
+        # 看门狗按步计时：三步各自从零起算，整轮再长也不会被误判为挂死。
+        self.assertLess(started["scan"], started["poll"])
+        self.assertLess(started["poll"], started["dispatch"])
+        self.assertIsNone(loop.step_started_at)
+
+    def test_last_scanned_at_advances_before_poll_and_dispatch_run(self):
+        seen = []
+        self.dispatch_round.side_effect = lambda *_: seen.append(self.last_scanned_at())
+
+        ChainLoop(self.chain).run_once()
+
+        # last_scanned_at 表示「扫描完成于」，不能被同链派发的耗时推迟。
+        self.assertGreater(seen[0], self.stale)
 
     def test_mark_scanned_failure_does_not_escape_round(self):
         with patch.object(Chain, "mark_scanned", side_effect=DatabaseError("db down")):
             ChainLoop(self.chain).run_once()
-        self.scan_round.assert_called_once()
+        self.assertEqual(self.calls, ["scan", "poll", "dispatch"])
 
-    def test_deactivated_chain_is_not_scanned_nor_marked(self):
+    def test_deactivated_chain_runs_no_step_and_is_not_marked(self):
         loop = ChainLoop(self.chain)
         Chain.objects.filter(pk=self.chain.pk).update(active=False)
 
         loop.run_once()
+        loop.run_dispatch_only()
 
-        self.scan_round.assert_not_called()
+        self.assertEqual(self.calls, [])
         self.assertEqual(self.last_scanned_at(), self.stale)
 
-    def test_round_is_given_a_future_deadline(self):
-        with patch("chains.runner.scan_round_deadline", return_value=12345.0):
-            ChainLoop(self.chain).run_once()
+    def test_stop_takes_effect_between_steps(self):
+        loop = ChainLoop(self.chain)
+        self.scan_round.side_effect = lambda *_: loop.stop()
+
+        loop.run_once()
+
         self.scan_round.assert_called_once()
-        self.assertEqual(self.scan_round.call_args.args[1], 12345.0)
+        self.poll_round.assert_not_called()
+        self.dispatch_round.assert_not_called()
+
+    def test_dispatch_only_runs_just_the_dispatch_step(self):
+        loop = ChainLoop(self.chain)
+
+        loop.run_dispatch_only()
+
+        self.assertEqual(self.calls, ["dispatch"])
+        self.assertEqual(self.last_scanned_at(), self.stale)
+
+
+class ChainLoopWakeTests(TestCase):
+    def setUp(self):
+        self.loop = ChainLoop(make_evm_chain(code=ChainCode.Ethereum))
+
+    def test_wakes_coalesce_into_one(self):
+        self.loop.wake()
+        self.loop.wake()
+
+        self.assertTrue(self.loop.wait_for_wake(until=time.monotonic() + 5))
+        # 第二次唤醒已被合并，接下来只会等到截止时刻。
+        self.assertFalse(self.loop.wait_for_wake(until=time.monotonic() + 0.05))
+
+    def test_no_wake_returns_false_at_deadline(self):
+        self.assertFalse(self.loop.wait_for_wake(until=time.monotonic() + 0.05))
+
+    def test_stop_interrupts_wait_without_reporting_a_wake(self):
+        threading.Timer(0.05, self.loop.stop).start()
+        started = time.monotonic()
+
+        self.assertFalse(self.loop.wait_for_wake(until=time.monotonic() + 60))
+        self.assertLess(time.monotonic() - started, 5)
 
 
 class ChainLoopThreadTests(TestCase):
@@ -308,3 +425,94 @@ class ChainLoopThreadTests(TestCase):
 
         self.assertFalse(loop.is_alive())
         run_once.assert_called_once_with()
+
+    def test_wake_runs_dispatch_only_without_advancing_the_round(self):
+        chain = make_evm_chain(code=ChainCode.Ethereum)
+        loop = ChainLoop(chain)
+        loop.scan_interval_seconds = 60
+        rounds = threading.Event()
+        dispatched = threading.Event()
+
+        with (
+            patch.object(ChainLoop, "run_once", side_effect=rounds.set) as run_once,
+            patch.object(
+                ChainLoop, "run_dispatch_only", side_effect=dispatched.set
+            ) as run_dispatch_only,
+        ):
+            loop.start()
+            self.assertTrue(rounds.wait(timeout=5))
+            loop.wake()
+            self.assertTrue(dispatched.wait(timeout=5))
+            loop.stop()
+            loop.thread.join(timeout=5)
+
+        self.assertFalse(loop.is_alive())
+        # 唤醒只补跑派发，扫描仍按 scan_interval 节奏，不会被提前。
+        run_once.assert_called_once_with()
+        run_dispatch_only.assert_called_once_with()
+
+
+class ChainRunnerWakeTests(TestCase):
+    def test_notification_wakes_only_the_loop_of_that_chain(self):
+        evm = make_evm_chain(code=ChainCode.Ethereum)
+        tron = make_tron_chain(code=ChainCode.Tron)
+        runner = ChainRunner(loop_factory=FakeLoop)
+        runner.locks = FakeLocks()
+        runner.reconcile([evm, tron])
+
+        runner.wake(str(evm.pk))
+        # 不在本实例运行的链（别的实例持锁、已停用）与非法 payload 都直接忽略。
+        runner.wake("999999")
+        runner.wake("not-a-pk")
+
+        self.assertEqual(runner.loops[evm.pk].woken, 1)
+        self.assertEqual(runner.loops[tron.pk].woken, 0)
+
+
+class ChainWakeupNotifyTests(TransactionTestCase):
+    """NOTIFY 只在真正提交时投递，必须用 TransactionTestCase：TestCase 的外层事务从不提交。"""
+
+    def setUp(self):
+        self.listener = ChainLocks()
+        self.addCleanup(self.listener.close)
+
+    def test_notification_is_delivered_only_after_commit(self):
+        with transaction.atomic():
+            notify_chain_tx_pending(42)
+            self.assertEqual(self.listener.wait_for_notifies(0.2), [])
+
+        self.assertEqual(self.listener.wait_for_notifies(5), ["42"])
+
+    def test_rolled_back_notifications_are_discarded(self):
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            notify_chain_tx_pending(1)
+            raise RuntimeError("rollback")
+
+        with transaction.atomic():
+            notify_chain_tx_pending(2)
+            savepoint = transaction.savepoint()
+            notify_chain_tx_pending(3)
+            transaction.savepoint_rollback(savepoint)
+
+        self.assertEqual(self.listener.wait_for_notifies(5), ["2"])
+        self.assertEqual(self.listener.wait_for_notifies(0.2), [])
+
+    def test_notification_arriving_during_other_queries_is_not_lost(self):
+        notify_chain_tx_pending(7)
+        time.sleep(0.1)
+        # 通知在锁连接执行别的语句时到达：psycopg 暂存，下次等待时最先返回。
+        self.listener.ping()
+        self.listener.try_lock(7)
+
+        self.assertEqual(self.listener.wait_for_notifies(5), ["7"])
+
+    def test_supervisor_wakes_the_notified_loop(self):
+        runner = ChainRunner()
+        runner.locks = self.listener
+        loop = SimpleNamespace(wake=Mock())
+        runner.loops = {42: loop}
+
+        notify_chain_tx_pending(42)
+        runner.wait_for_wakeups(0.5)
+
+        loop.wake.assert_called_once_with()

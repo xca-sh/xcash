@@ -2197,6 +2197,8 @@ class TransferHandlerRegistryTests(TestCase):
                     adapter_class=TxCheckStatus,
                     vault_slot_backend=object(),
                     scan_round=Mock(),
+                    poll_round=Mock(),
+                    dispatch_round=Mock(),
                 )
             )
 

@@ -5,6 +5,8 @@ from tron import vault_slots
 from tron.adapter import TronAdapter
 from tron.models import TronWatchCursor
 from tron.scanner import scan_tron_chain_round
+from tron.tx_loop import dispatch_tron_chain_round
+from tron.tx_loop import poll_tron_chain_round
 
 from chains.constants import ChainType
 from chains.models import Chain
@@ -35,6 +37,8 @@ def register() -> None:
             adapter_class=TronAdapter,
             vault_slot_backend=vault_slots,
             scan_round=scan_tron_chain_round,
+            poll_round=poll_tron_chain_round,
+            dispatch_round=dispatch_tron_chain_round,
         )
     )
     post_save.connect(

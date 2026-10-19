@@ -6,6 +6,8 @@ from chains.registry import register_chain_family
 from evm import vault_slots
 from evm.adapter import EvmAdapter
 from evm.scanner.logs import scan_evm_chain_round
+from evm.tx_loop import dispatch_evm_chain_round
+from evm.tx_loop import poll_evm_chain_round
 
 
 def register() -> None:
@@ -15,5 +17,7 @@ def register() -> None:
             adapter_class=EvmAdapter,
             vault_slot_backend=vault_slots,
             scan_round=scan_evm_chain_round,
+            poll_round=poll_evm_chain_round,
+            dispatch_round=dispatch_evm_chain_round,
         )
     )

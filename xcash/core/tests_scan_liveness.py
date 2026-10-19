@@ -75,9 +75,7 @@ class ScanLivenessTests(TestCase):
         if not expired_budget:
             loop.run_once()
             return
-        with patch(
-            "chains.runner.scan_round_deadline", return_value=time.monotonic() - 1
-        ):
+        with patch("chains.runner.step_deadline", return_value=time.monotonic() - 1):
             loop.run_once()
 
     def assert_scan_failed(self, *, chain, cursor, scanned_block, error):

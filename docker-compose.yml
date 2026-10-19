@@ -156,9 +156,9 @@ services:
   chain-runner:
     <<: *django-base
     container_name: xcash_chain_runner
-    # SIGTERM 后各链跑完当前一轮（预算 40s，加单次调用余量）再退出；超时被 SIGKILL
-    # 也安全：扫描进度按单元提交，入账按唯一键幂等。
-    stop_grace_period: 60s
+    # SIGTERM 后各链跑完当前一步（预算最长 40s，加一个单元的余量）再退出；超时被
+    # SIGKILL 也安全：扫描进度按单元提交，入账按唯一键幂等。
+    stop_grace_period: 120s
     command: /start-chain-runner
 
   beat:
