@@ -1356,7 +1356,7 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
         rebroadcast_expired_submitted.assert_called_once()
 
     @patch("tron.models.TronTxTask.broadcast")
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_broadcast_task_recovers_queued_known_hash_before_rebroadcast(
         self,
         get_adapter,
@@ -3417,10 +3417,10 @@ class TronReceiptConfirmTaskTests(TestCase):
                 self.assertEqual(callback.uid, self.customer.uid)
                 send_callback_mock.reset_mock()
 
-    @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
-    @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
-    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.notify_vault_slot_deploy_gas_fee")
+    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_finalizes_collect_and_triggers_collect_gas_fee(
         self,
         get_adapter,
@@ -3447,10 +3447,10 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(collect_gas_fee.call_args.kwargs["tx_task"].pk, base_task.pk)
         deploy_gas_fee.assert_not_called()
 
-    @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
-    @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
-    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.notify_vault_slot_deploy_gas_fee")
+    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_finalizes_queued_collect_with_known_hash(
         self,
         get_adapter,
@@ -3475,10 +3475,10 @@ class TronReceiptConfirmTaskTests(TestCase):
         collect_gas_fee.assert_called_once()
         deploy_gas_fee.assert_not_called()
 
-    @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
-    @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
-    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.notify_vault_slot_deploy_gas_fee")
+    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_finalizes_deploy_marks_slot_deployed_and_triggers_gas_fee(
         self,
         get_adapter,
@@ -3506,9 +3506,9 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(deploy_gas_fee.call_args.kwargs["tx_task"].pk, base_task.pk)
         collect_gas_fee.assert_not_called()
 
-    @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
-    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_marks_failed_collect_without_gas_fee(
         self,
         get_adapter,
@@ -3531,10 +3531,10 @@ class TronReceiptConfirmTaskTests(TestCase):
         refresh_balance.assert_not_called()
         collect_gas_fee.assert_not_called()
 
-    @patch("tron.tasks.notify_vault_slot_deploy_gas_fee")
-    @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
-    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.notify_vault_slot_deploy_gas_fee")
+    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_collect_resolves_success_from_old_hash(
         self,
         get_adapter,
@@ -3577,9 +3577,9 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(collect_gas_fee.call_args.kwargs["tx_task"].tx_hash, old_hash)
         deploy_gas_fee.assert_not_called()
 
-    @patch("tron.tasks.notify_vault_slot_collect_gas_fee")
-    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_does_not_fail_uncapped_expired_missing_hash(
         self,
         get_adapter,
@@ -3619,9 +3619,9 @@ class TronReceiptConfirmTaskTests(TestCase):
         refresh_balance.assert_not_called()
         collect_gas_fee.assert_not_called()
 
-    @patch("tron.tasks.refresh_vault_slot_balance_for_collect_task")
-    @patch("tron.tasks.TronHttpClient")
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tx_loop.TronHttpClient")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_fails_capped_missing_hashes_after_solid_grace(
         self,
         get_adapter,
@@ -3652,8 +3652,8 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(adapter.tx_result.call_count, TRON_MAX_BROADCAST_HASHES)
         refresh_balance.assert_not_called()
 
-    @patch("tron.tasks.TronHttpClient")
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.TronHttpClient")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_keeps_capped_missing_hashes_when_solid_head_is_before_grace(
         self,
         get_adapter,
@@ -3680,8 +3680,8 @@ class TronReceiptConfirmTaskTests(TestCase):
         base_task.refresh_from_db()
         self.assertEqual(base_task.status, TxTaskStatus.SUBMITTED)
 
-    @patch("tron.tasks.TronHttpClient")
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.TronHttpClient")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_keeps_capped_missing_hashes_during_local_grace(
         self,
         get_adapter,
@@ -3700,7 +3700,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(base_task.status, TxTaskStatus.SUBMITTED)
         client_cls.assert_not_called()
 
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_rechecks_hash_snapshot_before_failed_terminal(
         self,
         get_adapter,
@@ -3726,7 +3726,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(base_task.status, TxTaskStatus.SUBMITTED)
         self.assertEqual(base_task.tx_hash, appended_hash)
 
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_rotates_active_missing_task(self, get_adapter):
         base_task = self.create_collect_task()
         stale_updated_at = timezone.now() - timedelta(hours=1)
@@ -3741,7 +3741,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(base_task.status, TxTaskStatus.SUBMITTED)
         self.assertGreater(base_task.updated_at, stale_updated_at)
 
-    @patch("tron.tasks.AdapterFactory.get_adapter")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_rotates_oldest_missing_batch_and_reaches_later_task(
         self,
         get_adapter,
