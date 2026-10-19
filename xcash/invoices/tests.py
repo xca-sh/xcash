@@ -69,7 +69,8 @@ def create_active_evm_test_chain(*, code=ChainCode.Ethereum) -> Chain:
 
 
 def disable_vault_slot_deploy_schedule(test_case) -> None:
-    patcher = patch("chains.vault_slots.schedule_deploy", return_value=None)
+    # 账单分配的预部署统一在提交后投递 Celery 任务，测试环境非 eager，拦住投递入口即可。
+    patcher = patch("chains.tasks.schedule_vault_slot_deploy.delay", return_value=None)
     patcher.start()
     test_case.addCleanup(patcher.stop)
 
@@ -2504,6 +2505,7 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         invoice = self.create_test_invoice(out_no="contract-token-lazy-deploy")
 
         with (
+            patch("chains.tasks.schedule_vault_slot_deploy.delay") as deploy_delay,
             patch("chains.vault_slots.schedule_deploy") as schedule_deploy,
             self.captureOnCommitCallbacks(execute=True),
         ):
@@ -2515,9 +2517,15 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
 
         self.assertEqual(selected_address, slot.address)
         self.assertEqual(selected_amount, Decimal("10"))
+        deploy_delay.assert_not_called()
         schedule_deploy.assert_not_called()
 
-    def test_reusing_undeployed_contract_slot_schedules_deploy_for_native(self):
+    def test_reusing_undeployed_contract_slot_delays_deploy_task_for_native(self):
+        """复用未部署的 EVM 原生币槽位：提交后投递 Celery 任务，不在请求线程同步部署。
+
+        on_commit 回调跑在请求线程里，同步 schedule_deploy 会内联链上 RPC 并抢热钱包
+        行锁，节点抖动时把已落库的下单打成 500。
+        """
         vault_address = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000F17"
         )
@@ -2536,18 +2544,24 @@ class InvoiceVaultSlotPaymentTest(TestCase, InvoiceTestMixin):
         invoice = self.create_test_invoice(out_no="contract-native-predeploy")
 
         with (
+            patch("chains.tasks.schedule_vault_slot_deploy.delay") as deploy_delay,
             patch("chains.vault_slots.schedule_deploy") as schedule_deploy,
-            self.captureOnCommitCallbacks(execute=True),
         ):
-            selected_address, selected_amount = invoice._allocate_contract_slot(
-                self.chain.native_coin,
-                self.chain,
-                Decimal("10"),
-            )
+            with self.captureOnCommitCallbacks(execute=False) as callbacks:
+                selected_address, selected_amount = invoice._allocate_contract_slot(
+                    self.chain.native_coin,
+                    self.chain,
+                    Decimal("10"),
+                )
+            # 事务提交前不得投递，避免 worker 读到尚未提交的槽位/账单。
+            deploy_delay.assert_not_called()
+            for callback in callbacks:
+                callback()
 
         self.assertEqual(selected_address, slot.address)
         self.assertEqual(selected_amount, Decimal("10"))
-        schedule_deploy.assert_called_once_with(slot.pk)
+        deploy_delay.assert_called_once_with(slot.pk)
+        schedule_deploy.assert_not_called()
         self.assertEqual(slot.invoice_index, 0)
         self.assertIsNone(slot.customer_id)
         self.assertEqual(slot.project.evm_vault, vault_address)
