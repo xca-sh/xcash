@@ -28,6 +28,11 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks()
+# evm / tron 的 SaaS gas 计费重试任务定义在各自的 saas_gas_billing 模块，不在 tasks 模块里。
+# 默认 autodiscover 只加载 tasks，worker 主进程若没有经别处导入这两个模块，这些任务就不会注册：
+# chain-runner 投递的重试会被 worker 当作 unregistered task 丢弃，gas 计费永久漏报。
+# 因此按模块名显式发现；没有 saas_gas_billing 模块的 app 会被 Celery 静默跳过。
+app.autodiscover_tasks(related_name="saas_gas_billing")
 before_task_publish.connect(stamp_worker_health_probe)
 
 
