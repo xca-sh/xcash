@@ -55,12 +55,12 @@ class PerformanceProfileTests(SimpleTestCase):
         self.assertIn("export GUNICORN_WORKERS=9", completed.stdout)
         self.assertIn("export GUNICORN_THREADS=5", completed.stdout)
 
-    def test_celery_scan_dispatch_schedule_overridable(self):
-        # 扫描调度器固定每 2 秒巡检，可由 CELERY_SCAN_DISPATCH_SCHEDULE_SECONDS 覆盖；
-        # EVM 与 Tron 两个调度器共用同一节奏。
+    def test_celery_tx_dispatch_schedule_overridable(self):
+        # 交易派发周期可由 CELERY_EVM_BROADCAST_SCHEDULE_SECONDS 覆盖；
+        # EVM 与 Tron 两个派发器共用同一节奏。
         env = {
             **os.environ,
-            "CELERY_SCAN_DISPATCH_SCHEDULE_SECONDS": "13",
+            "CELERY_EVM_BROADCAST_SCHEDULE_SECONDS": "13",
             "DJANGO_SETTINGS_MODULE": "config.settings.test",
         }
         completed = subprocess.run(
@@ -69,8 +69,8 @@ class PerformanceProfileTests(SimpleTestCase):
                 "-c",
                 (
                     "from config.celery import app;"
-                    "evm = app.conf.beat_schedule['scan_active_evm_chains'];"
-                    "tron = app.conf.beat_schedule['scan_active_tron_chains'];"
+                    "evm = app.conf.beat_schedule['dispatch_evm_tx_tasks'];"
+                    "tron = app.conf.beat_schedule['dispatch_tron_tx_tasks'];"
                     "print(evm['task']);"
                     "print(evm['schedule']);"
                     "print(tron['schedule'])"
@@ -84,5 +84,5 @@ class PerformanceProfileTests(SimpleTestCase):
 
         self.assertEqual(
             completed.stdout.splitlines(),
-            ["evm.tasks.scan_active_evm_chains", "13", "13"],
+            ["evm.tasks.dispatch_evm_tx_tasks", "13", "13"],
         )

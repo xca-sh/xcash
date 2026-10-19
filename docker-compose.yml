@@ -22,12 +22,12 @@ x-logging: &default-logging
     max-file: "3"
 
 # 【healthcheck 约定】只配给被 `depends_on: condition: service_healthy` 消费的服务，即 db
-# 与 redis——它们门控 django/worker/worker-scan/beat 的启动时机，是功能件。应用服务有意不配：
+# 与 redis——它们门控 django/worker/chain-runner/beat 的启动时机，是功能件。应用服务有意不配：
 # Compose 不会因 unhealthy 做任何事（自动重启是 Swarm 能力），状态仅供 `ps` 展示，却要付出
 # 常驻开销（celery inspect ping 每次需拉起完整 Django + Celery 进程，实测约 69MB RSS）。
 # 应用存活由外部 HTTP 探针监测：GET /health、/health/scanning、/health/workers。
 #
-# django / worker / worker-scan / beat 共享配置，容器名由各服务单独声明。
+# django / worker / chain-runner / beat 共享配置，容器名由各服务单独声明。
 x-django-base: &django-base
   # 应用镜像由 GitHub Actions 构建并发布到 GHCR（.github/workflows/ci.yml 的 publish），
   # 服务器只拉取、不构建；四个进程角色共享同一份镜像。首次 up 本地没有镜像时自动拉取，
@@ -135,9 +135,8 @@ services:
     # 普通部署自动迁移并初始化；upgrade.sh 准备成功后用临时 override 跳过重复初始化。
     command: /start
 
-  # 业务 worker：只消费 celery 队列。与 worker-scan 分开是为了做执行容量隔离——
-  # 扫描任务受链 RPC 延迟支配（硬超时 50s），与它同池时链节点一旦劣化，广播、确认、
-  # Webhook 这些业务任务会被一起饿死。
+  # 业务 worker：消费 celery 队列。链扫描不在 Celery 内运行（见 chain-runner），
+  # 链节点劣化不会占用广播、确认、Webhook 这些业务任务的执行容量。
   worker:
     <<: *django-base
     container_name: xcash_worker
@@ -150,17 +149,17 @@ services:
     stop_grace_period: 330s
     command: /start-worker
 
-  # 扫描 worker：只消费 scan 队列（CELERY_TASK_ROUTES 已把扫描任务路由到该队列）。
-  # 两组 worker 当前各运行一个容器，并发沿用 PERFORMANCE 档位值。
-  # 将来需要 --scale 横向扩容时，先移除对应 worker 的 container_name。
-  worker-scan:
+  # 链扫描：常驻进程，每条活跃链一个线程循环扫描（xcash/chains/runner.py）。
+  # 同一条链由 PG advisory lock 保证只有一个循环在跑；--scale 多开时后到的实例抢不到锁
+  # 就空转待命，前一个退出后数秒内接管。默认单实例，container_name 保持固定；将来需要
+  # 多开时先移除 container_name。
+  chain-runner:
     <<: *django-base
-    container_name: xcash_worker_scan
-    environment:
-      CELERY_WORKER_QUEUES: scan
-      REMAP_SIGTERM: ""
-    stop_grace_period: 330s
-    command: /start-worker
+    container_name: xcash_chain_runner
+    # SIGTERM 后各链跑完当前一轮（预算 40s，加单次调用余量）再退出；超时被 SIGKILL
+    # 也安全：扫描进度按单元提交，入账按唯一键幂等。
+    stop_grace_period: 60s
+    command: /start-chain-runner
 
   beat:
     <<: *django-base

@@ -17,7 +17,7 @@ def main():
 
     app.conf.update(config["celery"])
     app.loader.import_default_modules()
-    # 测试 Beat 只投递无业务副作用的两种真实心跳。
+    # 测试 Beat 只投递无业务副作用的真实心跳。
     app.conf.beat_schedule = {
         name: {"task": name, "schedule": 0.5} for name in WORKER_HEALTH_TASK_GROUPS
     }

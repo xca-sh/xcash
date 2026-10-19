@@ -222,7 +222,7 @@ Restore:
 
 ```bash
 # 1. Stop application services, keep the database running
-docker compose stop django worker worker-scan beat
+docker compose stop django worker chain-runner beat
 
 # 2. Put .env back in place (it must be the copy matching this dump)
 

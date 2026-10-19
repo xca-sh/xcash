@@ -13,6 +13,7 @@ from config.celery import app
 from config.periodic_tasks import WORKER_HEALTH_TASK_GROUPS
 from config.worker_health import WORKER_HEALTH_MAX_AGE_SECONDS
 from config.worker_health import WORKER_HEALTH_PUBLISHED_HEADER
+from config.worker_health import record_chain_runner_heartbeat
 from config.worker_health import record_worker_health
 from config.worker_health import stale_worker_groups
 from config.worker_health import stamp_worker_health_probe
@@ -34,6 +35,7 @@ def heartbeats(settings):
             record_worker_health(
                 SimpleNamespace(name=name, request=SimpleNamespace(headers=headers))
             )
+        record_chain_runner_heartbeat()
         yield
 
 
@@ -43,7 +45,7 @@ def test_workers_health_requires_both_groups_and_no_auth(client, heartbeats):
     assert response.json() == {"status": "ok"}
 
 
-@pytest.mark.parametrize("group", ["celery", "scan"])
+@pytest.mark.parametrize("group", ["celery", "chain-runner"])
 def test_missing_worker_is_detected_independently(client, heartbeats, group):
     cache.delete(worker_health_key(group))
     response = client.get(reverse("health-workers"))
@@ -89,7 +91,7 @@ def test_cache_failure_returns_503_without_internal_details(client, heartbeats):
 
 
 def test_release_rejects_cached_receipts_from_before_current_check(heartbeats):
-    assert stale_worker_groups(published_after=1001) == ["celery", "scan"]
+    assert stale_worker_groups(published_after=1001) == ["celery", "chain-runner"]
     assert stale_worker_groups(published_after=1000) == []
 
 

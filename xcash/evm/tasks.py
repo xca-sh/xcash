@@ -1,6 +1,5 @@
 import structlog
 from celery import shared_task
-from celery.exceptions import SoftTimeLimitExceeded
 from django.db import transaction as db_transaction
 from django.db.models import Exists
 from django.db.models import OuterRef
@@ -9,22 +8,15 @@ from django.db.models import Q
 from chains.models import Chain
 from chains.models import ChainType
 from chains.models import TxTaskStatus
-from chains.scanning import ScanRoundBudgetExceeded
-from chains.scanning import scan_round_deadline
 from common.decorators import singleton_task
 from common.time import ago
 from evm.models import EvmTxTask
 from evm.poller import EvmTaskPoller
-from evm.scanner.logs import EvmLogScanner
-from evm.scanner.rpc import EvmScannerRpcError
 
 logger = structlog.get_logger()
 
 EVM_QUEUED_STUCK_ALERT_AFTER_MINUTES = 30
 EVM_QUEUED_DISPATCH_ELIGIBLE_AFTER_SECONDS = 1
-# 扫描任务的协作式轮次预算，留在 soft_time_limit(40s) 之内：正常情况下由预算在 chunk
-# 之间收尾，软超时只兜底单次调用卡住的情况。
-EVM_SCAN_TASK_BUDGET_SECONDS = 35
 
 
 @shared_task(ignore_result=True, soft_time_limit=25, time_limit=30)
@@ -180,38 +172,6 @@ def scan_stuck_queued_evm_tx_tasks(limit: int = 32) -> int:
     return alerted
 
 
-@shared_task(ignore_result=True, soft_time_limit=40, time_limit=50)
-@singleton_task(timeout=55, use_params=True)
-def _scan_evm_chain(chain_pk: int) -> None:
-    """按链执行一次 EVM VaultSlot 充值日志统一扫描。"""
-    chain = Chain.objects.get(pk=chain_pk)
-
-    try:
-        try:
-            EvmLogScanner.scan_chain(
-                chain=chain,
-                deadline=scan_round_deadline(
-                    budget_seconds=EVM_SCAN_TASK_BUDGET_SECONDS
-                ),
-            )
-        except EvmScannerRpcError:
-            logger.warning("EVM 自扫描 RPC 失败", chain=chain.name)
-        except ScanRoundBudgetExceeded:
-            # 已完成 chunk 的进度与游标错误均已由扫描器落盘，剩余区块留给下一轮。
-            logger.warning("EVM 自扫描超出轮次预算", chain=chain.code)
-        except SoftTimeLimitExceeded:
-            # 软超时要求立刻收尾，不再做后续动作；游标已按 chunk 分段提交，进度不丢。
-            raise
-        except Exception:  # noqa: BLE001
-            # 确认派发已在扫描器刷新链高后完成，后续扫描异常不阻断已有充值的确认。
-            logger.exception("EVM 自扫描失败", chain=chain.code)
-        logger.info("EVM 自扫描完成", chain=chain.name)
-    finally:
-        # 无论本轮是否命中 RPC 异常都推进 last_scanned_at，按固定周期重试，
-        # 避免对不健康的节点每 2 秒一次连环重扫。
-        chain.mark_scanned()
-
-
 @shared_task(ignore_result=True, soft_time_limit=110, time_limit=120)
 @singleton_task(timeout=125, use_params=True)
 def poll_evm_chain_tx_tasks(chain_pk: int) -> None:
@@ -232,25 +192,10 @@ def poll_evm_chain_tx_tasks(chain_pk: int) -> None:
 def poll_active_evm_chains() -> None:
     """按固定周期为每条活跃 EVM 链派发一次在途交易终局轮询。
 
-    互斥锁的作用同 scan_active_evm_chains：业务 worker 可以横向扩容
+    互斥锁防重复派发：业务 worker 可以横向扩容
     （docker compose up -d --scale worker=N），多个实例并发跑这段巡检时，同一条链会被
     各自投递一次 poll_evm_chain_tx_tasks。重复消息不会重复执行（后者自带 per-chain 锁
     会跳过），但会白占 celery 队列，放大 broker 的内存压力。
     """
     for chain in Chain.objects.filter(active=True, type=ChainType.EVM):
         poll_evm_chain_tx_tasks.delay(chain.pk)
-
-
-@shared_task(ignore_result=True)
-@singleton_task(timeout=64)
-def scan_active_evm_chains() -> None:
-    """每 2 秒巡检活跃 EVM 链，仅调度到期（now - last_scanned_at ≥ 扫描周期）的链。
-
-    互斥锁与 tron.tasks.scan_active_tron_chains 对称：scan 队列可以横向扩容
-    （docker compose up -d --scale worker-scan=N），多个实例并发跑这段巡检时，
-    同一条到期链会被各自投递一次 _scan_evm_chain。重复消息不会重复执行（后者自带
-    per-chain 锁会跳过），但会白占 scan 队列，放大 broker 的内存压力。
-    """
-    for chain in Chain.objects.filter(active=True, type=ChainType.EVM):
-        if chain.is_due_for_scan:
-            _scan_evm_chain.delay(chain.pk)

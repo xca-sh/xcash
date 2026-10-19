@@ -5,6 +5,7 @@ from chains.registry import ChainFamily
 from chains.registry import register_chain_family
 from evm import vault_slots
 from evm.adapter import EvmAdapter
+from evm.scanner.logs import scan_evm_chain_round
 
 
 def register() -> None:
@@ -13,5 +14,6 @@ def register() -> None:
             chain_type=ChainType.EVM,
             adapter_class=EvmAdapter,
             vault_slot_backend=vault_slots,
+            scan_round=scan_evm_chain_round,
         )
     )

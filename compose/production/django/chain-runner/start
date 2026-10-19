@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -o errexit
+set -o pipefail
+set -o nounset
+
+# 常驻按链扫描进程（见 xcash/chains/runner.py）。单进程多线程，每条活跃链一个线程；
+# SIGTERM 后各链跑完当前一轮再退出，compose 的 stop_grace_period 覆盖这段收尾时间。
+exec python -u manage.py run_chains

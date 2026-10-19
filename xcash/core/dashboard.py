@@ -7,6 +7,7 @@ from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import RedirectView
 
+from config.worker_health import CHAIN_RUNNER_HEALTH_GROUP
 from config.worker_health import WORKER_HEALTH_MAX_AGE_SECONDS
 from config.worker_health import worker_health_status
 from core.dashboard_metrics import build_dashboard_metrics
@@ -271,19 +272,27 @@ def build_worker_health_rows(health):
                 tone="danger",
             )
         ]
-    titles = {
-        "celery": _("业务任务消费心跳异常"),
-        "scan": _("链扫描任务消费心跳异常"),
+    messages = {
+        "celery": (
+            _("业务任务消费心跳异常"),
+            _(
+                "尚未收到心跳，或最近 %(seconds)s 秒内没有新鲜的调度与执行回执。"
+                "请检查 worker、Beat、Redis 与任务积压。"
+            ),
+        ),
+        CHAIN_RUNNER_HEALTH_GROUP: (
+            _("链扫描进程心跳异常"),
+            _(
+                "最近 %(seconds)s 秒内没有收到 chain-runner 心跳。"
+                "请检查 chain-runner 进程、数据库与 Redis。"
+            ),
+        ),
     }
     return [
         _inspection_row(
             level=_("高"),
-            title=titles[group],
-            description=_(
-                "尚未收到心跳，或最近 %(seconds)s 秒内没有新鲜的调度与执行回执。"
-                "请检查 worker、Beat、Redis 与任务积压。"
-            )
-            % {"seconds": WORKER_HEALTH_MAX_AGE_SECONDS},
+            title=messages[group][0],
+            description=messages[group][1] % {"seconds": WORKER_HEALTH_MAX_AGE_SECONDS},
             tone="danger",
         )
         for group in health["groups"]

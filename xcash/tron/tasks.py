@@ -13,7 +13,6 @@ from tron.models import TRON_MAX_BROADCAST_HASHES
 from tron.models import TronTxTask
 from tron.saas_gas_billing import notify_vault_slot_collect_gas_fee
 from tron.saas_gas_billing import notify_vault_slot_deploy_gas_fee
-from tron.scanner import TronScanner
 
 from chains.adapters import TX_MISSING
 from chains.adapters import AdapterFactory
@@ -24,8 +23,6 @@ from chains.models import Chain
 from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
-from chains.scanning import ScanRoundBudgetExceeded
-from chains.scanning import scan_round_deadline
 from chains.vault_slot_balances import refresh_vault_slot_balance_for_collect_task
 from chains.vault_slots import mark_deployed_by_task
 from chains.vault_slots import mark_deployed_if_on_chain_for_task
@@ -40,9 +37,6 @@ TRON_RECEIPT_TX_TASK_TYPES = (TxTaskType.VaultSlotDeploy, TxTaskType.VaultSlotCo
 TRON_MISSING_TX_FINALITY_GRACE_MS = 5 * 60 * 1000
 # 同一任务两次广播尝试的最小间隔；dispatch 补偿与首播接力共用，避免反复投递刚失败的任务。
 TRON_BROADCAST_RETRY_AFTER_MINUTES = 2
-# 扫描任务的协作式轮次预算，留在 soft_time_limit(40s) 之内：正常情况下由预算在块之间
-# 收尾，软超时只兜底单次调用卡住的情况。
-TRON_SCAN_TASK_BUDGET_SECONDS = 35
 
 
 @dataclass(frozen=True)
@@ -413,53 +407,3 @@ def confirm_tron_receipt_tx_tasks() -> None:
                 pk=task.pk,
                 status__in=(TxTaskStatus.QUEUED, TxTaskStatus.SUBMITTED),
             ).update(updated_at=timezone.now())
-
-
-@shared_task(ignore_result=True, soft_time_limit=40, time_limit=50)
-@singleton_task(timeout=55, use_params=True)
-def scan_tron_chain(chain_pk: int) -> None:
-    chain = Chain.objects.get(pk=chain_pk)
-    if not chain.active:
-        return
-    if chain.type == ChainType.TRON and not chain.tron_api_key:
-        logger.warning("Tron 资产扫描跳过，缺少 API Key", chain=chain.code)
-        return
-
-    try:
-        try:
-            summary = TronScanner.scan_chain(
-                chain=chain,
-                deadline=scan_round_deadline(
-                    budget_seconds=TRON_SCAN_TASK_BUDGET_SECONDS
-                ),
-            )
-        except TronClientError:
-            logger.warning("Tron 资产扫描 RPC 失败", chain=chain.code)
-            return
-        except ScanRoundBudgetExceeded:
-            # 已扫块的进度与游标错误均已由扫描器落盘，剩余块留给下一轮。
-            logger.warning("Tron 资产扫描超出轮次预算", chain=chain.code)
-            return
-
-        logger.info(
-            "Tron 资产扫描完成",
-            chain=chain.code,
-            filter_addresses=summary.filter_addresses,
-            blocks_scanned=summary.blocks_scanned,
-            events_seen=summary.events_seen,
-        )
-    finally:
-        # 无论成功还是 RPC 失败都推进 last_scanned_at，按固定周期重试。
-        chain.mark_scanned()
-
-
-@shared_task(ignore_result=True)
-@singleton_task(timeout=64)
-def scan_active_tron_chains() -> None:
-    """每 2 秒巡检活跃 Tron 链，仅调度到期（now - last_scanned_at ≥ 扫描周期）的链。"""
-    chains = Chain.objects.filter(active=True, type=ChainType.TRON).exclude(
-        tron_api_key=""
-    )
-    for chain in chains:
-        if chain.is_due_for_scan:
-            scan_tron_chain.delay(chain.pk)

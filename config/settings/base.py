@@ -455,10 +455,8 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_POOL_RESTARTS = True  # 允许 Worker 池重启
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False  # 减少日志开销
 
-# 队列隔离：扫描任务路由到独立队列，防止被 confirm/broadcast/process 高频任务饥饿。
+# 链扫描不在 Celery 内运行（见 chains.runner）；这里只为可合并周期任务路由专属队列。
 CELERY_TASK_ROUTES = {
-    "evm.tasks._scan_evm_chain": {"queue": "scan"},
-    "tron.tasks.scan_tron_chain": {"queue": "scan"},
     **{task: {"queue": queue} for task, queue in PERIODIC_TASK_QUEUES.items()},
 }
 

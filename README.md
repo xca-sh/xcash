@@ -221,7 +221,7 @@ docker compose exec -T db sh -c 'pg_dump --format=custom --no-owner --no-privile
 
 ```bash
 # 1. 停止业务服务，保留数据库
-docker compose stop django worker worker-scan beat
+docker compose stop django worker chain-runner beat
 
 # 2. 把 .env 恢复到位（务必是与该 dump 同时点的那一份）
 

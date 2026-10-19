@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 import structlog
-from celery.exceptions import SoftTimeLimitExceeded
 from django.db.models import F
 from django.db.models.functions import Greatest
 from django.utils import timezone
@@ -74,7 +73,7 @@ class EvmLogScanner:
             from chains.tasks import dispatch_block_confirmation_checks_if_needed
 
             # 已入库充值的确认只依赖链高，不依赖本轮日志全部扫完。先派发再扫日志，
-            # 避免持续软超时饿死 FULL 确认，也不在软超时后的清理预算里追加派发。
+            # 避免持续撞预算饿死 FULL 确认。
             dispatch_block_confirmation_checks_if_needed(
                 chain=chain,
                 previous_latest_block=previous_latest_block,
@@ -92,10 +91,10 @@ class EvmLogScanner:
             from_block, to_block = scan_window
 
             # 按 chunk 推进，每扫完一段立即提交游标。整窗口最多 batch_size 块、会被
-            # 拆成多次 eth_getLogs，单 tick 总耗时可能超过 Celery 的软超时（默认 30s）
-            # 或撞上进程回收；若等整窗口扫完才提交游标，中断就会把已经扫完的区块一并
-            # 回退，下一轮从同一起点重来——节点稍慢即原地踏步、永远追不上链头。
-            # 分段提交后中断只损失当前这一段，已完成的进度不丢。
+            # 拆成多次 eth_getLogs，单轮总耗时可能超过轮次预算或撞上进程重启；若等整
+            # 窗口扫完才提交游标，中断就会把已经扫完的区块一并回退，下一轮从同一起点
+            # 重来——节点稍慢即原地踏步、永远追不上链头。分段提交后中断只损失当前这
+            # 一段，已完成的进度不丢。
             chunk_size = max(1, chain.evm_log_max_block_range)
             chunk_from = from_block
             while chunk_from <= to_block:
@@ -112,13 +111,9 @@ class EvmLogScanner:
                 )
                 cls._advance_cursor(cursor=cursor, scanned_to_block=chunk_to)
                 chunk_from = chunk_to + 1
-        except (
-            EvmScannerRpcError,
-            ScanRoundBudgetExceeded,
-            SoftTimeLimitExceeded,
-        ) as exc:
-            # 预算耗尽与软超时同样是本轮扫描失败；此前 chunk 的进度已提交，只记录错误
-            # 并原样上抛，否则 last_scanned_at 刷新后，外部探针会把持续超时报成健康。
+        except (EvmScannerRpcError, ScanRoundBudgetExceeded) as exc:
+            # 预算耗尽同样是本轮扫描失败；此前 chunk 的进度已提交，只记录错误并原样
+            # 上抛，否则 last_scanned_at 刷新后，外部探针会把持续追不上链头报成健康。
             cls._mark_cursor_error(cursor=cursor, exc=exc)
             raise
 
@@ -278,7 +273,7 @@ class EvmLogScanner:
     def _get_or_create_cursor(cls, *, chain: Chain) -> EvmScanCursor:
         """取出或新建本链的扫描游标。
 
-        不加行锁：同链扫描已由 _scan_evm_chain 的 per-chain 互斥锁串行化，游标推进全部
+        不加行锁：同链扫描已由 chain-runner 的按链 advisory lock 串行化，游标推进全部
         是带 Greatest 的条件 UPDATE；并发新建由 chain 唯一约束收口（get_or_create 撞约束后回查）。
         """
         cursor, _ = EvmScanCursor.objects.get_or_create(
@@ -335,7 +330,7 @@ class EvmLogScanner:
 
     @staticmethod
     def _mark_cursor_error(*, cursor: EvmScanCursor, exc: Exception) -> None:
-        """记录本轮 RPC 错误、预算耗尽或软超时到游标，便于运维观察。"""
+        """记录本轮 RPC 错误或预算耗尽到游标，便于运维观察。"""
         logger.warning(
             "EVM 日志扫描失败",
             chain=cursor.chain.code,
@@ -346,3 +341,18 @@ class EvmLogScanner:
             last_error_at=timezone.now(),
             updated_at=timezone.now(),
         )
+
+
+def scan_evm_chain_round(chain: Chain, deadline: float) -> None:
+    """chain-runner 按链循环调用的 EVM 单轮扫描（登记为链族的 scan_round）。
+
+    RPC 失败只记 warning 后返回：游标错误已由 scan_chain 写入，/health/scanning 据此
+    报 failing，runner 照常推进 last_scanned_at、按扫描周期重试。预算耗尽与其他异常
+    原样上抛，由 runner 统一记录。
+    """
+    try:
+        EvmLogScanner.scan_chain(chain=chain, deadline=deadline)
+    except EvmScannerRpcError:
+        logger.warning("EVM 自扫描 RPC 失败", chain=chain.code)
+        return
+    logger.info("EVM 自扫描完成", chain=chain.code)

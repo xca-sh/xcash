@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 from datetime import timedelta  # noqa: E402  运行期需要真实类型用于价格新鲜度计算
 
 from chains.models import Chain
-from chains.models import ChainType
 from chains.models import TxTaskStatus
+from chains.runner import scannable_chains
 from config.performance import get_int_default
 from core.runtime_settings import get_crypto_price_max_age
 from core.runtime_settings import get_webhook_event_timeout
@@ -24,9 +24,9 @@ from webhooks.models import WebhookEvent
 
 logger = structlog.get_logger()
 
-# 扫描调度停滞多久判定为异常。各链 scan_interval_seconds 最长 10s、扫描任务硬超时
-# 50s，正常态 last_scanned_at 落后不会超过 60s；取 300s 是 5 倍冗余，既不会因单次
-# RPC 抖动误报，又能把「扫描彻底停摆」的发现时间压在 5 分钟内。
+# 扫描停滞多久判定为异常。各链 scan_interval_seconds 最长 10s、单轮预算 40s（看门狗
+# 硬上限 180s 会直接重启 chain-runner），正常态 last_scanned_at 落后不会超过 60s；取
+# 300s 既不会因单次 RPC 抖动误报，又能把「扫描彻底停摆」的发现时间压在 5 分钟内。
 SCAN_STALL_ALERT_AFTER_SECONDS = get_int_default(
     "SCAN_STALL_ALERT_AFTER_SECONDS",
     300,
@@ -63,27 +63,18 @@ class OperationalRiskService:
     def stalled_scan_chains(cls) -> list[Chain]:
         """返回扫描调度已停滞的链。
 
-        判据只看 Chain.last_scanned_at 是否长时间不推进。该字段由 _scan_evm_chain /
-        scan_tron_chain 的 finally 分支推进，与本轮 RPC 成功与否无关——所以它停滞
-        只可能意味着「扫描任务根本没被执行」：worker 死亡或反复重启、beat 停摆、
-        队列积压、broker 不可写都会命中同一个信号，一个判据覆盖全部。
+        判据只看 Chain.last_scanned_at 是否长时间不推进。该字段由 chain-runner 每轮
+        结束时推进，与本轮 RPC 成功与否无关——所以它停滞只可能意味着「这条链根本没在
+        扫」：chain-runner 死亡或反复重启、DB 不可写、本链锁被别的实例占着却不干活，
+        都会命中同一个信号，一个判据覆盖全部。
 
-        exclude 未配 API Key 的 Tron 链，是为了与 scan_active_tron_chains 的调度口径
-        逐字对齐——判据必须只覆盖「真的会被调度扫描」的链。当前 CheckConstraint
-        chain_active_requires_runtime_config 已保证 active 的 Tron 链必有非空
-        tron_api_key，故这一句实际不会命中；保留它是为了将来放宽该约束时，本探测不会
-        与调度口径分叉、把永不扫描的链报成停滞。
+        链集合与 chain-runner 的调度共用 scannable_chains()，判据只覆盖「真的会被
+        调度扫描」的链，两边不会分叉。
         """
         stalled_before = timezone.now() - timedelta(
             seconds=SCAN_STALL_ALERT_AFTER_SECONDS
         )
-        return list(
-            Chain.objects.filter(
-                active=True,
-                type__in=(ChainType.EVM, ChainType.TRON),
-                last_scanned_at__lt=stalled_before,
-            ).exclude(type=ChainType.TRON, tron_api_key="")
-        )
+        return list(scannable_chains().filter(last_scanned_at__lt=stalled_before))
 
     @classmethod
     def failing_scan_chains(cls) -> list[Chain]:
@@ -92,8 +83,8 @@ class OperationalRiskService:
         与 stalled_scan_chains 互补，二者缺一不可：
         - stalled 看「任务有没有被执行」——Chain.last_scanned_at 是否推进。
         - failing 看「执行了但一直失败」。这条必须单独判，因为 last_scanned_at 由
-          扫描任务的 finally 分支无条件推进、与本轮 RPC 成败无关：RPC 凭据失效、
-          节点持续 5xx、每轮都撞软超时时，游标和入账完全不动，而 last_scanned_at
+          每轮扫描结束时无条件推进、与本轮 RPC 成败无关：RPC 凭据失效、
+          节点持续 5xx、每轮都撞预算时，游标和入账完全不动，而 last_scanned_at
           照常刷新，只看 stalled 会一路报健康。
 
         判据取游标的 last_error_at 是否非空。这个字段语义干净：任何一轮成功扫描

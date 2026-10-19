@@ -1,6 +1,5 @@
 import structlog
 from celery import shared_task
-from celery.exceptions import SoftTimeLimitExceeded
 from django.db import OperationalError
 
 from chains.adapters import AdapterFactory
@@ -353,8 +352,5 @@ def dispatch_block_confirmation_checks_if_needed(
             return
 
         block_number_updated.delay(chain.pk)
-    except SoftTimeLimitExceeded:
-        # 信号可能正好落在派发阶段；仍交给扫描器记录失败并立即退出。
-        raise
     except Exception:  # noqa: BLE001
         logger.exception("充值确认调度派发失败", chain=chain.code)

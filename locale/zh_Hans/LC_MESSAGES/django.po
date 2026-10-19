@@ -1183,8 +1183,16 @@ msgid "业务任务消费心跳异常"
 msgstr "业务任务消费心跳异常"
 
 #: xcash/core/dashboard.py:276
-msgid "链扫描任务消费心跳异常"
-msgstr "链扫描任务消费心跳异常"
+msgid "链扫描进程心跳异常"
+msgstr "链扫描进程心跳异常"
+
+#, python-format
+msgid ""
+"最近 %(seconds)s 秒内没有收到 chain-runner 心跳。请检查 chain-runner 进程、数据库与 "
+"Redis。"
+msgstr ""
+"最近 %(seconds)s 秒内没有收到 chain-runner 心跳。请检查 chain-runner 进程、数据库与 "
+"Redis。"
 
 #: xcash/core/dashboard.py:283
 #, python-format

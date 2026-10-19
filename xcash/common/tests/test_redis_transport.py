@@ -34,10 +34,11 @@ from config.celery import subscribe_periodic_queues
 from config.periodic_tasks import PERIODIC_TASK_GROUPS
 from config.periodic_tasks import PERIODIC_TASK_QUEUES
 from config.worker_health import WORKER_HEALTH_MAX_AGE_SECONDS
+from config.worker_health import record_chain_runner_heartbeat
 from config.worker_health import stale_worker_groups
 from core.management.commands.wait_for_runtime import missing_consumer_groups
 
-SCAN_TASK = "evm.tasks.scan_active_evm_chains"
+PERIODIC_TASK = "evm.tasks.poll_active_evm_chains"
 BUSINESS_TASK = "evm.tasks.dispatch_evm_tx_tasks"
 
 
@@ -88,18 +89,18 @@ def broker(settings):
         client.close()
 
 
-def queue_size(broker, task=SCAN_TASK):
+def queue_size(broker, task=PERIODIC_TASK):
     return broker.channel.queue_declare(
         PERIODIC_TASK_QUEUES[task],
     ).message_count
 
 
-def take(broker, task=SCAN_TASK):
+def take(broker, task=PERIODIC_TASK):
     return broker.channel.basic_get(PERIODIC_TASK_QUEUES[task])
 
 
 def test_concurrent_publish_coalesces_across_priority_buckets(broker):
-    task = broker.app.tasks[SCAN_TASK]
+    task = broker.app.tasks[PERIODIC_TASK]
     # 第一个 tick 保留，即使后续 producer 使用不同优先级也不能多出消息。
     first = task.apply_async(task_id="first", priority=9)
     assert first.id == "first"
@@ -118,7 +119,7 @@ def test_concurrent_publish_coalesces_across_priority_buckets(broker):
 
 
 def test_concurrent_publish_to_empty_queue_has_one_winner(broker):
-    task = broker.app.tasks[SCAN_TASK]
+    task = broker.app.tasks[PERIODIC_TASK]
     with ThreadPoolExecutor(max_workers=8) as executor:
         list(executor.map(lambda _: task.delay(), range(100)))
     assert queue_size(broker) == 1
@@ -139,10 +140,9 @@ def test_beat_stopped_worker_keeps_one_message_per_entry(broker):
     )
     # 共享业务队列仍可逐条保存带参数消息，不能跟着合并。
     for index in range(10):
-        broker.app.send_task("evm.tasks._scan_evm_chain", args=[index])
+        broker.app.send_task("evm.tasks.poll_evm_chain_tx_tasks", args=[index])
         broker.app.send_task("webhooks.tasks.deliver", args=[index])
-    assert broker.channel.queue_declare("scan").message_count == 10
-    assert broker.channel.queue_declare("celery").message_count == 10
+    assert broker.channel.queue_declare("celery").message_count == 20
 
 
 @pytest.mark.parametrize("restore", ["reject", "shutdown", "visibility"])
@@ -152,7 +152,7 @@ def test_unacked_restore_is_coalesced_and_can_recover_empty_queue(
     restore,
     new_tick,
 ):
-    task = broker.app.tasks[SCAN_TASK]
+    task = broker.app.tasks[PERIODIC_TASK]
     task.apply_async(task_id="old")
     message = take(broker)
     assert queue_size(broker) == 0
@@ -181,7 +181,7 @@ def test_unacked_restore_is_coalesced_and_can_recover_empty_queue(
 
 
 def test_restore_many_inflight_copies_does_not_build_backlog(broker):
-    task = broker.app.tasks[SCAN_TASK]
+    task = broker.app.tasks[PERIODIC_TASK]
     for index in range(20):
         task.apply_async(task_id=f"old-{index}")
         take(broker)
@@ -205,7 +205,7 @@ def test_ordinary_business_messages_keep_requeue_semantics(broker):
 
 @pytest.mark.parametrize("written", [False, True])
 def test_publish_failure_retry_keeps_queue_bounded(broker, written):
-    task = broker.app.tasks[SCAN_TASK]
+    task = broker.app.tasks[PERIODIC_TASK]
     original_eval = Redis.eval
 
     def fail(client, *args):
@@ -231,10 +231,10 @@ def test_redis_oom_does_not_fall_back_to_unguarded_publish(broker):
         patch.object(Redis, "eval", side_effect=OutOfMemoryError),
         pytest.raises(OperationalError) as raised,
     ):
-        broker.app.tasks[SCAN_TASK].apply_async(producer=Producer(broker.channel))
+        broker.app.tasks[PERIODIC_TASK].apply_async(producer=Producer(broker.channel))
     assert isinstance(raised.value.__cause__, OutOfMemoryError)
     assert queue_size(broker) == 0
-    broker.app.tasks[SCAN_TASK].delay()
+    broker.app.tasks[PERIODIC_TASK].delay()
     assert queue_size(broker) == 1
 
 
@@ -243,7 +243,7 @@ def test_redis_oom_does_not_fall_back_to_unguarded_publish(broker):
     [
         ({"args": [1]}, TypeError),
         ({"kwargs": {"chain_id": 1}}, TypeError),
-        ({"queue": "scan"}, ValueError),
+        ({"queue": "celery"}, ValueError),
         ({"countdown": 30}, ValueError),
         ({"expires": 30}, ValueError),
         ({"link": {"task": "business.next"}}, ValueError),
@@ -256,31 +256,33 @@ def test_redis_oom_does_not_fall_back_to_unguarded_publish(broker):
 )
 def test_incompatible_periodic_calls_fail_before_queue_write(broker, options, error):
     with pytest.raises(error):
-        broker.app.tasks[SCAN_TASK].apply_async(**options)
+        broker.app.tasks[PERIODIC_TASK].apply_async(**options)
     assert queue_size(broker) == 0
 
 
 def test_send_task_cannot_bypass_dedup_or_merge_parameterized_work(broker):
     for _ in range(20):
-        broker.app.send_task(SCAN_TASK, ignore_result=True)
+        broker.app.send_task(PERIODIC_TASK, ignore_result=True)
     assert queue_size(broker) == 1
     with pytest.raises(TypeError, match="参数"):
-        broker.app.send_task(SCAN_TASK, args=[1], ignore_result=True)
+        broker.app.send_task(PERIODIC_TASK, args=[1], ignore_result=True)
     with pytest.raises(ValueError, match="其他任务"):
-        broker.app.send_task("business.event", queue=PERIODIC_TASK_QUEUES[SCAN_TASK])
+        broker.app.send_task(
+            "business.event", queue=PERIODIC_TASK_QUEUES[PERIODIC_TASK]
+        )
     assert queue_size(broker) == 1
 
 
 def test_compressed_json_tick_can_be_published_and_consumed(broker):
-    broker.app.tasks[SCAN_TASK].apply_async(compression="gzip")
-    broker.app.tasks[SCAN_TASK].apply_async(compression="gzip")
+    broker.app.tasks[PERIODIC_TASK].apply_async(compression="gzip")
+    broker.app.tasks[PERIODIC_TASK].apply_async(compression="gzip")
     assert queue_size(broker) == 1
     message = take(broker)
     assert message.payload[0] == []
     message.ack()
 
 
-@pytest.mark.parametrize("groups", [("celery",), ("scan",), ("celery", "scan")])
+@pytest.mark.parametrize("groups", [("celery",)])
 def test_worker_group_subscription_preserves_isolation(broker, groups):
     queues = broker.app.amqp.queues
     queues.select(groups)
@@ -296,8 +298,8 @@ def test_worker_group_subscription_preserves_isolation(broker, groups):
 
 
 def test_global_prefix_is_used_for_every_priority_bucket(broker):
-    broker.app.tasks[SCAN_TASK].apply_async(priority=6)
-    broker.app.tasks[SCAN_TASK].apply_async(priority=0)
+    broker.app.tasks[PERIODIC_TASK].apply_async(priority=6)
+    broker.app.tasks[PERIODIC_TASK].apply_async(priority=0)
     keys = [
         key
         for key in broker.client.scan_iter(match=f"{broker.prefix}*")
@@ -306,17 +308,17 @@ def test_global_prefix_is_used_for_every_priority_bucket(broker):
     assert len(keys) == 1
     assert broker.client.llen(keys[0]) == 1
     assert broker.client.ttl(keys[0]) == -1
-    assert json.loads(broker.client.lindex(keys[0], 0))["headers"]["task"] == SCAN_TASK
+    assert (
+        json.loads(broker.client.lindex(keys[0], 0))["headers"]["task"] == PERIODIC_TASK
+    )
 
 
-@pytest.mark.parametrize("group", ["celery", "scan"])
+@pytest.mark.parametrize("group", ["celery"])
 def test_real_worker_consumes_its_periodic_group_and_next_tick(broker, tmp_path, group):
     """走生产 Worker 启动顺序和异步 BRPOP，防止只测发布而漏订阅新队列。"""
-    own_task = SCAN_TASK if group == "scan" else BUSINESS_TASK
-    other_task = BUSINESS_TASK if group == "scan" else SCAN_TASK
+    own_task = BUSINESS_TASK
     for _ in range(20):
         broker.app.tasks[own_task].delay()
-        broker.app.tasks[other_task].delay()
     receipt_key = f"{broker.prefix}receipts"
     config = {
         "celery": {
@@ -360,7 +362,6 @@ def test_real_worker_consumes_its_periodic_group_and_next_tick(broker, tmp_path,
                         break
                 assert receipt is not None, output_path.read_text()
                 assert receipt[1].decode() == own_task
-                assert queue_size(broker, other_task) == 1
                 broker.app.tasks[own_task].delay()
         finally:
             process.terminate()
@@ -418,9 +419,16 @@ def test_real_beat_worker_http_health_and_warm_shutdown(broker, settings, tmp_pa
     }
     processes = []
     outputs = []
+    stop_chain_runner = threading.Event()
+
+    def beat_chain_runner_heartbeat():
+        while not stop_chain_runner.wait(0.5):
+            record_chain_runner_heartbeat()
+
+    chain_runner = threading.Thread(target=beat_chain_runner_heartbeat, daemon=True)
 
     def start(mode, group="celery"):
-        service = "worker" if group == "celery" else "worker-scan"
+        service = "worker"
         env = {
             **os.environ,
             "DJANGO_SETTINGS_MODULE": "config.settings.test",
@@ -465,7 +473,9 @@ def test_real_beat_worker_http_health_and_warm_shutdown(broker, settings, tmp_pa
     url = f"http://127.0.0.1:{server.server_port}/health/workers"
     try:
         business = start("worker", "celery")
-        start("worker", "scan")
+        # chain-runner 不经 Beat、自己按 tick 写心跳；这里用线程模拟它在跑，只验证
+        # Beat→worker→HTTP 链路。
+        chain_runner.start()
         with patch("core.management.commands.wait_for_runtime.app", broker.app):
             deadline = monotonic() + 30
             while missing_consumer_groups(1):
@@ -480,7 +490,12 @@ def test_real_beat_worker_http_health_and_warm_shutdown(broker, settings, tmp_pa
 
         beat.terminate()
         beat.wait(timeout=10)
-        assert stale_worker_groups(published_after=time.time()) == ["celery", "scan"]
+        stop_chain_runner.set()
+        chain_runner.join(timeout=5)
+        assert stale_worker_groups(published_after=time.time()) == [
+            "celery",
+            "chain-runner",
+        ]
         future = time.time() + WORKER_HEALTH_MAX_AGE_SECONDS + 1
         with patch("config.worker_health.time.time", return_value=future):
             assert httpx.get(url, timeout=3, trust_env=False).status_code == 503
@@ -494,6 +509,7 @@ def test_real_beat_worker_http_health_and_warm_shutdown(broker, settings, tmp_pa
         ), "TERM interrupted active work"
         assert business.returncode == 0
     finally:
+        stop_chain_runner.set()
         for process in processes:
             if process.poll() is None:
                 process.terminate()
@@ -505,7 +521,7 @@ def test_real_beat_worker_http_health_and_warm_shutdown(broker, settings, tmp_pa
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
-        cache.delete_many(["health:worker:celery", "health:worker:scan"])
+        cache.delete_many(["health:worker:celery", "health:worker:chain-runner"])
         for output in outputs:
             output.close()
 

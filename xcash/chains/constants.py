@@ -37,10 +37,8 @@ class ChainSpec:
     confirm_block_count: int
     native_coin_symbol: str
     native_coin_decimals: int
-    # 该链两次扫描之间的最小间隔（秒）。调度器固定每 2 秒巡检一次，
-    # 仅放行 now - last_scanned_at ≥ scan_interval_seconds 的链，
-    # 以此为不同出块速度的链设置各自的扫描节奏。取值通常贴近出块时间，
-    # 低于调度粒度（2 秒）也只会按每轮巡检触发，不会更快。
+    # 该链两次扫描之间的最小间隔（秒）：chain-runner 的按链循环每轮结束后等待这么久
+    # 再开下一轮，以此为不同出块速度的链设置各自的扫描节奏。取值通常贴近出块时间。
     scan_interval_seconds: int
     # 是否为测试网（非主网）。链固有属性，仅用于区分/展示，不参与扫描与签名逻辑。
     # 作为带默认值的尾部字段，主网无需逐条改写既有定义。

@@ -36,7 +36,7 @@ HEALTH_PROBE_CACHE_TTL = 30
 
 @transaction.non_atomic_requests
 def workers_health_view(request: HttpRequest) -> JsonResponse:
-    """两组 worker 都需有新鲜的调度与执行心跳；依赖错误同样返回 503。"""
+    """业务 worker 与 chain-runner 都需有新鲜心跳；依赖错误同样返回 503。"""
     health = worker_health_status()
     if health["status"] == "stalled":
         logger.warning("workers_probe_stalled", groups=health["groups"])
@@ -89,19 +89,17 @@ def scanning_health_view(request: HttpRequest) -> JsonResponse:
     """扫描存活探测：503 表示至少一条活跃链的扫描不健康。
 
     两条判据缺一不可，覆盖两种彼此独立的失效：
-    - stalled：扫描任务【根本没被执行】（worker 死亡、beat 停摆、队列积压、
-      broker 不可写）。
-    - failing：扫描任务【在跑但一直失败】（RPC 凭据失效、节点持续报错、每轮撞
-      软超时）。这类故障下 Chain.last_scanned_at 仍被 finally 分支照常推进，
+    - stalled：扫描【根本没在跑】（chain-runner 死亡或反复重启、DB 不可写）。
+    - failing：扫描【在跑但一直失败】（RPC 凭据失效、节点持续报错、每轮撞
+      预算）。这类故障下 Chain.last_scanned_at 仍被每轮结束照常推进，
       只看 stalled 会一路报健康，而实际游标和入账完全不动。
 
     有意与 /health 分开，不能合并：
     - /health 是 django 容器自己的 healthcheck。扫描停摆时 django 进程本身完全
       健康，把它并进去会让 django 被误判为不健康。
-    - 本端点必须由【django 进程】而非 Celery 任务回答。既有的 scan_operational_risks
-      巡检跑在 worker 里，worker 一死它跟着一起死，巡检和故障对象是同一个进程，
-      扫描停摆时不会有任何人被告知。本端点给外部监控（uptime 探针）拉取，
-      故障域与被监控对象天然分离。
+    - 本端点必须由【django 进程】而非被监控的进程自己回答：巡检和故障对象若是
+      同一个进程，扫描停摆时不会有任何人被告知。本端点给外部监控（uptime 探针）
+      拉取，故障域与被监控对象天然分离。
 
     安全约束同 /health：无鉴权，响应体只出现 status，问题链的细节只写结构化日志。
     """

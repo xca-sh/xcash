@@ -14,12 +14,6 @@ def report_business_worker_health(self):
     record_worker_health(self)
 
 
-@shared_task(bind=True, ignore_result=True, soft_time_limit=8, time_limit=10)
-def report_scan_worker_health(self):
-    """没有活跃链时也能验证扫描 worker 的执行能力。"""
-    record_worker_health(self)
-
-
 @shared_task(ignore_result=True, soft_time_limit=100, time_limit=110)
 @singleton_task(timeout=115)
 def scan_operational_risks() -> None:

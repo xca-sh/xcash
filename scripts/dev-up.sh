@@ -49,7 +49,7 @@ child_pids+=("$!")
 ENV_FILE="${ENV_FILE}" "${SCRIPT_DIR}/dev-worker.sh" &
 child_pids+=("$!")
 
-ENV_FILE="${ENV_FILE}" "${SCRIPT_DIR}/dev-worker-scan.sh" &
+ENV_FILE="${ENV_FILE}" "${SCRIPT_DIR}/dev-chain-runner.sh" &
 child_pids+=("$!")
 
 ENV_FILE="${ENV_FILE}" "${SCRIPT_DIR}/dev-beat.sh" &

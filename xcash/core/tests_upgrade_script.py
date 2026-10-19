@@ -33,6 +33,11 @@ if tool == "flock":
 if tool == "timeout":
     # 去掉超时秒数，原样执行被包裹的命令（仍会走到这里的 docker 替身）。
     os.execvp(args[1], args[1:])
+if args[0] != "compose":
+    # 非 compose 的 docker 命令：按标签查询退役服务的容器，其余（stop/start/image）直接成功。
+    if args[0] == "ps":
+        print(os.environ["RETIRED_CONTAINERS"])
+    sys.exit(0)
 
 args = args[1:]  # docker compose
 compose_files = []
@@ -53,7 +58,7 @@ if command == "ps":
 elif command == "pull" and failure == "pull":
     sys.exit(23)
 elif command == "stop":
-    if failure == "stop_workers" and args[1:] == ["worker", "worker-scan"]:
+    if failure == "stop_workers" and args[1:] == ["worker", "chain-runner"]:
         sys.exit(23)
     if failure == "stop_django" and args[1:] == ["django"]:
         sys.exit(23)
@@ -114,6 +119,7 @@ def run_upgrade(tmp_path):
         running=None,
         dirty=False,
         ready_timeout="360",
+        retired="",
     ):
         env = {
             **os.environ,
@@ -128,8 +134,9 @@ def run_upgrade(tmp_path):
             "STOP_BEFORE_REHEARSAL": str(quiesced).lower(),
             "PENDING_MIGRATIONS": str(migrations).lower(),
             "FAIL_POINT": failure,
-            "RUNNING_SERVICES": running or "django\nworker\nworker-scan\nbeat",
+            "RUNNING_SERVICES": running or "django\nworker\nchain-runner\nbeat",
             "APP_READY_TIMEOUT": ready_timeout,
+            "RETIRED_CONTAINERS": retired,
         }
         result = subprocess.run(  # noqa: S603 - 实际升级命令全部被隔离的 CLI 替身接管
             ["/bin/bash", str(UPGRADE_SCRIPT)],
@@ -143,6 +150,10 @@ def run_upgrade(tmp_path):
         commands = []
         for line in log_path.read_text().splitlines():
             command = json.loads(line)
+            if command[0] == "docker" and command[1] != "compose":
+                # 非 compose 的 docker 命令原样保留（去掉 docker 前缀），便于断言先后顺序。
+                commands.append(["docker:", *command[1:]])
+                continue
             if command[:2] != ["docker", "compose"]:
                 continue
             command = command[2:]
@@ -183,7 +194,7 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
     assert result.returncode == 0, result.stdout + result.stderr
     pull = command_index(commands, ["pull"])
     stop_beat = commands.index(["stop", "beat"])
-    stop_workers = commands.index(["stop", "worker", "worker-scan"])
+    stop_workers = commands.index(["stop", "worker", "chain-runner"])
     stop_django = commands.index(["stop", "django"])
     start_runtime = command_index(commands, ["up"], contains="worker")
     start_beat = commands.index(["up", "-d", "--no-deps", "beat"])
@@ -206,7 +217,7 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
     # Caddyfile 有误时 reload 会失败，放在最后才不会拖住 Beat 等业务进程的启动。
     assert scheduler_ready < reload_caddy
     assert commands.count(["stop", "beat"]) == 1
-    assert commands.count(["stop", "worker", "worker-scan"]) == 1
+    assert commands.count(["stop", "worker", "chain-runner"]) == 1
     assert commands.count(["stop", "django"]) == 1
     assert commands[bootstrap][-1] == "bootstrap_runtime"
     assert not any(
@@ -231,6 +242,50 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
         assert (verify_plan < stop_django) is not quiesced
     else:
         assert rehearsal == []
+
+
+def test_retired_service_containers_are_stopped_before_migration(run_upgrade):
+    """compose 已不认识退役服务，必须按标签停掉旧容器，不能让旧代码跑过 migrate。"""
+    result, commands = run_upgrade(migrations=True, retired="old-scan-1\nold-scan-2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    lookup = commands.index(
+        [
+            "docker:",
+            "ps",
+            "-q",
+            "--filter",
+            "label=com.docker.compose.project=xcash",
+            "--filter",
+            "label=com.docker.compose.service=worker-scan",
+        ]
+    )
+    stop_retired = commands.index(["docker:", "stop", "old-scan-1", "old-scan-2"])
+    stop_workers = commands.index(["stop", "worker", "chain-runner"])
+    stop_django = commands.index(["stop", "django"])
+    [bootstrap] = production_bootstraps(commands)
+    start_runtime = command_index(commands, ["up"], contains="worker")
+    assert stop_workers < lookup < stop_retired < stop_django < bootstrap
+    # 删除交给启动阶段的 --remove-orphans。
+    assert "--remove-orphans" in commands[start_runtime]
+    assert not any(c[:2] == ["docker:", "start"] for c in commands)
+
+
+def test_pre_migration_failure_restores_retired_service_containers(run_upgrade):
+    result, commands = run_upgrade(
+        migrations=True,
+        failure="stop_django",
+        running="worker\nbeat",
+        retired="old-scan-1",
+    )
+    assert result.returncode != 0
+    assert ["docker:", "start", "old-scan-1"] in commands
+    assert ["start", "worker", "beat"] in commands
+
+
+def test_upgrade_without_retired_containers_skips_retired_stop(run_upgrade):
+    result, commands = run_upgrade()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any(c[:2] == ["docker:", "stop"] for c in commands)
 
 
 def test_pull_failure_leaves_existing_services_running(run_upgrade):

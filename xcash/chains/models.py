@@ -119,9 +119,9 @@ class Chain(models.Model):
     tron_api_key = models.CharField(_("Tron API Key"), blank=True, default="")
 
     created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
-    # 该链上一次扫描任务完成的时间。调度器据此与 scan_interval_seconds 对比，
-    # 判断本链是否到期需要再次扫描。auto_now_add 让新建链以创建时刻为起点，
-    # 经过一个扫描周期后自然进入首扫；后续由 mark_scanned() 显式推进。
+    # 该链上一轮扫描结束的时间，由 chain-runner 每轮结束时经 mark_scanned() 推进，
+    # 与本轮成败无关；/health/scanning 据此判断扫描是否停摆。auto_now_add 让新建链
+    # 以创建时刻为起点。
     last_scanned_at = models.DateTimeField(_("最近扫描时间"), auto_now_add=True)
 
     class Meta:
@@ -224,16 +224,8 @@ class Chain(models.Model):
         """本链两次扫描之间的最小间隔（秒），由链常量决定。"""
         return self.spec.scan_interval_seconds
 
-    @property
-    def is_due_for_scan(self) -> bool:
-        """距上次扫描完成是否已达本链扫描周期，到期则需再次调度扫描。"""
-        if self.last_scanned_at is None:
-            return True
-        elapsed = (timezone.now() - self.last_scanned_at).total_seconds()
-        return elapsed >= self.scan_interval_seconds
-
     def mark_scanned(self) -> None:
-        """扫描任务完成后推进 last_scanned_at。
+        """一轮扫描结束后推进 last_scanned_at。
 
         用 update 直接落库，绕过 save()/full_clean()，既避免逐行校验开销，
         也能改写 auto_now_add（创建后默认不可写）字段。

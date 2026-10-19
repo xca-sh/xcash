@@ -781,9 +781,9 @@ class TronHttpClientSoftTimeLimitTests(SimpleTestCase):
     """Celery 软超时必须原样穿透 Tron HTTP 重试层。
 
     SoftTimeLimitExceeded 继承自 Exception，落进 _request_with_retry 的通用分支后
-    会被 _is_retriable_http_error 判为不可重试、进而包成 TronClientError；而调用方
-    scan_tron_chain 对该错误只打 warning 就 return，任务"正常完成"，软超时语义被
-    彻底抹掉，TronScanner 里那条负责落盘已扫进度的中断分支也不会被触发。
+    会被 _is_retriable_http_error 判为不可重试、进而包成 TronClientError；而 Celery
+    任务里的调用方通常把该错误当普通 RPC 故障处理、任务"正常完成"，软超时语义被
+    彻底抹掉。
     """
 
     def make_chain(self):
@@ -2303,18 +2303,18 @@ class TronScannerTests(TestCase):
 
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")
-    def test_scan_chain_keeps_progress_when_interrupted_by_soft_time_limit(
+    def test_scan_chain_keeps_progress_when_interrupted_by_rpc_failure(
         self,
         client_cls,
         _enqueue_processing_mock,
     ):
-        """被 Celery 软超时打断时，已扫完的块必须落到游标。
+        """中途 RPC 失败时，已扫完的块必须落到游标。
 
-        单轮最多 32 块、每块要读整块交易，总耗时很容易越过软超时。若中断路径不落盘，
+        单轮最多 32 块、每块要读整块交易，中途很容易遇到节点故障。若中断路径不落盘，
         本轮已扫的块会连带回退、下一轮从同一起点重来——节点持续偏慢时游标再也推不动，
         Tron 充值全面滞留。
         """
-        from celery.exceptions import SoftTimeLimitExceeded
+        from tron.client import TronClientError
         from tron.scanner import TronScanner
 
         start_cursor = 300_000
@@ -2327,19 +2327,19 @@ class TronScannerTests(TestCase):
 
         def infos_by_block(*, block_number, **_kwargs):
             if block_number >= interrupt_at_block:
-                raise SoftTimeLimitExceeded
+                raise TronClientError("node timeout")
             return []
 
         client.get_transaction_infos_by_block.side_effect = infos_by_block
 
-        with self.assertRaises(SoftTimeLimitExceeded):
+        with self.assertRaises(TronClientError):
             TronScanner.scan_chain(chain=self.chain)
 
         cursor = TronWatchCursor.objects.get(chain=self.chain)
         # 中断块之前的两块已扫完，游标必须停在最后一个成功块上。
         self.assertEqual(cursor.last_scanned_block, interrupt_at_block - 1)
         self.assertIsNotNone(cursor.last_error_at)
-        self.assertIn("SoftTimeLimitExceeded", cursor.last_error)
+        self.assertIn("node timeout", cursor.last_error)
 
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")
@@ -3174,16 +3174,16 @@ class TronScannerTests(TestCase):
         client.get_solid_block.assert_not_called()
 
 
-class TronTaskTests(TestCase):
-    @patch("tron.tasks.logger.info")
-    @patch("tron.tasks.TronScanner.scan_chain")
-    def test_scan_tron_chain_logs_filter_addresses_and_blocks_scanned(
+class TronScanRoundTests(TestCase):
+    @patch("tron.scanner.logger.info")
+    @patch("tron.scanner.TronScanner.scan_chain")
+    def test_scan_round_logs_filter_addresses_and_blocks_scanned(
         self,
         scan_chain_mock,
         logger_info_mock,
     ):
         from tron.scanner import TronScanSummary
-        from tron.tasks import scan_tron_chain
+        from tron.scanner import scan_tron_chain_round
 
         tron_chain = Chain.objects.create(
             code=ChainCode.Tron,
@@ -3197,7 +3197,7 @@ class TronTaskTests(TestCase):
             events_seen=11,
         )
 
-        scan_tron_chain.run(tron_chain.pk)
+        scan_tron_chain_round(tron_chain, time.monotonic() + 40)
 
         logger_info_mock.assert_called_once_with(
             "Tron 资产扫描完成",
@@ -3206,66 +3206,6 @@ class TronTaskTests(TestCase):
             blocks_scanned=7,
             events_seen=11,
         )
-
-    @patch("tron.tasks.TronScanner.scan_chain")
-    def test_scan_tron_chain_skips_when_api_key_is_missing(
-        self,
-        scan_chain_mock,
-    ):
-        from tron.tasks import scan_tron_chain
-
-        tron_chain = Chain.objects.create(
-            code=ChainCode.Tron,
-            rpc="https://api.trongrid.io",
-            active=False,
-        )
-
-        scan_tron_chain.run(tron_chain.pk)
-
-        scan_chain_mock.assert_not_called()
-
-    @patch("tron.tasks.scan_tron_chain.delay")
-    def test_scan_active_tron_chains_only_dispatches_active_tron_chains(
-        self,
-        scan_delay_mock,
-    ):
-        from tron.tasks import scan_active_tron_chains
-
-        tron_chain = Chain.objects.create(
-            code=ChainCode.Tron,
-            rpc="https://api.trongrid.io",
-            tron_api_key="tron-key",
-            active=True,
-        )
-        evm_chain = Chain.objects.create(
-            code=ChainCode.Ethereum,
-            rpc="",
-            active=False,
-        )
-        Chain.objects.filter(pk=evm_chain.pk).update(
-            rpc="http://evm.invalid",
-            active=True,
-        )
-        # 把 last_scanned_at 推到远早于扫描周期，使本链到期可被调度。
-        Chain.objects.filter(pk=tron_chain.pk).update(
-            last_scanned_at=timezone.now() - timedelta(hours=1)
-        )
-
-        scan_active_tron_chains.run()
-
-        scan_delay_mock.assert_called_once_with(tron_chain.pk)
-
-        scan_delay_mock.reset_mock()
-        Chain.objects.filter(pk=tron_chain.pk).update(active=False, tron_api_key="")
-        scan_active_tron_chains.run()
-        scan_delay_mock.assert_not_called()
-
-        Chain.objects.filter(pk=tron_chain.pk).update(
-            active=False,
-            tron_api_key="tron-key",
-        )
-        scan_active_tron_chains.run()
-        scan_delay_mock.assert_not_called()
 
 
 class TronReceiptConfirmTaskTests(TestCase):

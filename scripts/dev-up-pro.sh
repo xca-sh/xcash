@@ -1,6 +1,6 @@
 #!/bin/bash
 # dev-up-pro.sh — 以生产级方式在本地拉起所有服务，适用于压测场景。
-# Django 用 gunicorn，Celery worker 不带 watchfiles 热重载。
+# Django 用 gunicorn，Celery worker 与 chain-runner 不带 watchfiles 热重载。
 
 set -o errexit
 set -o nounset
@@ -18,7 +18,6 @@ source "${SCRIPT_DIR}/dev-env.sh"
 # ── 并发数配置（可通过环境变量覆盖） ─────────────────────────
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-4}"
 CELERY_BUSINESS_WORKER_CONCURRENCY="${CELERY_BUSINESS_WORKER_CONCURRENCY:-16}"
-CELERY_SCAN_WORKER_CONCURRENCY="${CELERY_SCAN_WORKER_CONCURRENCY:-4}"
 
 # ── 生命周期管理 ──────────────────────────────────────────────
 cleanup() {
@@ -60,7 +59,7 @@ rm -f /tmp/xcash-celerybeat-schedule{,-shm,-wal}
 echo "=== dev-up-pro: 生产级本地启动 ==="
 echo "  gunicorn workers : ${GUNICORN_WORKERS}"
 echo "  celery business  : ${CELERY_BUSINESS_WORKER_CONCURRENCY} threads"
-echo "  celery scan      : ${CELERY_SCAN_WORKER_CONCURRENCY} threads"
+echo "  chain-runner     : 每条活跃链一个线程"
 echo ""
 
 # ── 1. Gunicorn (替代 runserver) ──────────────────────────────
@@ -84,13 +83,8 @@ uv run celery -A config.celery worker \
   -n business@%h &
 child_pids+=("$!")
 
-# ── 4. Celery Worker — 扫描队列 ──────────────────────────────
-uv run celery -A config.celery worker \
-  -l INFO \
-  --pool=threads \
-  --concurrency="${CELERY_SCAN_WORKER_CONCURRENCY}" \
-  -Q scan \
-  -n scan@%h &
+# ── 4. chain-runner — 按链常驻扫描 ───────────────────────────
+uv run python manage.py run_chains &
 child_pids+=("$!")
 
 # ── 5. Celery Beat ───────────────────────────────────────────

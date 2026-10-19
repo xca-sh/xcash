@@ -1,5 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import Mock
 from unittest.mock import patch
 
 from django.core import checks
@@ -2195,6 +2196,7 @@ class TransferHandlerRegistryTests(TestCase):
                     chain_type=ChainType.EVM,
                     adapter_class=TxCheckStatus,
                     vault_slot_backend=object(),
+                    scan_round=Mock(),
                 )
             )
 

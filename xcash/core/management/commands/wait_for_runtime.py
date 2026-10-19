@@ -9,6 +9,7 @@ from django.core.management.base import CommandError
 from config.celery import app
 from config.periodic_tasks import PERIODIC_TASK_GROUPS
 from config.periodic_tasks import PERIODIC_TASK_QUEUES
+from config.worker_health import CHAIN_RUNNER_HEALTH_GROUP
 from config.worker_health import stale_worker_groups
 
 
@@ -38,7 +39,7 @@ def missing_consumer_groups(timeout):
         {queue["name"] for queue in queues} for queues in (replies or {}).values()
     ]
     missing = []
-    for group in ("celery", "scan"):
+    for group in ("celery",):
         required = {group} | {
             PERIODIC_TASK_QUEUES[task]
             for task, task_group in PERIODIC_TASK_GROUPS.items()
@@ -50,7 +51,7 @@ def missing_consumer_groups(timeout):
 
 
 class Command(BaseCommand):
-    help = "等待 HTTP 与队列消费者就绪，或等待本次启动后的真实 Beat 调度回执。"
+    help = "等待 HTTP、队列消费者与 chain-runner 就绪，或等待本次启动后的真实 Beat 调度回执。"
     requires_system_checks = []
 
     def add_arguments(self, parser):
@@ -99,6 +100,12 @@ class Command(BaseCommand):
                         http_reported = True
                     if options["phase"] == "consumers":
                         missing = missing_consumer_groups(min(2, remaining))
+                        # chain-runner 不消费队列，看它自写的心跳；同样只认发布下限之后
+                        # 的心跳，旧进程停止前留在缓存里的那条不能冒充新进程已就绪。
+                        missing += stale_worker_groups(
+                            published_after=published_after,
+                            groups=(CHAIN_RUNNER_HEALTH_GROUP,),
+                        )
                     else:
                         # 必须是发布下限之后的探针。旧缓存、旧积压即使刚被消费，
                         # 也不能让一个尚未恢复调度的 Beat 获得成功判定。

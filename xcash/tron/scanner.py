@@ -7,7 +7,6 @@ from decimal import Decimal
 from functools import lru_cache
 
 import structlog
-from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.db import Error as DatabaseLayerError
 from django.db.models import F
@@ -33,9 +32,9 @@ from currencies.models import CryptoOnChain
 logger = structlog.get_logger()
 
 # 单轮扫描最多向前推进的块数；walletsolidity 返回的是 BFT 不可逆块，故无需 replay。
-# Tron 3 秒一块、beat tick 30 秒 ≈ 每轮净新增 ~10 块，32 块留够冗余且能消化短暂积压；
+# Tron 3 秒一块、扫描周期 6 秒 ≈ 每轮净新增 ~2 块，32 块留够冗余且能消化短暂积压；
 # TRC20 走整块 receipt 拉取（每块 1 次，与代币数无关），命中事件的块再补 1 次 blockID，
-# batch=32 时单 tick 最坏约 65 次 RPC，符合 TronGrid 限速。
+# batch=32 时单轮最坏约 65 次 RPC，符合 TronGrid 限速。
 DEFAULT_TRON_SCAN_BATCH_SIZE = 32
 
 # TRC20 与原生扫描均走 walletsolidity 数据面，与固化头同源，已无 /v1 事件索引器
@@ -107,7 +106,7 @@ class TronScanner:
 
             from chains.tasks import dispatch_block_confirmation_checks_if_needed
 
-            # 与 EVM 对齐：刷新链高后先派发已有充值的确认，扫块阶段即使持续软超时，
+            # 与 EVM 对齐：刷新链高后先派发已有充值的确认，扫块阶段即使持续撞预算，
             # 也不会把确认调度一起跳过。
             dispatch_block_confirmation_checks_if_needed(
                 chain=chain,
@@ -125,7 +124,7 @@ class TronScanner:
                 )
                 start_block = cursor.last_scanned_block + 1
                 # 单轮最多推进 DEFAULT_TRON_SCAN_BATCH_SIZE 块，避免大幅落后时 range 无界，
-                # 把当次 beat task 拖垮、阻塞下一轮调度。
+                # 让单轮耗时失控、迟迟不刷新 last_scanned_at。
                 end_block = min(
                     latest_block,
                     start_block + DEFAULT_TRON_SCAN_BATCH_SIZE - 1,
@@ -149,14 +148,10 @@ class TronScanner:
                         cls._persist_observed_transfer_safely(observed=event.observed)
                     blocks_scanned += 1
                     last_successfully_scanned = block_number
-        except (
-            TronClientError,
-            ScanRoundBudgetExceeded,
-            SoftTimeLimitExceeded,
-        ) as exc:
+        except (TronClientError, ScanRoundBudgetExceeded) as exc:
             # 已经成功扫完的块仍需落到游标，避免下一轮重新扫一遍 + 让错误信息可见。
             # 顺序：先 advance（清 last_error），再 mark_error（写新 last_error），
-            # 保证 last_error 反映最近一次失败而非被 advance 覆盖；预算耗尽与软超时也必须记录，
+            # 保证 last_error 反映最近一次失败而非被 advance 覆盖；预算耗尽也必须记录，
             # 否则任务 finally 刷新 last_scanned_at 后，外部探针会误报健康。
             cls.flush_scan_progress(
                 cursor=cursor,
@@ -722,11 +717,6 @@ class TronScanner:
     ) -> None:
         try:
             TransferService.create_observed_transfer(observed=observed)
-        except SoftTimeLimitExceeded:
-            # 软超时继承自 Exception，被下面的逐事件容错分支吞掉会让扫描继续往下跑，
-            # 直到硬超时被 SIGKILL——那条路径连 except 都来不及执行，已扫块的进度会
-            # 彻底丢失。上抛后交给 scan_chain 的中断分支落盘进度。
-            raise
         except DatabaseLayerError:
             # 数据库层异常多为暂时性故障（死锁被牺牲、连接抖动、超时），必须上抛，
             # 让本轮扫描中断、游标停在该块之前，由下一轮重扫幂等恢复；
@@ -755,7 +745,7 @@ class TronScanner:
     ) -> None:
         """把本轮已成功扫完的最高块落到游标；一块都没扫成时保持游标不动。
 
-        正常结束、RPC 失败、被中断（软超时/进程回收）三条路径共用，确保任何退出方式
+        正常结束、RPC 失败或预算耗尽、被中断（进程退出）三条路径共用，确保任何退出方式
         都不会丢弃已完成的扫描进度。
         """
         if scanned_block is None:
@@ -820,3 +810,24 @@ def event_address_to_base58(raw_value: str) -> str:
         normalized = f"{TronAddressCodec.ADDRESS_HEX_PREFIX}{normalized[-40:]}"
 
     return TronAddressCodec.hex41_to_base58(normalized)
+
+
+def scan_tron_chain_round(chain: Chain, deadline: float) -> None:
+    """chain-runner 按链循环调用的 Tron 单轮扫描（登记为链族的 scan_round）。
+
+    RPC 失败只记 warning 后返回：游标错误已由 scan_chain 写入，/health/scanning 据此
+    报 failing，runner 照常推进 last_scanned_at、按扫描周期重试。预算耗尽与其他异常
+    原样上抛，由 runner 统一记录。
+    """
+    try:
+        summary = TronScanner.scan_chain(chain=chain, deadline=deadline)
+    except TronClientError:
+        logger.warning("Tron 资产扫描 RPC 失败", chain=chain.code)
+        return
+    logger.info(
+        "Tron 资产扫描完成",
+        chain=chain.code,
+        filter_addresses=summary.filter_addresses,
+        blocks_scanned=summary.blocks_scanned,
+        events_seen=summary.events_seen,
+    )

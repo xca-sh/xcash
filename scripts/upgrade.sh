@@ -34,11 +34,17 @@ LOCK_ACQUIRED=false
 # 切换版本前必须全部停掉的业务服务。任何会读写业务库的常驻服务都要列在这里——
 # 漏掉一个，它就会在 migrate 执行期间继续按旧代码读写处于中间态的 schema。
 # worker 单独分组，确保排空时保留 HTTP；迁移前仍停止所有业务服务。
-APP_WORKER_SERVICES=(worker worker-scan)
+APP_WORKER_SERVICES=(worker chain-runner)
 APP_RUNTIME_SERVICES=(django "${APP_WORKER_SERVICES[@]}")
 APP_SERVICES=("${APP_RUNTIME_SERVICES[@]}" beat)
+# 已从 compose 删除的旧业务服务。运行本脚本前已 git pull，compose 不再认识它们，
+# `compose stop` 停不到：旧容器会带着旧代码一直跑到启动阶段的 --remove-orphans，期间
+# 可能在 migrate 时读写中间态 schema。迁移前按 compose 标签找到并停止，删除仍交给
+# --remove-orphans；迁移前失败时与其他服务一起恢复原样。
+RETIRED_SERVICES=(worker-scan)
 APP_SERVICES_STOP_REQUESTED=false
 APP_SERVICES_TO_RESTORE=()
+RETIRED_CONTAINERS_TO_RESTORE=()
 REHEARSAL_IN_PROGRESS=false
 PRODUCTION_MIGRATE_STARTED=false
 PRODUCTION_MIGRATE_COMPLETED=false
@@ -251,8 +257,28 @@ stop_app_services() {
   # 待旧消费者全部退出后由新版消费。生产迁移仍须等 Django 也停止，不能交错版本。
   run_stage "drain workers; HTTP remains available" \
     "${COMPOSE[@]}" stop "${APP_WORKER_SERVICES[@]}" || return 1
+  stop_retired_services || return 1
   HTTP_STOPPED_AT="$(date +%s)"
   run_stage "stop Django; HTTP downtime begins" "${COMPOSE[@]}" stop django
+}
+
+stop_retired_services() {
+  local project="${COMPOSE_PROJECT_NAME:-xcash}"
+  local service running container
+  local containers
+
+  for service in "${RETIRED_SERVICES[@]}"; do
+    running="$(docker ps -q \
+      --filter "label=com.docker.compose.project=${project}" \
+      --filter "label=com.docker.compose.service=${service}")" || return 1
+    containers=()
+    while IFS= read -r container; do
+      [[ -n "${container}" ]] && containers+=("${container}")
+    done <<<"${running}"
+    [[ "${#containers[@]}" -gt 0 ]] || continue
+    RETIRED_CONTAINERS_TO_RESTORE+=("${containers[@]}")
+    run_stage "stop retired service ${service}" docker stop "${containers[@]}" || return 1
+  done
 }
 
 prepare_application() {
@@ -316,6 +342,11 @@ remove_unused_images() {
 }
 
 restore_pre_migration_services() {
+  if [[ "${#RETIRED_CONTAINERS_TO_RESTORE[@]}" -gt 0 ]]; then
+    run_cleanup_command "restore previously running retired services" \
+      docker start "${RETIRED_CONTAINERS_TO_RESTORE[@]}"
+  fi
+
   if [[ "${#APP_SERVICES_TO_RESTORE[@]}" -eq 0 ]]; then
     printf '[upgrade] no app services were running before stop; nothing to restore\n' >&2
     return

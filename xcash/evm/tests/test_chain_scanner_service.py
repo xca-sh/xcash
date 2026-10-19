@@ -48,21 +48,21 @@ class EvmChainScannerServiceTests(TestCase):
         super().tearDown()
 
     @patch(
-        "evm.tasks.EvmLogScanner.scan_chain",
+        "evm.scanner.logs.EvmLogScanner.scan_chain",
         side_effect=EvmScannerRpcError("rpc timeout"),
     )
-    def test_scan_task_swallows_rpc_error_and_still_marks_scanned(
+    def test_scan_round_swallows_rpc_error_and_still_marks_scanned(
         self,
         scan_chain_mock,
     ):
-        # RPC 失败只记日志，不能让任务抛错；last_scanned_at 照常推进，按固定周期重试，
-        # 避免对不健康的节点每 2 秒一次连环重扫。
-        from evm.tasks import _scan_evm_chain
+        # RPC 失败只记日志，不能让扫描循环抛错；last_scanned_at 照常推进，按固定周期
+        # 重试，避免对不健康的节点连环重扫。
+        from chains.runner import ChainLoop
 
         stale = timezone.now() - timedelta(hours=1)
         Chain.objects.filter(pk=self.chain.pk).update(last_scanned_at=stale)
 
-        _scan_evm_chain(self.chain.pk)
+        ChainLoop(self.chain).run_once()
 
         scan_chain_mock.assert_called_once()
         self.chain.refresh_from_db()

@@ -77,12 +77,6 @@ EVM_BROADCAST_SCHEDULE_SECONDS = get_int_default(
     "CELERY_EVM_BROADCAST_SCHEDULE_SECONDS",
     10,
 )
-# 扫描调度器固定每 2 秒巡检一次活跃链；具体每条链多久扫一次由
-# ChainSpec.scan_interval_seconds 与 Chain.last_scanned_at 在任务内决定。
-SCAN_DISPATCH_SCHEDULE_SECONDS = get_int_default(
-    "CELERY_SCAN_DISPATCH_SCHEDULE_SECONDS",
-    2,
-)
 EVM_NON_TRANSFER_CONFIRM_SCHEDULE_SECONDS = get_int_default(
     "CELERY_EVM_NON_TRANSFER_CONFIRM_SCHEDULE_SECONDS",
     60,
@@ -161,10 +155,6 @@ evm_tasks = {
         "task": "evm.tasks.dispatch_evm_tx_tasks",
         "schedule": EVM_BROADCAST_SCHEDULE_SECONDS,
     },
-    "scan_active_evm_chains": {
-        "task": "evm.tasks.scan_active_evm_chains",
-        "schedule": SCAN_DISPATCH_SCHEDULE_SECONDS,
-    },
     "scan_stuck_queued_evm_tx_tasks": {
         "task": "evm.tasks.scan_stuck_queued_evm_tx_tasks",
         "schedule": OPERATIONAL_RISKS_SCHEDULE_SECONDS,
@@ -192,10 +182,6 @@ tron_tasks = {
     "dispatch_tron_tx_tasks": {
         "task": "tron.tasks.dispatch_tron_tx_tasks",
         "schedule": EVM_BROADCAST_SCHEDULE_SECONDS,
-    },
-    "scan_active_tron_chains": {
-        "task": "tron.tasks.scan_active_tron_chains",
-        "schedule": SCAN_DISPATCH_SCHEDULE_SECONDS,
     },
     "confirm_tron_receipt_tx_tasks": {
         "task": "tron.tasks.confirm_tron_receipt_tx_tasks",

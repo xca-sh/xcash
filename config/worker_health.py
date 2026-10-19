@@ -1,4 +1,10 @@
-"""由真实任务执行形成消费心跳；HTTP 只读缓存，不发布任务或调用 inspect。"""
+"""由真实执行形成存活心跳；HTTP 只读缓存，不发布任务或调用 inspect。
+
+两类心跳共用一套判定：
+- celery 业务 worker：Beat 投递探针、worker 实际消费后写入，同时证明调度与消费都在跑。
+- chain-runner：常驻扫描进程的 Supervisor 每个 tick 直接写入，证明进程存活、DB 与
+  advisory lock 连接可用；没有活跃链时同样成立。链级扫描是否停摆由 /health/scanning 判定。
+"""
 
 import math
 import time
@@ -9,8 +15,12 @@ from django.core.cache import cache
 from config.periodic_tasks import WORKER_HEALTH_TASK_GROUPS
 
 WORKER_HEALTH_INTERVAL_SECONDS = 30
-# 两组 worker 都可能短暂满载；覆盖最长生产任务 290s 加下一轮调度，避免正常执行误报。
+# 业务 worker 可能短暂满载；覆盖最长生产任务 290s 加下一轮调度，避免正常执行误报。
 WORKER_HEALTH_MAX_AGE_SECONDS = 360
+CHAIN_RUNNER_HEALTH_GROUP = "chain-runner"
+HEALTH_GROUPS = tuple(
+    sorted({*WORKER_HEALTH_TASK_GROUPS.values(), CHAIN_RUNNER_HEALTH_GROUP})
+)
 WORKER_HEALTH_PUBLISHED_HEADER = "xcash_health_published_at"
 logger = structlog.get_logger()
 
@@ -35,9 +45,18 @@ def record_worker_health(task):
     )
 
 
-def stale_worker_groups(*, published_after=0):
+def record_chain_runner_heartbeat():
+    """chain-runner 没有「发布」环节，发布与完成取同一时刻，沿用同一套新鲜度判定。"""
+    now = time.time()
+    cache.set(
+        worker_health_key(CHAIN_RUNNER_HEALTH_GROUP),
+        {"published_at": now, "completed_at": now},
+        timeout=WORKER_HEALTH_MAX_AGE_SECONDS,
+    )
+
+
+def stale_worker_groups(*, published_after=0, groups=HEALTH_GROUPS):
     """缺失、过期、损坏或未来时间都失败关闭；发布与执行均需处于健康窗口内。"""
-    groups = sorted(set(WORKER_HEALTH_TASK_GROUPS.values()))
     samples = cache.get_many([worker_health_key(group) for group in groups])
     now = time.time()
     stale = []

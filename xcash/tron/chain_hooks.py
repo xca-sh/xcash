@@ -4,6 +4,7 @@ from django.db.models.signals import post_save
 from tron import vault_slots
 from tron.adapter import TronAdapter
 from tron.models import TronWatchCursor
+from tron.scanner import scan_tron_chain_round
 
 from chains.constants import ChainType
 from chains.models import Chain
@@ -12,7 +13,7 @@ from chains.registry import register_chain_family
 
 
 def ensure_tron_scan_cursor(sender, instance: Chain, **kwargs) -> None:
-    """活跃 Tron 链在配置层即持有按链唯一的扫描游标，避免依赖首次 beat 扫描显式创建。
+    """活跃 Tron 链在配置层即持有按链唯一的扫描游标，避免依赖首次扫描显式创建。
 
     游标只锚定区块进度、与具体资产解耦：扫描器每轮按本链全量 CryptoOnChain
     逐块拉取，新增/下架 TRC20 或原生 TRX 不影响游标，故无需依赖 USDT 是否已配置。
@@ -33,6 +34,7 @@ def register() -> None:
             chain_type=ChainType.TRON,
             adapter_class=TronAdapter,
             vault_slot_backend=vault_slots,
+            scan_round=scan_tron_chain_round,
         )
     )
     post_save.connect(

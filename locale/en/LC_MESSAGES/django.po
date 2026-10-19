@@ -1203,8 +1203,16 @@ msgid "业务任务消费心跳异常"
 msgstr "Business task consumer heartbeat is unhealthy"
 
 #: xcash/core/dashboard.py:276
-msgid "链扫描任务消费心跳异常"
-msgstr "Chain scanning consumer heartbeat is unhealthy"
+msgid "链扫描进程心跳异常"
+msgstr "Chain scanning process heartbeat is unhealthy"
+
+#, python-format
+msgid ""
+"最近 %(seconds)s 秒内没有收到 chain-runner 心跳。请检查 chain-runner 进程、数据库与 "
+"Redis。"
+msgstr ""
+"No chain-runner heartbeat in the last %(seconds)s seconds. Check the chain-runner "
+"process, the database and Redis."
 
 #: xcash/core/dashboard.py:283
 #, python-format
