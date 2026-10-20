@@ -36,7 +36,6 @@ class PerformanceProfileTests(SimpleTestCase):
             **os.environ,
             "PERFORMANCE": "high",
             "GUNICORN_WORKERS": "9",
-            "GUNICORN_THREADS": "5",
             "DJANGO_SETTINGS_MODULE": "config.settings.test",
         }
         performance_script = (
@@ -51,4 +50,3 @@ class PerformanceProfileTests(SimpleTestCase):
         )
 
         self.assertIn("export GUNICORN_WORKERS=9", completed.stdout)
-        self.assertIn("export GUNICORN_THREADS=5", completed.stdout)

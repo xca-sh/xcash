@@ -136,8 +136,9 @@ services:
   # 的任务由 retry_stalled_jobs 回收重跑。链扫描与主动交易不在这里运行（见 chain-runner），
   # 链节点劣化不会占用确认、Webhook 这些业务任务的执行容量。
   # 可 --scale 多开（先移除 container_name）。数据库连接：任务线程数 + 1 条周期投递 + 至多
-  # 4 条连接池 + 1 条 LISTEN；high 档（并发 8）全栈合计约 93 条，已接近 PG 默认
-  # max_connections=100，再加 gunicorn 或 worker 实例前先调大它。
+  # 4 条连接池 + 1 条 LISTEN。全栈连接需求还需加上 Web 进程数 × 4、每条活跃链的
+  # ORM 连接与 chain-runner 的管理/锁连接；扩容前按实际链数核算 max_connections，
+  # 并为升级和运维连接预留余量。
   worker:
     <<: *django-base
     container_name: xcash_worker

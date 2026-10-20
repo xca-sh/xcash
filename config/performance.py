@@ -11,25 +11,21 @@ PROFILE_ENV = "PERFORMANCE"
 @dataclass(frozen=True)
 class PerformanceProfile:
     django_workers: int
-    django_threads: int
     worker_concurrency: int
 
 
 PROFILES = {
     "low": PerformanceProfile(
         django_workers=1,
-        django_threads=2,
-        worker_concurrency=2,
-    ),
-    "medium": PerformanceProfile(
-        django_workers=4,
-        django_threads=4,
         worker_concurrency=4,
     ),
-    "high": PerformanceProfile(
-        django_workers=8,
-        django_threads=8,
+    "medium": PerformanceProfile(
+        django_workers=2,
         worker_concurrency=8,
+    ),
+    "high": PerformanceProfile(
+        django_workers=4,
+        worker_concurrency=16,
     ),
 }
 
@@ -81,7 +77,6 @@ def shell_env(target: str) -> dict[str, int]:
         case "web":
             return {
                 "GUNICORN_WORKERS": get_int("GUNICORN_WORKERS", "django_workers"),
-                "GUNICORN_THREADS": get_int("GUNICORN_THREADS", "django_threads"),
             }
         case "worker":
             return {

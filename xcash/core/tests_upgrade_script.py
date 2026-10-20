@@ -451,7 +451,7 @@ tool = Path(sys.argv[0]).name
 with Path(os.environ["COMMAND_LOG"]).open("a") as output:
     output.write(json.dumps([tool, *sys.argv[1:]]) + "\n")
 if "shell-env" in sys.argv:
-    print("GUNICORN_WORKERS=1; GUNICORN_THREADS=1")
+    print("GUNICORN_WORKERS=1")
 if "bootstrap_runtime" in sys.argv and os.environ["FAIL_BOOTSTRAP"] == "true":
     sys.exit(23)
 """
