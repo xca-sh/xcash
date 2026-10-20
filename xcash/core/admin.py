@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 from django.contrib import admin
@@ -7,6 +8,8 @@ from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django_celery_results.models import GroupResult
 from django_celery_results.models import TaskResult
+from procrastinate.contrib.django.models import ProcrastinateEvent
+from procrastinate.contrib.django.models import ProcrastinateJob
 from unfold.contrib.filters.admin import ChoicesDropdownFilter
 from unfold.contrib.filters.admin import RangeDateTimeFilter
 from unfold.decorators import display
@@ -17,6 +20,7 @@ from chains.models import ChainType
 from common import admin_display as fmt
 from common.admin import ModelAdmin
 from common.admin import ReadOnlyModelAdmin
+from common.admin import TabularInline
 from common.utils.math import format_decimal_stripped
 from core.models import SystemSettings
 from core.models import SystemWallet
@@ -142,6 +146,91 @@ class GroupResultAdmin(ReadOnlyModelAdmin):
     @display(description=_("结果"))
     def display_result(self, obj: GroupResult):
         return fmt.scroll_box(obj.result)
+
+
+# Procrastinate 自带的任务后台是原生 django.contrib.admin.ModelAdmin，统一换成项目基类。
+# 成功的任务完成即删除，这里能看到的是待执行、执行中与失败（保留 7 天）的任务。
+admin.site.unregister(ProcrastinateJob)
+
+PROCRASTINATE_JOB_STATUS_LABELS = {
+    "todo": "",
+    "doing": "info",
+    "succeeded": "success",
+    "failed": "danger",
+    "cancelled": "warning",
+    "aborted": "warning",
+}
+
+
+class ProcrastinateEventInline(TabularInline):
+    model = ProcrastinateEvent
+    extra = 0
+    tab = True
+    show_title = False
+    verbose_name = _("状态事件")
+    verbose_name_plural = _("状态事件")
+    ordering = ("at",)
+    fields = ("type", "at")
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ProcrastinateJob)
+class ProcrastinateJobAdmin(ReadOnlyModelAdmin):
+    inlines = (ProcrastinateEventInline,)
+    ordering = ("-id",)
+    list_display = (
+        "display_identity",
+        "display_status",
+        "attempts",
+        "priority",
+        "scheduled_at",
+        "lock",
+    )
+    list_filter = (
+        ("status", ChoicesDropdownFilter),
+        "task_name",
+    )
+    search_fields = ("task_name", "queueing_lock", "lock")
+    search_help_text = _("支持按任务名、排队锁或执行锁搜索")
+    readonly_fields = (
+        "id",
+        "task_name",
+        "status",
+        "queue_name",
+        "priority",
+        "attempts",
+        "scheduled_at",
+        "lock",
+        "queueing_lock",
+        "worker",
+        "display_args",
+    )
+    fields = readonly_fields
+
+    @display(description=_("任务"), ordering="task_name", header=True)
+    def display_identity(self, obj: ProcrastinateJob):
+        return (obj.task_name, f"#{obj.pk}")
+
+    @display(
+        description=_("状态"),
+        ordering="status",
+        label=PROCRASTINATE_JOB_STATUS_LABELS,
+    )
+    def display_status(self, obj: ProcrastinateJob):
+        return (obj.status, obj.status)
+
+    @display(description=_("参数"))
+    def display_args(self, obj: ProcrastinateJob):
+        return fmt.scroll_box(json.dumps(obj.args, ensure_ascii=False, indent=2))
 
 
 @admin.register(SystemSettings)

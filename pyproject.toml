@@ -34,6 +34,8 @@ dependencies = [
     # Celery
     "celery==5.6.3",
     "django-celery-results==2.6.0",
+    # PostgreSQL 任务队列（取代 Celery）
+    "procrastinate[django]==3.10.0",
     # Logging
     "structlog==26.1.0",
     "gunicorn==26.2.0",

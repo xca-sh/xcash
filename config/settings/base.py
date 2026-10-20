@@ -207,6 +207,8 @@ DJANGO_APPS = [
 ]
 THIRD_PARTY_APPS = [
     "django_celery_results",
+    # PostgreSQL 任务队列。须排在本地 app 之前：core.admin 要替换它自带的任务后台。
+    "procrastinate.contrib.django",
     "rest_framework",
     "rest_framework.authtoken",
     "corsheaders",
@@ -385,6 +387,9 @@ LOGGING = {
             "propagate": False,
         },
         "httpx": {"level": "WARNING"},
+        # 每个任务的 Starting/Success 以及「失败待重试」都记 INFO（后者还带 traceback），
+        # 周期任务一天数万条；只保留 WARNING 以上，最终失败的 job_error 仍是 ERROR。
+        "procrastinate": {"level": "WARNING"},
     },
 }
 
