@@ -2,34 +2,7 @@ import { useState, useEffect, useCallback } from "react"
 import { getInvoice } from "@/lib/api"
 import { getRemainingMs } from "@/lib/dateTime"
 import { isPaymentConfirming } from "@/lib/invoiceStatus"
-import en from "@/locales/en.json"
-import zh from "@/locales/zh.json"
-
-/**
- * 从浏览器获取语言偏好
- */
-function getBrowserLanguage() {
-  const browserLang = navigator.language || navigator.userLanguage || "en"
-  const langCode = browserLang.split("-")[0]
-  return langCode === "zh" ? "zh" : "en"
-}
-
-/**
- * 获取翻译文本
- */
-function getTranslation(key) {
-  const locale = getBrowserLanguage()
-  const translations = locale === "zh" ? zh : en
-  const keys = key.split(".")
-  let translation = translations
-
-  for (const k of keys) {
-    translation = translation?.[k]
-    if (!translation) break
-  }
-
-  return translation || key
-}
+import { translate } from "@/hooks/useI18n"
 
 /**
  * 账单管理 Hook
@@ -46,7 +19,7 @@ export function useInvoice(sysNo) {
   // 获取账单详情
   const fetchInvoice = useCallback(async () => {
     if (!sysNo) {
-      setError(getTranslation("error.missingInvoiceNumber"))
+      setError(translate("error.missingInvoiceNumber"))
       setLoading(false)
       return
     }
@@ -57,7 +30,7 @@ export function useInvoice(sysNo) {
       setError("")
       setConsecutiveErrors(0)
     } catch (err) {
-      setError(getTranslation("error.fetchFailed") + ": " + err.message)
+      setError(translate("error.fetchFailed") + ": " + err.message)
       setConsecutiveErrors((prev) => prev + 1)
     } finally {
       setLoading(false)

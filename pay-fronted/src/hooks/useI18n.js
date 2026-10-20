@@ -60,6 +60,39 @@ function setGlobalLocale(next) {
   window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: normalized }))
 }
 
+function lookup(table, keys) {
+  let translation = table
+  for (const k of keys) {
+    translation = translation?.[k]
+    if (!translation) break
+  }
+  return translation
+}
+
+// 当前语言缺该 key 时回退英文，英文也没有则原样返回 key。
+function translateIn(locale, key, params = {}) {
+  const keys = key.split(".")
+  const translation =
+    lookup(translations[locale] || translations.en, keys) || lookup(translations.en, keys)
+
+  if (!translation) {
+    return key
+  }
+
+  if (typeof translation === "string" && Object.keys(params).length > 0) {
+    return translation.replace(/\{\{(\w+)\}\}/g, (match, param) => {
+      return params[param] !== undefined ? params[param] : match
+    })
+  }
+
+  return translation
+}
+
+/** 供非组件代码（如数据加载 hook 的错误文案）按当前全局语言取翻译。 */
+export function translate(key, params = {}) {
+  return translateIn(currentLocale, key, params)
+}
+
 export function useI18n() {
   const [locale, setLocaleState] = useState(currentLocale)
 
@@ -86,35 +119,7 @@ export function useI18n() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const t = (key, params = {}) => {
-    const keys = key.split(".")
-    let translation = translations[locale] || translations.en
-
-    for (const k of keys) {
-      translation = translation?.[k]
-      if (!translation) break
-    }
-
-    if (!translation) {
-      translation = translations.en
-      for (const k of keys) {
-        translation = translation?.[k]
-        if (!translation) break
-      }
-    }
-
-    if (!translation) {
-      return key
-    }
-
-    if (typeof translation === "string" && Object.keys(params).length > 0) {
-      return translation.replace(/\{\{(\w+)\}\}/g, (match, param) => {
-        return params[param] !== undefined ? params[param] : match
-      })
-    }
-
-    return translation
-  }
+  const t = (key, params = {}) => translateIn(locale, key, params)
 
   return {
     locale,
