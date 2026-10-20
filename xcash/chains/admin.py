@@ -81,7 +81,7 @@ class ChainAdmin(ModelAdmin):
     search_fields = ("code",)
     search_help_text = _("支持按链代码搜索")
     readonly_fields = (
-        "display_scanner_state",
+        "display_scanner_state_text",
         "display_scanned_block",
         "display_latest_block",
         "display_scan_gap",
@@ -138,6 +138,11 @@ class ChainAdmin(ModelAdmin):
         if cursor.last_error:
             return ("error", _("异常"))
         return scan_lag_state(self.scan_gap(obj))
+
+    @display(description=_("扫描器"))
+    def display_scanner_state_text(self, obj: Chain) -> str:
+        # unfold 的 label 只在列表页渲染成标签，详情页只读字段需要纯文本。
+        return self.display_scanner_state(obj)[1]
 
     @display(description=_("已扫描到"))
     def display_scanned_block(self, obj: Chain):
@@ -215,7 +220,7 @@ class ChainAdmin(ModelAdmin):
             {
                 "classes": ("tab",),
                 "fields": (
-                    "display_scanner_state",
+                    "display_scanner_state_text",
                     "display_scanned_block",
                     "display_latest_block",
                     "display_scan_gap",
