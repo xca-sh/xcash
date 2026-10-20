@@ -111,7 +111,7 @@ msgstr "Блокчейн"
 
 #: config/settings/unfold.py:217
 msgid "公链"
-msgstr "Блокчейн"
+msgstr "Сети"
 
 #: config/settings/unfold.py:222 xcash/deposits/models.py:17
 #: xcash/invoices/models.py:248

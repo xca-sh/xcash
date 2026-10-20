@@ -79,7 +79,7 @@ The [deployment guide](#deployment-guide) below covers every step; how it works 
 
 ## Two ways to get paid
 
-- **Invoice payments** — each transaction creates a fixed-amount, time-limited invoice that completes when the buyer pays. Ideal for e-commerce checkout and subscription billing. Supports both direct-to-wallet and smart-contract collection, and ships with a buyer-facing payment page in English and Chinese.
+- **Invoice payments** — each transaction creates a fixed-amount, time-limited invoice that completes when the buyer pays. Ideal for e-commerce checkout and subscription billing. Supports both direct-to-wallet and smart-contract collection, and ships with a buyer-facing payment page in Chinese, English and Russian.
 - **Deposits** — every user gets a dedicated deposit address. Users transfer in whenever they like and are credited after block confirmation, with no order to create. Ideal for wallets, trading platforms, and any business that maintains user balances.
 
 ![Xcash payment page](xcash/static/xcash-pay-page-en.png)
