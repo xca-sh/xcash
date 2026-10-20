@@ -1,0 +1,18 @@
+{% load i18n %}
+{% comment %}覆盖 unfold 同名模板：登录页右上角增加语言切换。{% endcomment %}
+
+<div class="absolute flex flex-row items-center justify-between left-0 m-4 right-0 top-0">
+    {% if site_url %}
+        <a href="{{ site_url }}" class="flex font-medium gap-2 group items-center text-sm text-primary-600 dark:text-primary-500">
+            <span class="material-symbols-outlined left-0 relative text-sm transition-all group-hover:-left-1">arrow_back</span> {% trans 'Return to site' %}
+        </a>
+    {% endif %}
+
+    <div class="flex flex-row gap-3 items-center ml-auto">
+        {% include "admin/includes/language_dropdown.html" %}
+
+        {% if not theme %}
+            {% include "unfold/helpers/theme_switch_dropdown.html" %}
+        {% endif %}
+    </div>
+</div>

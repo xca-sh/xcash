@@ -7,9 +7,6 @@ const translations = {
   en,
   zh,
   ru,
-  "zh-CN": zh,
-  "zh-TW": zh,
-  "zh-HK": zh,
 }
 
 const SUPPORTED = ["zh", "en", "ru"]
@@ -23,41 +20,53 @@ export const SUPPORTED_LOCALES = [
   { code: "ru", label: "Русский", flag: "RU" },
 ]
 
-function normalize(lang) {
-  if (!lang) return "en"
-  const code = lang.split("-")[0].toLowerCase()
-  // 不在标准支持列表内的浏览器语言一律回退英文
-  return SUPPORTED.includes(code) ? code : "en"
+// 按浏览器语言偏好列表依次匹配，取第一个标准支持的语言（如 "uk, ru" 取 ru）；都不支持时回退英文。
+function detectBrowserLocale() {
+  if (typeof navigator === "undefined") return "en"
+  const preferred = navigator.languages?.length ? navigator.languages : [navigator.language]
+  for (const lang of preferred) {
+    const code = lang?.split("-")[0].toLowerCase()
+    if (SUPPORTED.includes(code)) return code
+  }
+  return "en"
 }
 
-function detectInitialLocale() {
-  if (typeof window === "undefined") return "en"
-  // 用户手动选择过的优先；否则回退到浏览器语言。
+function readStoredLocale() {
   try {
     const stored = window.localStorage?.getItem(STORAGE_KEY)
-    if (stored && SUPPORTED.includes(stored)) return stored
+    return SUPPORTED.includes(stored) ? stored : null
   } catch {
-    // localStorage 不可用（隐私模式等），忽略即可
+    // localStorage 不可用（隐私模式等），视为未手动选择
+    return null
   }
-  const browserLang = navigator.language || navigator.userLanguage || "en"
-  return normalize(browserLang)
+}
+
+// 手动选择过的优先；否则跟随浏览器语言。
+function detectInitialLocale() {
+  if (typeof window === "undefined") return "en"
+  return readStoredLocale() || detectBrowserLocale()
 }
 
 // 全局单一来源：避免多处 useI18n 各自持有独立 state，切换不同步。
 let currentLocale = detectInitialLocale()
 const listeners = new Set()
 
+function applyLocale(next) {
+  if (next === currentLocale) return
+  currentLocale = next
+  listeners.forEach((fn) => fn(next))
+  window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: next }))
+}
+
+// 用户在下拉框里手动选择：记住选择，此后不再跟随浏览器语言。
 function setGlobalLocale(next) {
-  const normalized = SUPPORTED.includes(next) ? next : normalize(next)
-  if (normalized === currentLocale) return
-  currentLocale = normalized
+  if (!SUPPORTED.includes(next)) return
   try {
-    window.localStorage?.setItem(STORAGE_KEY, normalized)
+    window.localStorage?.setItem(STORAGE_KEY, next)
   } catch {
     // 写入失败不影响内存中的切换
   }
-  listeners.forEach((fn) => fn(normalized))
-  window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: normalized }))
+  applyLocale(next)
 }
 
 function lookup(table, keys) {
@@ -103,13 +112,9 @@ export function useI18n() {
     if (locale !== currentLocale) setLocaleState(currentLocale)
 
     const onBrowserChange = () => {
-      // 仅当用户没手动选过语言时，才跟随浏览器语言变化
-      try {
-        if (window.localStorage?.getItem(STORAGE_KEY)) return
-      } catch {
-        // 无 localStorage 时也按跟随处理
-      }
-      setGlobalLocale(navigator.language || "en")
+      // 仅当用户没手动选过语言时，才跟随浏览器语言变化；跟随不写入存储，避免被当成手动选择
+      if (readStoredLocale()) return
+      applyLocale(detectBrowserLocale())
     }
     window.addEventListener("languagechange", onBrowserChange)
     return () => {

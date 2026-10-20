@@ -28,7 +28,9 @@ BASE_UNFOLD = {
         "light": lambda request: static("logo.png"),  # light mode
         "dark": lambda request: static("logo.png"),  # dark mode
     },
-    "SHOW_LANGUAGES": True,
+    # 语言切换放在顶栏与登录页（xcash/templates/admin/includes/language_dropdown.html），
+    # 关闭 unfold 侧栏用户菜单里那份，避免重复入口。
+    "SHOW_LANGUAGES": False,
     # 后台大量页面是只读审计视图，保留历史入口便于追溯人工操作。
     "SHOW_HISTORY": True,
     "SHOW_VIEW_ON_SITE": False,

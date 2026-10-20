@@ -1,0 +1,18 @@
+{% load i18n static unfold %}
+{% comment %}覆盖 unfold 同名模板：顶栏右侧增加语言切换。{% endcomment %}
+
+{% if not is_popup %}
+    <div class="flex flex-row gap-3 items-center ml-auto">
+        {% if environment %}
+            {% include "unfold/helpers/label.html" with text=environment.0 type=environment.1 %}
+        {% endif %}
+
+        {% action_list %}
+
+        {% if nav_global_side %}
+            {{ nav_global_side }}
+        {% endif %}
+
+        {% include "admin/includes/language_dropdown.html" %}
+    </div>
+{% endif %}

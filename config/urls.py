@@ -3,6 +3,7 @@ from django.conf import settings
 from django.contrib import admin
 from django.urls import include
 from django.urls import path
+from django.views.i18n import set_language
 from django.views.generic import RedirectView
 
 from core.dashboard import operational_inspection_view
@@ -53,7 +54,8 @@ urlpatterns = [
     path("epay/submit.php", EpaySubmitView.as_view(), name="epay-submit"),
     # 支付前端 SPA：返回 index.html，由 React 根据 sys_no 渲染支付页
     path("pay/<str:sys_no>", payment_view, name="payment-invoice"),
-    path("i18n/", include("django.conf.urls.i18n")),
+    # 只暴露 set_language；不用 include("django.conf.urls.i18n")，它的路由带尾部 /。
+    path("i18n/setlang", set_language, name="set_language"),
 ]
 
 if settings.IS_SAAS:

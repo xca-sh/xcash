@@ -1,0 +1,24 @@
+{% load i18n %}
+{% comment %}
+后台顶栏与登录页共用的语言切换下拉框。
+unfold 默认只把语言切换藏在侧栏底部的用户菜单里，登录页也没有，这里放到显眼位置。
+未手动切换时 LocaleMiddleware 按浏览器 Accept-Language 选语言；点选后由 set_language
+写入 django_language cookie，之后以手动选择为准。
+{% endcomment %}
+{% get_current_language as LANGUAGE_CODE %}
+
+{% if languages_list %}
+    <div class="relative" x-data="{ openLanguage: false }">
+        <a class="block cursor-pointer h-[18px] leading-none hover:text-base-700 dark:hover:text-base-200" x-on:click="openLanguage = !openLanguage" title="{% for language in languages_list %}{% if language.code == LANGUAGE_CODE %}{{ language.name }}{% endif %}{% endfor %}">
+            <span class="material-symbols-outlined">translate</span>
+        </a>
+
+        <nav class="absolute bg-white border border-base-200 flex flex-col leading-none py-1 -right-2 rounded-default shadow-lg top-7 w-52 z-50 dark:bg-base-800 dark:border-base-700" x-cloak x-show="openLanguage" x-transition x-on:click.outside="openLanguage = false">
+            {% with redirect_to=request.get_full_path %}
+                {% for language in languages_list %}
+                    {% include "unfold/helpers/language_form.html" with language=language %}
+                {% endfor %}
+            {% endwith %}
+        </nav>
+    </div>
+{% endif %}
