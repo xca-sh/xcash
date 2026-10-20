@@ -7,8 +7,8 @@ from unittest.mock import patch
 from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase
 
-from config.performance import get_int
 from config.performance import profile_name
+from config.performance import shell_env
 
 
 class PerformanceProfileTests(SimpleTestCase):
@@ -16,13 +16,13 @@ class PerformanceProfileTests(SimpleTestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(profile_name(), "low")
 
-    def test_explicit_env_overrides_profile_value(self):
+    def test_explicit_env_overrides_worker_default(self):
         with patch.dict(
             os.environ,
             {"PERFORMANCE": "medium", "WORKER_CONCURRENCY": "9"},
             clear=True,
         ):
-            self.assertEqual(get_int("WORKER_CONCURRENCY", "worker_concurrency"), 9)
+            self.assertEqual(shell_env("worker")["WORKER_CONCURRENCY"], 9)
 
     def test_invalid_profile_fails_fast(self):
         with (

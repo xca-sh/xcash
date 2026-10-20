@@ -6,26 +6,23 @@ from dataclasses import dataclass
 from django.core.exceptions import ImproperlyConfigured
 
 PROFILE_ENV = "PERFORMANCE"
+DEFAULT_WORKER_CONCURRENCY = 16
 
 
 @dataclass(frozen=True)
 class PerformanceProfile:
     django_workers: int
-    worker_concurrency: int
 
 
 PROFILES = {
     "low": PerformanceProfile(
         django_workers=1,
-        worker_concurrency=4,
     ),
     "medium": PerformanceProfile(
         django_workers=2,
-        worker_concurrency=8,
     ),
     "high": PerformanceProfile(
         django_workers=4,
-        worker_concurrency=16,
     ),
 }
 
@@ -80,9 +77,9 @@ def shell_env(target: str) -> dict[str, int]:
             }
         case "worker":
             return {
-                "WORKER_CONCURRENCY": get_int(
+                "WORKER_CONCURRENCY": get_int_default(
                     "WORKER_CONCURRENCY",
-                    "worker_concurrency",
+                    DEFAULT_WORKER_CONCURRENCY,
                 ),
             }
     raise ImproperlyConfigured("shell-env target must be one of: web, worker")

@@ -124,14 +124,15 @@ The mainnets above plus the Sepolia and Nile testnets are preloaded; Avalanche, 
 
 Recommended server profiles (set `PERFORMANCE` in `.env`, default `low`):
 
-| Performance mode | Hardware | EVM chain capacity | Django processes | Business task concurrency |
-|:-------:|:-------:|:-----------:|:----------------:|:-------------------------:|
-| low | 1 CPU / 2 GB | 2 – 3 EVM chains | 1 | 4 |
-| medium | 4 CPU / 8 GB | 8 – 15 EVM chains | 2 | 8 |
-| high | 8 CPU / 16 GB | 15 – 30 EVM chains | 4 | 16 |
+| Performance mode | Hardware | EVM chain capacity | Django processes |
+|:-------:|:-------:|:-----------:|:----------------:|
+| low | 1 CPU / 2 GB | 2 – 3 EVM chains | 1 |
+| medium | 4 CPU / 8 GB | 8 – 15 EVM chains | 2 |
+| high | 8 CPU / 16 GB | 15 – 30 EVM chains | 4 |
 
 Production Gunicorn uses a fixed 4 request threads per Django process, providing 4 / 8 / 16 concurrent Web request slots across the profiles.
-Override `GUNICORN_WORKERS` and `WORKER_CONCURRENCY` to adjust the process count and business task concurrency independently; the thread count is no longer configurable.
+`PERFORMANCE` only controls the Django process count, which can be overridden with `GUNICORN_WORKERS`; the thread count is no longer configurable.
+Business task concurrency defaults to 16 independently of the profile. Override it with `WORKER_CONCURRENCY` in both production and development.
 These are deployment guidelines; actual capacity depends on RPC response times, request load, and database resources.
 
 ### 1. Get the code and generate the config
