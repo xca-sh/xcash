@@ -3953,7 +3953,7 @@ class TronCollectScheduleExecuteTests(TestCase):
             self.patch_collectable_balance(),
         ):
             get_current.return_value.wallet.get_address.return_value = self.sender
-            created = VaultSlotCollectSchedule.execute_due()
+            created = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created, 0)
         schedule.refresh_from_db()
@@ -4028,7 +4028,7 @@ class TronCollectScheduleExecuteTests(TestCase):
             self.patch_collectable_balance(),
         ):
             get_current.return_value.wallet.get_address.return_value = self.sender
-            created = VaultSlotCollectSchedule.execute_due()
+            created = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created, 0)
         usdt_schedule.refresh_from_db()
@@ -4054,7 +4054,7 @@ class TronCollectScheduleExecuteTests(TestCase):
                 "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
                 return_value=SimpleNamespace(value=1),
             ):
-                created = VaultSlotCollectSchedule.execute_due()
+                created = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created, 1)
         schedule.refresh_from_db()
@@ -4081,7 +4081,7 @@ class TronCollectScheduleExecuteTests(TestCase):
             "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
             return_value=None,
         ):
-            created = VaultSlotCollectSchedule.execute_due()
+            created = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created, 0)
         schedule.refresh_from_db()
@@ -4100,7 +4100,7 @@ class TronCollectScheduleExecuteTests(TestCase):
             "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
             return_value=SimpleNamespace(value=0),
         ):
-            created = VaultSlotCollectSchedule.execute_due()
+            created = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created, 0)
         self.assertFalse(
@@ -4111,7 +4111,7 @@ class TronCollectScheduleExecuteTests(TestCase):
     def test_execute_due_isolates_broken_schedule_and_continues_batch(
         self, is_contract
     ):
-        # execute_due 是所有链共享的唯一归集派发入口且按 due_at 升序取批：
+        # dispatch_due_collects 是所有链共享的唯一归集派发入口且按 due_at 升序取批：
         # 单条计划抛出非预期异常（此处走真实缺口路径——价格数据形态损坏，
         # Decimal(None) 抛 TypeError 而非 PriceUnavailableError）时必须退避
         # 该计划并继续消费批次，否则它每轮都在批次头部中断，饿死其后所有
@@ -4144,7 +4144,7 @@ class TronCollectScheduleExecuteTests(TestCase):
             patch("tron.vault_slots.SystemWallet.get_current") as get_current,
         ):
             get_current.return_value.wallet.get_address.return_value = self.sender
-            created = VaultSlotCollectSchedule.execute_due()
+            created = VaultSlotCollectSchedule.dispatch_due_collects()
 
         # 损坏计划被退避而非中断整批：健康计划照常建任务。
         self.assertEqual(created, 1)
@@ -4165,7 +4165,7 @@ class TronCollectScheduleExecuteTests(TestCase):
                 "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
                 return_value=SimpleNamespace(value=1),
             ):
-                VaultSlotCollectSchedule.execute_due()
+                VaultSlotCollectSchedule.dispatch_due_collects()
             first.refresh_from_db()
             self.assertIsNotNone(first.tx_task_id)
 
@@ -4175,7 +4175,7 @@ class TronCollectScheduleExecuteTests(TestCase):
                 "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
                 return_value=SimpleNamespace(value=1),
             ):
-                created = VaultSlotCollectSchedule.execute_due()
+                created = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created, 1)
         second.refresh_from_db()
@@ -4196,7 +4196,7 @@ class TronCollectScheduleExecuteTests(TestCase):
             ),
         ):
             get_current.return_value.wallet.get_address.return_value = self.sender
-            created = VaultSlotCollectSchedule.execute_due()
+            created = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created, 0)
         self.assertFalse(

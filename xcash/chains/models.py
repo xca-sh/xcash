@@ -1176,9 +1176,9 @@ class VaultSlotCollectSchedule(models.Model):
     def defer_retry(self) -> None:
         """把计划推迟到退避窗口后重试。
 
-        execute_due 按 due_at 升序取批（limit 封顶），失败计划若不推迟会恒占
+        dispatch_due_collects 按 due_at 升序取批（limit 封顶），失败计划若不推迟会恒占
         批次头部；同因失败的计划一旦攒满 limit 个，所有链的归集调度都会被饿死。
-        execute_one_due 在 RPC 前置检查之前即调用本方法作为租约；用条件更新只推迟
+        try_dispatch_collect 在 RPC 前置检查之前即调用本方法作为租约；用条件更新只推迟
         仍未绑定任务的行，避免覆盖并发路径刚完成绑定的计划。
         """
         due_at = timezone.now() + self.RETRY_BACKOFF
@@ -1227,7 +1227,9 @@ class VaultSlotCollectSchedule(models.Model):
         )
 
     @classmethod
-    def execute_due(cls, *, limit: int = 32, deadline: float | None = None) -> int:
+    def dispatch_due_collects(
+        cls, *, limit: int = 32, deadline: float | None = None
+    ) -> int:
         """执行到期的归集计划，返回成功建任务的条数。
 
         部署判活与余额刷新都要等链上 RPC，绝不能放在持有行锁的批量事务里：
@@ -1256,9 +1258,9 @@ class VaultSlotCollectSchedule(models.Model):
                 )
                 break
             try:
-                created_count += cls.execute_one_due(pk)
+                created_count += cls.try_dispatch_collect(pk)
             except Exception as exc:  # noqa: BLE001
-                # execute_due 是所有链共享的唯一归集派发入口且按 due_at 升序取批；
+                # dispatch_due_collects 是所有链共享的唯一归集派发入口且按 due_at 升序取批；
                 # 单条计划的确定性异常（如价格数据形态损坏）若不退避，会每轮在批次
                 # 头部原地中断，饿死其后所有链的归集调度。条件更新只推迟仍未绑定
                 # 任务的计划，避免覆盖并发路径刚完成的绑定。
@@ -1274,8 +1276,12 @@ class VaultSlotCollectSchedule(models.Model):
         return created_count
 
     @classmethod
-    def execute_one_due(cls, pk: int) -> int:
-        """无锁执行单条到期计划的 RPC 前置检查，短事务内建任务并绑定。"""
+    def try_dispatch_collect(cls, pk: int) -> bool:
+        """尝试为单条到期计划派发归集交易，返回是否建成并绑定了链上任务。
+
+        无锁完成余额、粉尘阈值、部署闸门等 RPC 前置检查，任一不满足即返回 False；
+        全部通过后才在短事务内建任务并绑定。
+        """
         from chains.vault_slot_balances import refresh_vault_slot_balance_safely
         from chains.vault_slots import can_create_collect_tx_task
 
@@ -1290,10 +1296,10 @@ class VaultSlotCollectSchedule(models.Model):
             .first()
         )
         if schedule is None:
-            return 0
+            return False
         # 租约：任何链上 RPC 之前先把 due_at 推后一个退避窗口。下面的部署判活、余额刷新、
         # gas 估算在节点挂起时可能卡到看门狗退出进程，来不及在失败分支退避；
-        # 若不预先推后，该计划会恒占 execute_due 批次头部，每轮都卡在同一条挂起链上，
+        # 若不预先推后，该计划会恒占 dispatch_due_collects 批次头部，每轮都卡在同一条挂起链上，
         # 饿死所有链的归集。成功绑定任务后 due_at 不再有意义，零余额/粉尘按原逻辑删除
         # 计划，其余提前返回都已处在退避窗口内，无需再逐个分支退避。
         schedule.defer_retry()
@@ -1307,22 +1313,22 @@ class VaultSlotCollectSchedule(models.Model):
             reason="before_collect",
         )
         if balance is None:
-            return 0
+            return False
         if balance.value <= 0:
             # 条件删除：仅在计划仍未绑定任务时释放该 pending 槽位。
             cls.objects.filter(pk=pk, tx_task__isnull=True).delete()
-            return 0
+            return False
         if not cls.balance_worth_reaches_collect_threshold(
             schedule=schedule,
             balance=balance,
         ):
-            return 0
+            return False
         was_deployed = schedule.vault_slot.is_deployed
         if not can_create_collect_tx_task(
             chain=schedule.chain,
             slot=schedule.vault_slot,
         ):
-            return 0
+            return False
         if not was_deployed:
             # 部署闸门当场确认部署时会经 expedite_pending_collects 把本计划 due_at
             # 拨回当前，其后还有 gas 估算 RPC，需续租。
@@ -1355,7 +1361,7 @@ class VaultSlotCollectSchedule(models.Model):
                 if locked is None:
                     # 并发执行者已抢先绑定，或计划刚被删除；留痕以便与「静默不归集」区分。
                     logger.debug("VaultSlot 归集计划已被并发处理，跳过", schedule_id=pk)
-                    return 0
+                    return False
                 tx_task = locked.create_tx_task(collect_gas_hint=collect_gas_hint)
                 locked.tx_task = tx_task
                 locked.save(update_fields=["tx_task", "updated_at"])
@@ -1366,8 +1372,8 @@ class VaultSlotCollectSchedule(models.Model):
                 schedule_id=pk,
                 error=str(exc),
             )
-            return 0
-        return 1
+            return False
+        return True
 
     @classmethod
     def balance_worth_reaches_collect_threshold(
@@ -1632,7 +1638,7 @@ class Transfer(models.Model):
         # 事务内：RPC 慢/故障会让行锁与 DB 连接被整段占用，拖垮确认吞吐与业务入账。
         # 挪到事务提交后执行——此时行锁已释放，刷新自身在 refresh_vault_slot_balance
         # 内另开短事务对 VaultSlot 行加锁，语义不受影响；归集调度不消费此快照，
-        # execute_one_due 归集前会再次按链上真值刷新余额。
+        # try_dispatch_collect 归集前会再次按链上真值刷新余额。
         db_transaction.on_commit(self._refresh_vault_slot_balances)
 
     @db_transaction.atomic

@@ -350,7 +350,7 @@ def expedite_pending_collects(*, slot_pk: int) -> int:
     """部署确认后把该槽位 pending 的归集计划拨到当前时间,免等退避窗口。
 
     未部署槽位的归集会被前置闸门 defer_retry 推迟(最长 10 分钟);部署一确认就把
-    due_at 拨回当前,下一轮 execute_due 立即清扫。走「归集触发部署」路径时聚合
+    due_at 拨回当前,下一轮 dispatch_due_collects 立即清扫。走「归集触发部署」路径时聚合
     窗口在部署调度前已自然走完,不受影响;仅 EVM 原生预部署路径上,若入账恰好
     出现在部署确认前的极窄窗口内,首笔归集会提前一次,代价只是一笔小额清扫。
     """

@@ -1675,7 +1675,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=SimpleNamespace(value=1),
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 1)
         schedule.refresh_from_db()
@@ -1715,7 +1715,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=Decimal("0"),
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 0)
         schedule.refresh_from_db()
@@ -1761,7 +1761,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ),
             patch("chains.vault_slots.schedule_deploy") as schedule_deploy_mock,
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 0)
         schedule_deploy_mock.assert_not_called()
@@ -1774,7 +1774,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     def test_deploy_confirmation_expedites_deferred_collect_schedule(self):
         # 部署确认翻转 is_deployed 时,把被退避的 pending 归集计划拨回当前时间,
-        # 让下一轮 execute_due 立即归集,而不是干等最长 10 分钟退避。
+        # 让下一轮 dispatch_due_collects 立即归集,而不是干等最长 10 分钟退避。
         from chains.vault_slots import mark_deployed_by_task
 
         slot = self._create_vault_slot()
@@ -1839,7 +1839,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=SimpleNamespace(value=Decimal("1")),
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 1)
         schedule.refresh_from_db()
@@ -1867,7 +1867,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=SimpleNamespace(value=0),
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 0)
         self.assertFalse(
@@ -1897,7 +1897,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=None,
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 0)
         schedule.refresh_from_db()
@@ -1927,7 +1927,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=SimpleNamespace(value=1),
             ),
         ):
-            VaultSlotCollectSchedule.execute_due()
+            VaultSlotCollectSchedule.dispatch_due_collects()
             new_schedule = DepositService.schedule_collect_for_deposit(
                 second_deposit.pk
             )
@@ -1962,7 +1962,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=SimpleNamespace(value=1),
             ),
         ):
-            VaultSlotCollectSchedule.execute_due()
+            VaultSlotCollectSchedule.dispatch_due_collects()
             first.refresh_from_db()
             self.assertIsNotNone(first.tx_task_id)
             self.assertEqual(first.tx_task.status, TxTaskStatus.QUEUED)
@@ -1978,7 +1978,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=SimpleNamespace(value=1),
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 1)
         second.refresh_from_db()
@@ -2037,14 +2037,14 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=SimpleNamespace(value=1),
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 1)
         first.refresh_from_db()
         second.refresh_from_db()
         self.assertIsNone(first.tx_task_id)
         self.assertIsNotNone(second.tx_task_id)
-        # 失败计划必须退避，否则恒占 execute_due 批次头部。
+        # 失败计划必须退避，否则恒占 dispatch_due_collects 批次头部。
         self.assertGreater(first.due_at, timezone.now())
 
     def test_process_killed_mid_rpc_leases_schedule_and_unblocks_other_schedules(
@@ -2086,11 +2086,11 @@ class VaultSlotAddressSchedulingTests(TestCase):
             ),
         ):
             with self.assertRaises(ProcessKilledError):
-                VaultSlotCollectSchedule.execute_due()
+                VaultSlotCollectSchedule.dispatch_due_collects()
             stuck.refresh_from_db()
             self.assertGreater(stuck.due_at, timezone.now())
 
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 1)
         stuck.refresh_from_db()
@@ -2125,7 +2125,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=SimpleNamespace(value=1),
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due(
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects(
                 deadline=time.monotonic() - 1
             )
             first.refresh_from_db()
@@ -2135,7 +2135,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             self.assertIsNone(second.tx_task_id)
             self.assertLessEqual(second.due_at, timezone.now())
 
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 1)
         second.refresh_from_db()
@@ -2183,10 +2183,10 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=SimpleNamespace(value=1),
             ),
         ):
-            self.assertEqual(VaultSlotCollectSchedule.execute_due(), 0)
+            self.assertEqual(VaultSlotCollectSchedule.dispatch_due_collects(), 0)
             self.assertEqual(create_tx_task_mock.call_count, 1)
             # 退避期内的后续批次不应再捞到该计划，把名额让给其它计划。
-            self.assertEqual(VaultSlotCollectSchedule.execute_due(), 0)
+            self.assertEqual(VaultSlotCollectSchedule.dispatch_due_collects(), 0)
             self.assertEqual(create_tx_task_mock.call_count, 1)
 
         schedule.refresh_from_db()
@@ -2211,7 +2211,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=None,
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 0)
         schedule.refresh_from_db()
@@ -2236,7 +2236,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 return_value=False,
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 0)
         schedule.refresh_from_db()
@@ -2536,7 +2536,7 @@ class VaultSlotCollectMinWorthThresholdTests(TestCase):
                 return_value=SimpleNamespace(value=1, amount=Decimal("2")),
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 0)
         self.assertFalse(
@@ -2560,7 +2560,7 @@ class VaultSlotCollectMinWorthThresholdTests(TestCase):
                 return_value=SimpleNamespace(value=1, amount=Decimal("2")),
             ),
         ):
-            created_count = VaultSlotCollectSchedule.execute_due()
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
 
         self.assertEqual(created_count, 0)
         schedule.refresh_from_db()

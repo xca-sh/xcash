@@ -243,7 +243,7 @@ def execute_due_vault_slot_collect_schedules(
     *,
     timestamp: int | None = None,  # noqa: ARG001
 ) -> None:
-    created_count = VaultSlotCollectSchedule.execute_due(
+    created_count = VaultSlotCollectSchedule.dispatch_due_collects(
         deadline=step_deadline(budget_seconds=COLLECT_SCHEDULE_BUDGET_SECONDS)
     )
     if created_count:

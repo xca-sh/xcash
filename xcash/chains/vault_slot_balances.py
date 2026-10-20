@@ -183,13 +183,13 @@ def refresh_vault_slot_balance_for_collect_task(
 def balance_reaches_collect_threshold(balance: VaultSlotBalance) -> bool:
     """余额价值是否达到最小归集阈值（实时价现算）。
 
-    与 execute_one_due 的 balance_worth_reaches_collect_threshold 判据同源，供安全网
-    补建计划前复核，避免与 execute_one_due 就同一笔粉尘反复拉锯（建→删）：
+    与 try_dispatch_collect 的 balance_worth_reaches_collect_threshold 判据同源，供安全网
+    补建计划前复核，避免与 try_dispatch_collect 就同一笔粉尘反复拉锯（建→删）：
     - 阈值为 0 视为不限制，直接放行。
     - 用实时价现算，不用 balance.worth 快照：快照在缺价时降级为 0，会把正常金额
       误判成粉尘。
     - 缺价（PriceUnavailableError）无法判定粉尘，按“达到阈值”处理，让安全网照常补建，
-      由 execute_due 后续用实时价再决定归集或退避，不在这里丢弃余额。
+      由 dispatch_due_collects 后续用实时价再决定归集或退避，不在这里丢弃余额。
     """
     from core.runtime_settings import get_vault_slot_collect_min_worth_usd
     from currencies.models import PriceUnavailableError
@@ -279,9 +279,9 @@ def reconcile_vault_slot_collect_balance_gaps(
                 )
                 continue
 
-            # 实时价复核（粉尘判定的唯一权威，与 execute_one_due 判据同源）：低于
-            # 阈值的粉尘不补建计划，打断与 execute_one_due 的建删拉锯；缺价按
-            # “达到阈值”放行，交由 execute_due 复核。跳过时回写实时 worth 快照并
+            # 实时价复核（粉尘判定的唯一权威，与 try_dispatch_collect 判据同源）：低于
+            # 阈值的粉尘不补建计划，打断与 try_dispatch_collect 的建删拉锯；缺价按
+            # “达到阈值”放行，交由 dispatch_due_collects 复核。跳过时回写实时 worth 快照并
             # 推进 updated_at 轮转到队尾——否则粉尘恒占批次头部饿死后续缺口；
             # 涨价后轮回队首时会被本复核重新放行，粉尘不会被永久排除。
             if not balance_reaches_collect_threshold(balance):

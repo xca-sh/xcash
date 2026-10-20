@@ -79,7 +79,7 @@ def create_deploy_tx_task(*, slot: VaultSlot) -> TxTask:
 def estimate_collect_gas(*, chain: Chain, crypto, slot: VaultSlot) -> int | None:
     """按链上 estimate_gas 估算归集 gas 并上浮；无法估算/失败时返回 None（用静态默认）。
 
-    必须在调度短事务与热钱包 nonce 锁之外调用（execute_one_due 的 RPC 前置区），
+    必须在调度短事务与热钱包 nonce 锁之外调用（try_dispatch_collect 的 RPC 前置区），
     避免把 estimate RPC 关进 DB 事务或全局热钱包锁。任何异常都吞掉回退静态默认，
     绝不因估算失败阻断归集本身。
     """

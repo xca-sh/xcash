@@ -1341,7 +1341,7 @@ class VaultSlotReceivedFlagTests(TestCase):
 
     def test_reconcile_skips_sub_threshold_dust_balance_gap(self):
         # 粉尘余额（实时价 < 最小归集阈值）不应被安全网补建计划，否则会与
-        # execute_one_due 的粉尘删除逻辑反复拉锯（建→删）永不收敛。worth 快照留 0
+        # try_dispatch_collect 的粉尘删除逻辑反复拉锯（建→删）永不收敛。worth 快照留 0
         # （模拟缺价降级或首次未估值），走 reconcile 的实时价复核路径。
         from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
 
