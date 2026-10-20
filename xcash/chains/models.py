@@ -3,9 +3,7 @@ from __future__ import annotations
 import os
 from datetime import timedelta
 from functools import cached_property
-from ipaddress import ip_address
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
 import environ
 import structlog
@@ -171,25 +169,6 @@ class Chain(models.Model):
     @property
     def icon(self) -> str:
         return self.spec.icon
-
-    @property
-    def rpc_domain_name(self) -> str:
-        rpc = self.rpc.strip()
-        if not rpc:
-            return ""
-
-        parsed = urlparse(rpc)
-        host = parsed.hostname or urlparse(f"//{rpc}").hostname
-        if not host:
-            return ""
-
-        try:
-            ip_address(host)
-        except ValueError:
-            labels = [label for label in host.strip(".").split(".") if label]
-            name = labels[-2] if len(labels) >= 2 else labels[0]
-            return name[:1].upper() + name[1:]
-        return host
 
     @property
     def chain_id(self) -> int | None:

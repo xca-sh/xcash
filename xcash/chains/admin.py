@@ -1,13 +1,14 @@
 from django import forms
 from django.contrib import admin
 from django.contrib import messages
+from django.urls import reverse
+from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 from unfold.contrib.filters.admin import ChoicesDropdownFilter
 from unfold.contrib.filters.admin import RangeDateTimeFilter
 from unfold.contrib.filters.admin import RelatedDropdownFilter
 from unfold.decorators import display
 
-from chains.constants import ChainCode
 from chains.models import Address
 from chains.models import Chain
 from chains.models import ChainType
@@ -26,6 +27,8 @@ from common import admin_display as fmt
 from common.admin import ModelAdmin
 from common.admin import ReadOnlyModelAdmin
 from common.admin import TabularInline
+from common.admin_scan_cursor import SCAN_LAG_LABELS
+from common.admin_scan_cursor import scan_lag_state
 
 # Register your models here.
 
@@ -45,30 +48,72 @@ class ChainAdminForm(forms.ModelForm):
         fields = "__all__"  # noqa: DJ007
 
 
+# 各链族扫描游标挂在 Chain 上的反向关系名与后台详情路由。按字符串引用，
+# 保持 chains 不 import evm / tron（分层契约见 pyproject.toml 的 [tool.importlinter]）。
+SCAN_CURSOR_RELATIONS = {
+    ChainType.EVM: ("evm_scan_cursors", "admin:evm_evmscancursor_change"),
+    ChainType.TRON: ("tron_watch_cursors", "admin:tron_tronwatchcursor_change"),
+}
+
+SCANNER_STATE_LABELS = {
+    **SCAN_LAG_LABELS,
+    "missing": "info",
+    "paused": "warning",
+    "error": "danger",
+}
+
+
 @admin.register(Chain)
 class ChainAdmin(ModelAdmin):
     form = ChainAdminForm
     ordering = ("is_testnet", "sort_order", "code")
-    # 字段瘦身后，type / native_coin / confirm_block_count 已转为 property，
-    # 通过 display 方法暴露到列表页，方便运维一眼看清链配置。
     list_display = (
         "display_identity",
-        "type",
-        "environment_display",
         "native_coin_display",
-        "rpc_domain_display",
-        "confirm_block_count_display",
         "display_latest_block",
-        "sort_order",
+        "display_scanner_state",
+        "display_scanned_block",
+        "display_scan_gap",
         "active",
     )
-    list_editable = (
-        "sort_order",
-        "active",
-    )
+    list_editable = ("active",)
     list_filter = ("active", "is_testnet")
     search_fields = ("code",)
     search_help_text = _("支持按链代码搜索")
+    readonly_fields = (
+        "display_scanner_state",
+        "display_scanned_block",
+        "display_latest_block",
+        "display_scan_gap",
+        "display_scanner_error",
+        "display_scanner_error_at",
+        "display_scanner_link",
+    )
+
+    def get_queryset(self, request):
+        # 列表页每行都要读扫描游标，预取避免 N+1。
+        return (
+            super()
+            .get_queryset(request)
+            .prefetch_related(
+                *(relation for relation, _url in SCAN_CURSOR_RELATIONS.values())
+            )
+        )
+
+    @staticmethod
+    def scan_cursor(obj: Chain):
+        """返回本链的扫描游标；每条链至多一个，尚未初始化时为 None。"""
+        relation = SCAN_CURSOR_RELATIONS.get(obj.type)
+        if relation is None or obj.pk is None:
+            return None
+        # 走 .all() 才能命中 get_queryset 的预取缓存。
+        return next(iter(getattr(obj, relation[0]).all()), None)
+
+    def scan_gap(self, obj: Chain) -> int | None:
+        cursor = self.scan_cursor(obj)
+        if cursor is None:
+            return None
+        return max(obj.latest_block_number - cursor.last_scanned_block, 0)
 
     @display(description=_("链"), ordering="code", header=True)
     def display_identity(self, obj: Chain) -> tuple:
@@ -78,36 +123,60 @@ class ChainAdmin(ModelAdmin):
     def native_coin_display(self, obj: Chain) -> str:
         return obj.spec.native_coin_symbol
 
-    @display(
-        ordering="is_testnet",
-        description=_("环境"),
-        label={
-            "mainnet": "success",
-            "testnet": "warning",
-            "local": "info",
-        },
-    )
-    def environment_display(self, obj: Chain) -> str:
-        if obj.code == ChainCode.Anvil:
-            return ("local", _("本地"))
-        return ("testnet", _("测试网")) if obj.is_testnet else ("mainnet", _("主网"))
-
-    @display(description=_("RPC 域名"))
-    def rpc_domain_display(self, obj: Chain) -> str:
-        return obj.rpc_domain_name or fmt.empty()
-
-    @display(description=_("确认数"))
-    def confirm_block_count_display(self, obj: Chain) -> int:
-        return obj.confirm_block_count
-
     @display(description=_("最新区块"), ordering="latest_block_number")
     def display_latest_block(self, obj: Chain):
         return fmt.number(obj.latest_block_number)
+
+    @display(description=_("扫描器"), label=SCANNER_STATE_LABELS)
+    def display_scanner_state(self, obj: Chain) -> tuple:
+        # 优先级：未初始化 > 已暂停 > 最近报错 > 积压级别，取最需要运维关注的一项。
+        cursor = self.scan_cursor(obj)
+        if cursor is None:
+            return ("missing", _("未初始化"))
+        if not cursor.enabled:
+            return ("paused", _("已暂停"))
+        if cursor.last_error:
+            return ("error", _("异常"))
+        return scan_lag_state(self.scan_gap(obj))
+
+    @display(description=_("已扫描到"))
+    def display_scanned_block(self, obj: Chain):
+        cursor = self.scan_cursor(obj)
+        return fmt.number(cursor.last_scanned_block if cursor else None)
+
+    @display(description=_("落后区块"))
+    def display_scan_gap(self, obj: Chain):
+        return fmt.number(self.scan_gap(obj))
+
+    @display(description=_("最近错误"))
+    def display_scanner_error(self, obj: Chain):
+        cursor = self.scan_cursor(obj)
+        return fmt.scroll_box(cursor.last_error if cursor else None)
+
+    @display(description=_("最近错误时间"))
+    def display_scanner_error_at(self, obj: Chain):
+        cursor = self.scan_cursor(obj)
+        if cursor is None or cursor.last_error_at is None:
+            return fmt.empty()
+        return cursor.last_error_at
+
+    @display(description=_("游标管理"))
+    def display_scanner_link(self, obj: Chain):
+        cursor = self.scan_cursor(obj)
+        if cursor is None:
+            return fmt.empty()
+        url = reverse(SCAN_CURSOR_RELATIONS[obj.type][1], args=[cursor.pk])
+        return format_html(
+            '<a class="text-primary-600 dark:text-primary-400" href="{}">{}</a>',
+            url,
+            _("启停 / 追平扫描游标"),
+        )
 
     base_fieldsets = (
         (
             _("基本信息"),
             {
+                "classes": ("tab",),
                 "fields": (
                     "code",
                     "sort_order",
@@ -123,17 +192,38 @@ class ChainAdmin(ModelAdmin):
         (
             "EVM",
             {
+                "classes": ("tab",),
                 "fields": (
                     "rpc",
                     "evm_log_max_block_range",
-                )
+                ),
             },
         ),
     )
     tron_fieldsets = (
         (
             "Tron",
-            {"fields": ("tron_api_key",)},
+            {
+                "classes": ("tab",),
+                "fields": ("tron_api_key",),
+            },
+        ),
+    )
+    scanner_fieldsets = (
+        (
+            _("扫描器"),
+            {
+                "classes": ("tab",),
+                "fields": (
+                    "display_scanner_state",
+                    "display_scanned_block",
+                    "display_latest_block",
+                    "display_scan_gap",
+                    "display_scanner_error",
+                    "display_scanner_error_at",
+                    "display_scanner_link",
+                ),
+            },
         ),
     )
 
@@ -145,9 +235,13 @@ class ChainAdmin(ModelAdmin):
                 *self.tron_fieldsets,
             )
         if obj.type == ChainType.EVM:
-            return (*self.base_fieldsets, *self.evm_fieldsets)
+            return (*self.base_fieldsets, *self.evm_fieldsets, *self.scanner_fieldsets)
         if obj.type == ChainType.TRON:
-            return (*self.base_fieldsets, *self.tron_fieldsets)
+            return (
+                *self.base_fieldsets,
+                *self.tron_fieldsets,
+                *self.scanner_fieldsets,
+            )
         return self.base_fieldsets
 
 

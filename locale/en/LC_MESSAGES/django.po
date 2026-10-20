@@ -2966,6 +2966,26 @@ msgstr "Duration(ms)"
 msgid "错误"
 msgstr "Parameter error"
 
+#: xcash/chains/admin.py
+msgid "扫描器"
+msgstr "Scanner"
+
+#: xcash/chains/admin.py
+msgid "未初始化"
+msgstr "Not Initialized"
+
+#: xcash/chains/admin.py
+msgid "已暂停"
+msgstr "Paused"
+
+#: xcash/chains/admin.py
+msgid "游标管理"
+msgstr "Cursor Management"
+
+#: xcash/chains/admin.py
+msgid "启停 / 追平扫描游标"
+msgstr "Enable / Pause / Sync Scan Cursor"
+
 #~| msgid "目标类型"
 #~ msgid "目标"
 #~ msgstr "Target"

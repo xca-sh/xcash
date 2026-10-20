@@ -201,6 +201,8 @@ SIDEBAR_UNFOLD = {
                 ],
             },
             {
+                # 公链配置、链上流水与各链族排障入口统一收在一组；扫描器状态已并入公链页，
+                # 钱包 / 派生地址 / 通用上链任务属于引擎内部数据，不再单独占菜单。
                 "title": _("区块链"),
                 "collapsible": False,
                 "items": [
@@ -215,24 +217,12 @@ SIDEBAR_UNFOLD = {
                         "link": reverse_lazy("admin:chains_transfer_changelist"),
                     },
                     {
-                        "title": _("上链任务"),
-                        "icon": "bolt",
-                        "link": reverse_lazy("admin:chains_txtask_changelist"),
-                    },
-                    {
                         "title": _("归集计划"),
                         "icon": "move_down",
                         "link": reverse_lazy(
                             "admin:chains_vaultslotcollectschedule_changelist"
                         ),
                     },
-                ],
-            },
-            {
-                # 链适配层：只有排障时才需要下钻到具体链的任务与游标，默认折叠。
-                "title": _("链适配"),
-                "collapsible": True,
-                "items": [
                     {
                         "title": _("EVM 上链任务"),
                         "icon": "bolt",
@@ -252,16 +242,6 @@ SIDEBAR_UNFOLD = {
                         "title": _("Tron 扫描游标"),
                         "icon": "radar",
                         "link": reverse_lazy("admin:tron_tronwatchcursor_changelist"),
-                    },
-                    {
-                        "title": _("钱包"),
-                        "icon": "wallet",
-                        "link": reverse_lazy("admin:chains_wallet_changelist"),
-                    },
-                    {
-                        "title": _("派生地址"),
-                        "icon": "key",
-                        "link": reverse_lazy("admin:chains_address_changelist"),
                     },
                 ],
             },

@@ -2879,6 +2879,26 @@ msgstr "耗时(ms)"
 msgid "错误"
 msgstr "错误"
 
+#: xcash/chains/admin.py
+msgid "扫描器"
+msgstr "扫描器"
+
+#: xcash/chains/admin.py
+msgid "未初始化"
+msgstr "未初始化"
+
+#: xcash/chains/admin.py
+msgid "已暂停"
+msgstr "已暂停"
+
+#: xcash/chains/admin.py
+msgid "游标管理"
+msgstr "游标管理"
+
+#: xcash/chains/admin.py
+msgid "启停 / 追平扫描游标"
+msgstr "启停 / 追平扫描游标"
+
 #~| msgid "目标类型"
 #~ msgid "目标"
 #~ msgstr "目标"
