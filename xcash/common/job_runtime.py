@@ -41,8 +41,10 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 # 单个任务的硬上限。最慢的批处理是「预算 + 一个单元」：reap 200s + Tron 终验约 50s；
-# 单任务最坏如 scan_operational_risks（十余条链的资源 RPC）约 210s。300s 覆盖全部现实
-# 路径，只有真正的挂死才会触发。compose 的 stop_grace_period 必须大于它。
+# scan_operational_risks 按「每条链每个 sender 一组」打资源 RPC：EVM 一组一两次，Tron
+# 一组至多 1 + 16 次（core.monitoring.TRON_RESOURCE_ESTIMATE_SAMPLE），与待发任务积压
+# 笔数无关。300s 覆盖全部现实路径，只有真正的挂死才会触发。compose 的
+# stop_grace_period 必须大于它。
 JOB_HARD_LIMIT_SECONDS = 300
 WATCHDOG_INTERVAL_SECONDS = 5
 WORKER_NAME = "xcash-worker"

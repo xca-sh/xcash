@@ -40,6 +40,7 @@ from core.default_data import ensure_local_chains
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from core.models import SystemSettings
 from core.models import SystemWallet
+from core.monitoring import TRON_RESOURCE_ESTIMATE_SAMPLE
 from core.monitoring import OperationalRiskService
 from core.runtime_settings import get_webhook_delivery_max_backoff_seconds
 from core.runtime_settings import get_webhook_delivery_max_retries
@@ -227,6 +228,10 @@ class OperationalRiskResourceTests(TestCase):
         self.assertEqual(alerts[0]["sender"], sender)
 
     def make_pending_tron_collect_task(self):
+        return self.make_pending_tron_collect_tasks(1)[0]
+
+    def make_pending_tron_collect_tasks(self, count):
+        """同一链、同一 sender 下排队 count 笔待广播归集任务。"""
         chain = make_tron_chain()
         wallet = Wallet.objects.create()
         sender = Address.objects.create(
@@ -237,21 +242,71 @@ class OperationalRiskResourceTests(TestCase):
             address_index=0,
             address="TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
         )
-        base_task = TxTask.objects.create(
-            sender=sender,
-            chain=chain,
-            tx_type=TxTaskType.VaultSlotCollect,
-            status=TxTaskStatus.QUEUED,
-        )
-        return TronTxTask.objects.create(
-            base_task=base_task,
-            sender=sender,
-            chain=chain,
-            to="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
-            function_selector="collect(address)",
-            parameter="0" * 64,
-            fee_limit=150_000_000,
-        )
+        tasks = []
+        for _ in range(count):
+            base_task = TxTask.objects.create(
+                sender=sender,
+                chain=chain,
+                tx_type=TxTaskType.VaultSlotCollect,
+                status=TxTaskStatus.QUEUED,
+            )
+            tasks.append(
+                TronTxTask.objects.create(
+                    base_task=base_task,
+                    sender=sender,
+                    chain=chain,
+                    to="TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb",
+                    function_selector="collect(address)",
+                    parameter="0" * 64,
+                    fee_limit=150_000_000,
+                )
+            )
+        return tasks
+
+    def check_tron_backlog(self, *, available_energy):
+        """同一 sender 积压 100 笔、每笔估算 100 能量（含安全边际 120）、带宽充足，
+        返回 (告警列表, 能量估算 RPC 次数)。"""
+        self.make_pending_tron_collect_tasks(100)
+        with (
+            patch("tron.client.TronHttpClient") as client_class,
+            patch(
+                "tron.resources.estimate_contract_call_energy", return_value=100
+            ) as estimate,
+        ):
+            client_class.return_value.get_account_resource.return_value = {
+                "EnergyLimit": available_energy,
+                "EnergyUsed": 0,
+                "freeNetLimit": 1_000_000,
+                "freeNetUsed": 0,
+            }
+            alerts = OperationalRiskService.tron_low_resource_alerts()
+        return alerts, estimate.call_count
+
+    def test_tron_backlog_with_insufficient_energy_alerts_with_bounded_estimates(self):
+        # 积压规模不能决定 RPC 次数：首笔需求就超过可用能量，结论已定，不再逐笔估算；
+        # 告警里的任务数与需求仍按全部积压报告。
+        alerts, estimate_calls = self.check_tron_backlog(available_energy=5)
+
+        self.assertLessEqual(estimate_calls, TRON_RESOURCE_ESTIMATE_SAMPLE)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["task_count"], 100)
+        self.assertEqual(alerts[0]["required_energy"], 120 * 100)
+
+    def test_tron_backlog_alerts_when_sample_fits_but_extrapolation_does_not(self):
+        # 前 16 笔共需 1920 能量，可用 5000 足够；但 100 笔外推需 12000，必须仍然告警，
+        # 证明只估算样本不会把超出样本的积压漏报。
+        alerts, estimate_calls = self.check_tron_backlog(available_energy=5_000)
+
+        self.assertEqual(estimate_calls, TRON_RESOURCE_ESTIMATE_SAMPLE)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["task_count"], 100)
+        self.assertEqual(alerts[0]["required_energy"], 120 * 100)
+
+    def test_tron_backlog_with_ample_resources_does_not_alert(self):
+        alerts, estimate_calls = self.check_tron_backlog(available_energy=1_000_000)
+
+        self.assertEqual(alerts, [])
+        self.assertLessEqual(estimate_calls, TRON_RESOURCE_ESTIMATE_SAMPLE)
 
     def test_tron_low_resource_alerts_when_energy_is_below_pending_queue(self):
         task = self.make_pending_tron_collect_task()

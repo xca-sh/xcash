@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections import defaultdict
 from typing import TYPE_CHECKING
@@ -32,6 +33,11 @@ SCAN_STALL_ALERT_AFTER_SECONDS = get_int_default(
     "SCAN_STALL_ALERT_AFTER_SECONDS",
     300,
 )
+
+# Tron 资源巡检每个 sender 至多估算的任务笔数（每笔一次能量估算 RPC）。一组 RPC 至多
+# 1 + 16 次、与积压笔数无关，按正常单次 0.5～2.5s 计约 9～43s；待发任务多为同类归集，
+# 16 笔足以反映平均能耗，其余线性外推，见 tron_low_resource_alerts。
+TRON_RESOURCE_ESTIMATE_SAMPLE = 16
 
 # EVM/Tron 资源水位需要多链实时 RPC，badge 等高频展示入口不能在每次页面渲染时
 # 触发。统一由异步巡检 scan_operational_risks 把计数写入缓存，展示层只读缓存。
@@ -267,9 +273,19 @@ class OperationalRiskService:
                     break
                 continue
 
+            # 每次能量估算都是一次节点 RPC。积压上百笔时逐笔估算会让巡检耗时随积压线性
+            # 增长，超过 worker 看门狗硬上限后整个 worker 退出、下一周期再从头估算，形成
+            # 崩溃循环。所以每个 sender 只估算队首至多 TRON_RESOURCE_ESTIMATE_SAMPLE 笔：
+            # 累计需求一旦超过可用资源，告警结论已定，立即停止；其余未估算的任务按样本
+            # 平均需求线性外推。RPC 次数因此至多 1 + 样本数，与积压规模无关。
+            current_energy = available_energy(resource)
+            current_bandwidth = available_bandwidth(resource)
             required_energy = 0
             required_bandwidth = 0
-            for task in group_tasks:
+            attempted_count = 0
+            estimated_count = 0
+            for task in group_tasks[:TRON_RESOURCE_ESTIMATE_SAMPLE]:
+                attempted_count += 1
                 try:
                     estimated_energy = estimate_contract_call_energy(
                         client=client,
@@ -287,6 +303,7 @@ class OperationalRiskService:
                         error=str(exc),
                     )
                     continue
+                estimated_count += 1
                 required_energy += with_safety_margin(estimated_energy)
                 if task.signed_payload:
                     required_bandwidth += (
@@ -295,9 +312,23 @@ class OperationalRiskService:
                     )
                 else:
                     required_bandwidth += bandwidth_safety_bytes()
+                if (
+                    current_energy < required_energy
+                    or current_bandwidth < required_bandwidth
+                ):
+                    break
 
-            current_energy = available_energy(resource)
-            current_bandwidth = available_bandwidth(resource)
+            # 估算失败的任务与原先一样不计需求（revert 的任务广播时会被跳过）；没轮到
+            # 估算的任务按成功样本的平均需求外推。样本全部失败时没有可用均值，不外推。
+            remaining_count = len(group_tasks) - attempted_count
+            if remaining_count and estimated_count:
+                required_energy += math.ceil(
+                    required_energy * remaining_count / estimated_count
+                )
+                required_bandwidth += math.ceil(
+                    required_bandwidth * remaining_count / estimated_count
+                )
+
             if (
                 current_energy < required_energy
                 or current_bandwidth < required_bandwidth
