@@ -1,8 +1,9 @@
 import socket
+import threading
 import time
-from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import httpx
 from django.core.cache import cache
 from django.test import SimpleTestCase
 from django.test import TestCase
@@ -24,6 +25,16 @@ from webhooks.tasks import reap_stalled_events
 from webhooks.tasks import resolve_addresses
 from webhooks.tasks import safe_delivery_target
 from webhooks.tasks import schedule_events
+
+
+def patch_delivery_transport(handler):
+    """把投递用的 AsyncClient 换成走 MockTransport 的真实客户端，构造参数照常透传。"""
+    real_async_client = httpx.AsyncClient
+
+    def build_client(**kwargs):
+        return real_async_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    return patch("webhooks.tasks.httpx.AsyncClient", side_effect=build_client)
 
 
 def _make_project(**kwargs):
@@ -585,21 +596,10 @@ class WebhookResponseMatchingTests(TestCase):
     def _run(self, resp_text: str, expected: str = "success") -> bool:
         from webhooks.tasks import _execute_http_delivery
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.headers = {}
-        mock_response.iter_bytes.return_value = iter([resp_text.encode("utf-8")])
+        def handler(request):
+            return httpx.Response(200, content=resp_text.encode("utf-8"))
 
-        mock_stream_ctx = MagicMock()
-        mock_stream_ctx.__enter__.return_value = mock_response
-        mock_stream_ctx.__exit__.return_value = False
-
-        mock_client = MagicMock()
-        mock_client.__enter__.return_value = mock_client
-        mock_client.__exit__.return_value = False
-        mock_client.stream.return_value = mock_stream_ctx
-
-        with patch("webhooks.tasks.httpx.Client", return_value=mock_client):
+        with patch_delivery_transport(handler):
             ok, *_ = _execute_http_delivery(
                 request_url="https://example.com",
                 method="POST",
@@ -640,24 +640,16 @@ class WebhookResponseMatchingTests(TestCase):
         from webhooks.tasks import _execute_http_delivery
 
         huge = b"x" * (MAX_RESPONSE_BYTES * 2)
-        # 分块返回，验证迭代过程中能在到达上限时正确停止
-        chunks = [huge[i : i + 8192] for i in range(0, len(huge), 8192)]
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.headers = {}
-        mock_response.iter_bytes.return_value = iter(chunks)
+        async def chunks():
+            # 分块返回，验证迭代过程中能在到达上限时正确停止
+            for i in range(0, len(huge), 8192):
+                yield huge[i : i + 8192]
 
-        mock_stream_ctx = MagicMock()
-        mock_stream_ctx.__enter__.return_value = mock_response
-        mock_stream_ctx.__exit__.return_value = False
+        def handler(request):
+            return httpx.Response(200, content=chunks())
 
-        mock_client = MagicMock()
-        mock_client.__enter__.return_value = mock_client
-        mock_client.__exit__.return_value = False
-        mock_client.stream.return_value = mock_stream_ctx
-
-        with patch("webhooks.tasks.httpx.Client", return_value=mock_client):
+        with patch_delivery_transport(handler):
             ok, _, _, resp_text, _, _ = _execute_http_delivery(
                 request_url="https://example.com",
                 method="POST",
@@ -986,16 +978,14 @@ class WebhookDeliveryClientIsolationTests(SimpleTestCase):
         from common import http_client
         from webhooks.tasks import _execute_http_delivery
 
-        mock_response = MagicMock(status_code=200, headers={})
-        mock_response.iter_bytes.return_value = iter([b"ok"])
-        mock_client = MagicMock()
-        mock_client.__enter__.return_value = mock_client
-        mock_client.stream.return_value.__enter__.return_value = mock_response
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, content=b"ok")
 
         with (
-            patch(
-                "webhooks.tasks.httpx.Client", return_value=mock_client
-            ) as client_cls,
+            patch_delivery_transport(handler) as client_cls,
             patch.object(http_client, "shared_client") as shared_client_mock,
         ):
             ok, *_ = _execute_http_delivery(
@@ -1010,7 +1000,78 @@ class WebhookDeliveryClientIsolationTests(SimpleTestCase):
         client_cls.assert_called_once()
         self.assertIs(client_cls.call_args.kwargs["verify"], http_client.ssl_context())
         # 证书仍按原主机名校验：SNI 走 extensions，连接目标改成已校验 IP。
-        stream_kwargs = mock_client.stream.call_args.kwargs
-        self.assertEqual(
-            stream_kwargs["extensions"], {"sni_hostname": "merchant.example"}
+        (request,) = requests
+        self.assertEqual(request.url.host, "93.184.216.34")
+        self.assertEqual(request.headers["Host"], "merchant.example")
+        self.assertEqual(request.extensions["sni_hostname"], "merchant.example")
+
+
+def start_slow_drip_server(test_case) -> int:
+    """本地慢滴 HTTP 桩：回完状态行后每 0.2s 吐 1 字节头部，永不结束响应。
+
+    每次读都能在 httpx 的单次超时内收到数据，只有总时限能中止这类投递。
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    stop = threading.Event()
+
+    def serve():
+        try:
+            conn, _ = server.accept()
+        except OSError:
+            return
+        with conn:
+            conn.recv(65536)
+            try:
+                conn.sendall(b"HTTP/1.1 200 OK\r\n")
+                while not stop.is_set():
+                    conn.sendall(b"X")
+                    stop.wait(0.2)
+            except OSError:
+                return
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+
+    def shutdown():
+        stop.set()
+        server.close()
+        thread.join(timeout=5)
+
+    test_case.addCleanup(shutdown)
+    return server.getsockname()[1]
+
+
+class WebhookDeliveryTotalTimeoutTests(TestCase):
+    """商户慢滴响应必须被总时限中止，不能无限占用执行槽位。"""
+
+    def tearDown(self):
+        cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
+        cache.clear()
+        super().tearDown()
+
+    @override_settings(WEBHOOK_ALLOW_INTERNAL_TARGETS=True)
+    @patch("webhooks.tasks.WEBHOOK_TOTAL_TIMEOUT", 1)
+    def test_slow_drip_response_is_aborted_and_suspended_with_backoff(self):
+        port = start_slow_drip_server(self)
+        event = WebhookEvent.objects.create(
+            project=_make_project(webhook=f"http://127.0.0.1:{port}/hook"),
+            payload={"type": "test"},
         )
+
+        started = time.monotonic()
+        deliver_event(event.pk)
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 4)
+        attempt = event.attempts.get()
+        self.assertFalse(attempt.ok)
+        self.assertIsNone(attempt.response_status)
+        self.assertTrue(attempt.error.startswith("TotalTimeout"))
+        event.refresh_from_db()
+        # 计为一次失败尝试，按退避挂起等待下一轮调度，而不是终局。
+        self.assertEqual(event.status, WebhookEvent.Status.PENDING)
+        self.assertEqual(event.attempt_count, 1)
+        self.assertGreater(event.schedule_locked_until, timezone.now())
+        self.assertIsNone(event.delivery_locked_until)

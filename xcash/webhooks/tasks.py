@@ -1,9 +1,11 @@
+import asyncio
 import ipaddress
 import json
 import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from dataclasses import dataclass
 from datetime import timedelta
 from urllib.parse import urlsplit
 
@@ -36,6 +38,12 @@ EVENT_ATTEMPT_TIMEOUT = 10
 DELIVERY_CLAIM_TIMEOUT = EVENT_ATTEMPT_TIMEOUT + 5
 # DNS 解析预算。要显著小于 soft_time_limit(8s)，留出建连、收包与落库的时间。
 DNS_RESOLVE_TIMEOUT = 3
+# HTTP 阶段（建连、TLS、发请求、收完响应）的总时限。httpx 的 timeout 按每次读写分别
+# 计时，商户每 4s 吐 1 字节就能把一次投递拖上数小时，响应体上限也挡不住这种慢滴；
+# 总时限从根上封顶，不依赖外部杀进程。取单次尝试时限减去 DNS 预算，使「DNS + HTTP」
+# 不超过 EVENT_ATTEMPT_TIMEOUT，认领租约 DELIVERY_CLAIM_TIMEOUT 仍为落库留有余量，
+# 投递结束前租约不会过期而被并发重投。
+WEBHOOK_TOTAL_TIMEOUT = EVENT_ATTEMPT_TIMEOUT - DNS_RESOLVE_TIMEOUT
 # 商户侧配置缺失（未开通知/未填地址）时的挂起时长。这类状态是可恢复的，
 # 不能一次就判终局，但也不该高频空转，因此退避到分钟级等待配置补齐。
 CONFIG_MISSING_RETRY_DELAY = timedelta(minutes=10)
@@ -236,6 +244,55 @@ def pin_request_to_ip(url: str, pinned_ip: str) -> tuple[str, dict]:
     return pinned_url, {"sni_hostname": hostname}
 
 
+@dataclass
+class DeliveryResponse:
+    """HTTP 阶段已收到的响应。总时限触发时协程被取消，已收到的状态码与头部仍保留。"""
+
+    status_code: int | None = None
+    headers: dict | None = None
+    text: str = ""
+
+
+async def stream_delivery_response(
+    response: DeliveryResponse,
+    *,
+    method: str,
+    request_url: str,
+    headers: dict,
+    params: dict | None,
+    content: str | None,
+    extensions: dict,
+) -> None:
+    """发送投递请求并流式读取响应，结果写入 response。"""
+    # 不能用 common.http_client 的共享连接池：连接固定到已校验 IP，池按 IP 复用连接，
+    # 同 IP 的两个商户会复用对方的 TLS 连接、绕过证书校验。只复用 SSLContext，省掉
+    # 每次投递现场加载 CA 包的开销。
+    async with (
+        httpx.AsyncClient(timeout=5, verify=http_client.ssl_context()) as client,
+        client.stream(
+            method,
+            request_url,
+            headers=headers,
+            params=params,
+            content=content,
+            extensions=extensions,
+        ) as resp,
+    ):
+        response.status_code = resp.status_code
+        response.headers = dict(resp.headers)
+        # 流式读取并在累计达到 MAX_RESPONSE_BYTES 时截断，避免恶意/异常
+        # 商户回执（如 100MB HTML 错误页）撑爆 worker 内存。
+        buf = bytearray()
+        async for chunk in resp.aiter_bytes():
+            if len(buf) + len(chunk) > MAX_RESPONSE_BYTES:
+                buf.extend(chunk[: MAX_RESPONSE_BYTES - len(buf)])
+                break
+            buf.extend(chunk)
+        # utf-8-sig 去掉开头的 BOM：str.strip() 不会去 BOM，带 BOM 的 PHP 文件
+        # 输出的 "success" 前面带 BOM，会被误判为响应体不符。
+        response.text = bytes(buf).decode("utf-8-sig", errors="replace")
+
+
 def _execute_http_delivery(
     *,
     request_url: str,
@@ -250,11 +307,11 @@ def _execute_http_delivery(
     向目标地址发送 Webhook 请求，返回
     (ok, status_code, resp_headers, resp_text, err_text, duration_ms)。
     不抛异常，所有错误均通过返回值传递。
+
+    HTTP 阶段在本线程的临时事件循环里执行，用 asyncio.wait_for 施加
+    WEBHOOK_TOTAL_TIMEOUT 总时限：超时即取消协程、关闭连接，按一次失败尝试返回。
     """
     ok = False
-    status_code = None
-    resp_headers = None
-    resp_text = ""
     err_text = ""
 
     extensions: dict = {}
@@ -265,44 +322,46 @@ def _execute_http_delivery(
         if parsed.netloc:
             headers = {**headers, "Host": parsed.netloc}
 
+    response = DeliveryResponse()
     start = time.perf_counter()
     try:
-        # 不能用 common.http_client 的共享连接池：连接固定到已校验 IP，池按 IP 复用连接，
-        # 同 IP 的两个商户会复用对方的 TLS 连接、绕过证书校验。只复用 SSLContext，省掉
-        # 每次投递现场加载 CA 包的开销。
-        with httpx.Client(timeout=5, verify=http_client.ssl_context()) as client:
-            with client.stream(
-                method,
-                request_url,
-                headers=headers,
-                params=params,
-                content=body_str if method != "GET" else None,
-                extensions=extensions,
-            ) as resp:
-                status_code = resp.status_code
-                resp_headers = dict(resp.headers)
-                # 流式读取并在累计达到 MAX_RESPONSE_BYTES 时截断，避免恶意/异常
-                # 商户回执（如 100MB HTML 错误页）撑爆 worker 内存。
-                buf = bytearray()
-                for chunk in resp.iter_bytes():
-                    if len(buf) + len(chunk) > MAX_RESPONSE_BYTES:
-                        buf.extend(chunk[: MAX_RESPONSE_BYTES - len(buf)])
-                        break
-                    buf.extend(chunk)
-                # utf-8-sig 去掉开头的 BOM：str.strip() 不会去 BOM，带 BOM 的 PHP 文件
-                # 输出的 "success" 前面带 BOM，会被误判为响应体不符。
-                resp_text = bytes(buf).decode("utf-8-sig", errors="replace")
-            # 商户的 PHP/Java 框架 echo "success" 时常带回车 / BOM / 前后空白，
-            # 严格相等会把这些合法响应判为失败、触发重试；strip 后精确匹配
-            # 兼顾兼容性与匹配严格度（仍区分大小写、不允许中间夹杂内容）。
-            ok = status_code == 200 and resp_text.strip() == expected_response_body
+        asyncio.run(
+            asyncio.wait_for(
+                stream_delivery_response(
+                    response,
+                    method=method,
+                    request_url=request_url,
+                    headers=headers,
+                    params=params,
+                    content=body_str if method != "GET" else None,
+                    extensions=extensions,
+                ),
+                timeout=WEBHOOK_TOTAL_TIMEOUT,
+            )
+        )
+        # 商户的 PHP/Java 框架 echo "success" 时常带回车 / BOM / 前后空白，
+        # 严格相等会把这些合法响应判为失败、触发重试；strip 后精确匹配
+        # 兼顾兼容性与匹配严格度（仍区分大小写、不允许中间夹杂内容）。
+        ok = (
+            response.status_code == 200
+            and response.text.strip() == expected_response_body
+        )
+    except TimeoutError:
+        err_text = f"TotalTimeout: no complete response within {WEBHOOK_TOTAL_TIMEOUT}s"
     except httpx.RequestError as e:
         err_text = f"{e.__class__.__name__}: {e}"
     except Exception as e:
         err_text = f"UnexpectedError: {type(e).__name__}"
     duration_ms = int((time.perf_counter() - start) * 1000)
 
-    return ok, status_code, resp_headers, resp_text, err_text, duration_ms
+    return (
+        ok,
+        response.status_code,
+        response.headers,
+        response.text,
+        err_text,
+        duration_ms,
+    )
 
 
 @shared_task(ignore_result=True)
