@@ -38,6 +38,16 @@
 - 方法名不要以_开头
 - 本项目所有 Django/DRF API 端点一律使用不带尾部 / 的 URL：禁止定义、生成、文档化或请求带 / 结尾的路由，并始终保持 APPEND_SLASH=False、DRF router 的 trailing_slash=False。
 
+## 多语言要求
+
+- 标准支持语言按顺序为：**中文、英语、俄语**。所有语言列表（`LANGUAGES`、unfold 语言切换、支付页语言下拉框）、README 顶部语言切换链接都按此顺序排列；默认语言 `LANGUAGE_CODE` 保持 `zh-hans`。
+- 新增或修改用户可见文案时，三种语言必须同步补齐，不允许只改中文或只改中英：
+  - 后台：源码用中文 `gettext`，改完运行 `makemessages -l zh_Hans -l en -l ru --no-obsolete`，三个 `locale/*/LC_MESSAGES/django.po` 不得残留空译文或 `fuzzy`（fuzzy 不会被 compilemessages 编译，等于未翻译）；可用 `msgfmt --statistics` 检查。
+  - 第三方后台文案（django-unfold）：`locale_vendor/` 下的 zh_Hans 与 ru 两份手工维护，新增条目两份同步。
+  - 支付页：`pay-fronted/src/locales/` 的 `zh.json`、`en.json`、`ru.json` key 集合必须完全一致，改完运行 `scripts/build-pay-fronted.sh`。
+- 文档：`README.md` / `README.en.md` / `README.ru.md` 三份内容保持一致；`API.md` 改动时同步更新 `API.ru.md`。
+- 新增非标准语言需先确认，不随贡献 PR 直接收入。
+
 ## 迁移要求
 
 - **收窄数据合法域的任何 DB 操作**（新增 NOT NULL 字段、把已有字段改为 NOT NULL、新增 UNIQUE / unique_together / CHECK / FK 约束、收紧字段长度或枚举范围等），必须在**同一迁移或前置迁移**中用 `RunPython` 按**确定性、幂等**的规则把存量数据归一化到满足新约束的形态，再执行收窄操作。归一化规则要写在 RunPython 函数 docstring 里，说明对冲突数据的处理方式（回填值 / 去重判据 / 删孤儿等），便于运维事后排查。
