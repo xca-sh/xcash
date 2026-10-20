@@ -1,5 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import Mock
 from unittest.mock import patch
 
@@ -42,6 +43,10 @@ from chains.registry import ChainFamily
 from chains.registry import register_chain_family
 from chains.tasks import process_transfer
 from chains.tests_fixtures import make_evm_chain
+from common.jobs import PRIORITY_DEFAULT
+from common.jobs import PRIORITY_URGENT
+from common.tests.job_helpers import queued_args
+from common.tests.job_helpers import queued_jobs
 from currencies.models import Crypto
 from currencies.models import CryptoOnChain
 from deposits.models import Deposit
@@ -1741,10 +1746,8 @@ class TransferProcessQuickConfirmDispatchTests(TestCase):
 
     @patch("deposits.service.DepositService.try_match_deposit_transfer")
     @patch("invoices.service.InvoiceService.try_match_invoice")
-    @patch("chains.tasks.confirm_transfer.delay")
-    def test_quick_confirm_dispatches_after_commit(
+    def test_quick_confirm_is_enqueued_urgently_in_process_transaction(
         self,
-        confirm_delay_mock,
         match_invoice_mock,
         match_deposit_mock,
     ):
@@ -1752,21 +1755,17 @@ class TransferProcessQuickConfirmDispatchTests(TestCase):
         match_deposit_mock.return_value = False
         transfer = self.create_quick_transfer()
 
-        with self.captureOnCommitCallbacks(execute=False) as callbacks:
-            transfer.process()
-            confirm_delay_mock.assert_not_called()
+        transfer.process()
 
-        self.assertEqual(len(callbacks), 1)
-        confirm_delay_mock.assert_not_called()
-        callbacks[0]()
-        confirm_delay_mock.assert_called_once_with(transfer.pk)
+        [job] = queued_jobs("chains.confirm_transfer")
+        self.assertEqual(job.args, {"transfer_id": transfer.pk})
+        self.assertEqual(job.priority, PRIORITY_URGENT)
+        self.assertEqual(job.queueing_lock, f"chains.confirm_transfer:{transfer.pk}")
 
     @patch("deposits.service.DepositService.try_match_deposit_transfer")
     @patch("invoices.service.InvoiceService.try_match_invoice")
-    @patch("chains.tasks.confirm_transfer.delay")
-    def test_quick_confirm_does_not_dispatch_when_outer_transaction_rolls_back(
+    def test_quick_confirm_is_discarded_when_outer_transaction_rolls_back(
         self,
-        confirm_delay_mock,
         match_invoice_mock,
         match_deposit_mock,
     ):
@@ -1774,16 +1773,11 @@ class TransferProcessQuickConfirmDispatchTests(TestCase):
         match_deposit_mock.return_value = False
         transfer = self.create_quick_transfer()
 
-        with (
-            self.captureOnCommitCallbacks(execute=True) as callbacks,
-            self.assertRaises(RuntimeError),
-            transaction.atomic(),
-        ):
+        with self.assertRaises(RuntimeError), transaction.atomic():
             transfer.process()
             raise RuntimeError("rollback")
 
-        self.assertEqual(callbacks, [])
-        confirm_delay_mock.assert_not_called()
+        self.assertEqual(queued_jobs("chains.confirm_transfer"), [])
 
     @patch("invoices.service.InvoiceService.try_match_invoice")
     def test_process_on_stale_instance_skips_row_already_processed(
@@ -1850,53 +1844,61 @@ class ConfirmTransferMissingReceiptTests(TestCase):
             processed_at=timezone.now(),
         )
 
-    def test_missing_receipt_after_max_retries_keeps_transfer(self):
+    def confirm_with_result(self, result, *, attempts: int = 0):
         from chains.tasks import confirm_transfer
 
-        class MissingAdapter:
-            @staticmethod
-            def tx_result(*, chain, tx_hash):
-                return TxCheckResult(status=TxCheckStatus.MISSING)
+        adapter = Mock()
+        adapter.tx_result.return_value = result
+        with patch("chains.tasks.AdapterFactory.get_adapter", return_value=adapter):
+            confirm_transfer(
+                SimpleNamespace(job=SimpleNamespace(attempts=attempts)),
+                transfer_id=self.transfer.pk,
+            )
 
-        with (
-            patch(
-                "chains.tasks.AdapterFactory.get_adapter", return_value=MissingAdapter()
-            ),
-            patch.object(
-                confirm_transfer.request,
-                "retries",
-                confirm_transfer.max_retries,
-                create=True,
-            ),
-        ):
-            confirm_transfer.run(self.transfer.pk)
+    def test_missing_receipt_before_final_attempt_is_retried(self):
+        from chains.tasks import CONFIRM_TRANSFER_RETRY
+        from chains.tasks import ReceiptNotVisibleError
+
+        with self.assertRaises(ReceiptNotVisibleError) as error:
+            self.confirm_with_result(TxCheckResult(status=TxCheckStatus.MISSING))
+
+        job = SimpleNamespace(attempts=0)
+        self.assertIsNotNone(
+            CONFIRM_TRANSFER_RETRY.get_retry_decision(
+                exception=error.exception, job=job
+            )
+        )
+
+    def test_missing_receipt_on_final_attempt_keeps_transfer_without_error(self):
+        from chains.tasks import CONFIRM_TRANSFER_RETRY
+
+        self.confirm_with_result(
+            TxCheckResult(status=TxCheckStatus.MISSING),
+            attempts=len(CONFIRM_TRANSFER_RETRY.delays),
+        )
+
+        self.transfer.refresh_from_db()
+        self.assertEqual(self.transfer.status, TransferStatus.CONFIRMING)
+
+    def test_chain_query_failure_is_raised_for_retry(self):
+        with self.assertRaises(RuntimeError):
+            self.confirm_with_result(RuntimeError("rpc down"))
 
         self.transfer.refresh_from_db()
         self.assertEqual(self.transfer.status, TransferStatus.CONFIRMING)
 
     def test_failed_receipt_drops_transfer_instead_of_blocking_confirm_batch(self):
-        # 链上事实变为失败时必须丢弃：继续保留会让该转账永久停在 CONFIRMING，
-        # 恒占 block_number_updated 按 timestamp 升序的批次头部，且 reap 只告警不清理。
-        from chains.tasks import confirm_transfer
-
-        class FailedAdapter:
-            @staticmethod
-            def tx_result(*, chain, tx_hash):
-                return TxCheckResult(status=TxCheckStatus.FAILED)
-
-        with patch(
-            "chains.tasks.AdapterFactory.get_adapter",
-            return_value=FailedAdapter(),
-        ):
-            confirm_transfer.run(self.transfer.pk)
+        # 链上事实变为失败时必须丢弃：继续保留会让该转账永久停在 CONFIRMING、
+        # 每次链高推进都被重新入队确认，且 reap 只告警不清理。
+        self.confirm_with_result(TxCheckResult(status=TxCheckStatus.FAILED))
 
         # 记录被删除，(chain, hash, event_index) 唯一约束随之释放，
         # 日后若该 tx 再次被成功打包，扫描器可自然重建。
         self.assertFalse(Transfer.objects.filter(pk=self.transfer.pk).exists())
 
 
-class BlockNumberUpdatedCompensationTests(TestCase):
-    """验证 block_number_updated 在满批时自调度补偿。"""
+class EnqueueDueConfirmationsTests(TestCase):
+    """链高推进时把到期的转账入队确认，判据与去重。"""
 
     def setUp(self):
         self.crypto = Crypto.objects.create(
@@ -1905,115 +1907,150 @@ class BlockNumberUpdatedCompensationTests(TestCase):
             coingecko_id="ether-bn",
         )
         self.chain = make_evm_chain(code=ChainCode.Ethereum, latest_block_number=200)
-        self.wallet = Wallet.objects.create()
-        self.addr = Address.objects.create(
-            wallet=self.wallet,
-            chain_type=ChainType.EVM,
-            usage=AddressUsage.HotWallet,
-            bip44_account=0,
-            address_index=0,
-            address=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000e1"
+        self.sequence = 0
+
+    def make_transfer(self, *, chain=None, **overrides) -> Transfer:
+        self.sequence += 1
+        fields = {
+            "chain": chain or self.chain,
+            "block": 190,
+            "block_hash": "0x" + "aa" * 32,
+            "hash": "0x" + f"{self.sequence:064x}",
+            "crypto": self.crypto,
+            "from_address": Web3.to_checksum_address("0x" + "e1" * 20),
+            "to_address": Web3.to_checksum_address("0x" + "e2" * 20),
+            "value": "1",
+            "amount": "1",
+            "timestamp": 1_700_000_000 + self.sequence,
+            "datetime": timezone.now(),
+            "status": TransferStatus.CONFIRMING,
+            "confirm_mode": ConfirmMode.QUICK,
+            "type": TransferType.Deposit,
+            "processed_at": timezone.now(),
+        }
+        fields.update(overrides)
+        transfer = Transfer.objects.create(**fields)
+        # FULL 要求创建超过 10s；默认把创建时间拨到足够早。
+        Transfer.objects.filter(pk=transfer.pk).update(
+            created_at=timezone.now() - timedelta(minutes=1)
+        )
+        return transfer
+
+    def enqueue(self) -> dict[int, int]:
+        from chains.tasks import enqueue_due_confirmations
+
+        enqueue_due_confirmations(self.chain)
+        return {
+            job.args["transfer_id"]: job.priority
+            for job in queued_jobs("chains.confirm_transfer")
+        }
+
+    def test_quick_ignores_depth_and_full_requires_depth_and_age(self):
+        depth = self.chain.confirm_block_count
+        quick_shallow = self.make_transfer(block=200)
+        full_deep = self.make_transfer(confirm_mode=ConfirmMode.FULL, block=200 - depth)
+        full_shallow = self.make_transfer(
+            confirm_mode=ConfirmMode.FULL, block=200 - depth + 1
+        )
+        full_fresh = self.make_transfer(confirm_mode=ConfirmMode.FULL, block=1)
+        Transfer.objects.filter(pk=full_fresh.pk).update(created_at=timezone.now())
+
+        enqueued = self.enqueue()
+
+        self.assertEqual(
+            enqueued,
+            {quick_shallow.pk: PRIORITY_URGENT, full_deep.pk: PRIORITY_DEFAULT},
+        )
+        self.assertNotIn(full_shallow.pk, enqueued)
+
+    def test_only_processed_confirming_transfers_of_this_chain(self):
+        other_chain = make_evm_chain(code=ChainCode.BSC, latest_block_number=200)
+        due = self.make_transfer()
+        self.make_transfer(processed_at=None)
+        self.make_transfer(status=TransferStatus.CONFIRMED)
+        self.make_transfer(chain=other_chain)
+
+        self.assertEqual(list(self.enqueue()), [due.pk])
+
+    def test_already_pending_confirmation_is_not_enqueued_again(self):
+        # 已有待执行（含等待中的重试）或执行中的确认任务时不再入队。
+        from chains.tasks import confirm_transfer
+
+        waiting_retry = self.make_transfer()
+        running = self.make_transfer()
+        confirm_transfer.configure(
+            queueing_lock=f"chains.confirm_transfer:{waiting_retry.pk}",
+            schedule_in={"minutes": 5},
+        ).defer(transfer_id=waiting_retry.pk)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO procrastinate_jobs (queue_name, task_name, queueing_lock, "
+                "args, status) VALUES ('default', 'chains.confirm_transfer', %s, %s, "
+                "'doing')",
+                [f"chains.confirm_transfer:{running.pk}", '{"transfer_id": 0}'],
+            )
+
+        self.enqueue()
+
+        self.assertEqual(
+            sorted(job.queueing_lock for job in queued_jobs("chains.confirm_transfer")),
+            sorted(
+                [
+                    f"chains.confirm_transfer:{waiting_retry.pk}",
+                    f"chains.confirm_transfer:{running.pk}",
+                ]
             ),
         )
 
-    @patch("chains.tasks.block_number_updated.apply_async")
-    @patch("chains.tasks.confirm_transfer.delay")
-    def test_reschedules_when_quick_batch_is_full(
-        self, confirm_delay_mock, reschedule_mock
-    ):
-        from chains.tasks import block_number_updated
+    def test_batch_size_caps_each_round_oldest_first(self):
+        transfers = [self.make_transfer() for _ in range(3)]
 
-        # 创建 17 个 QUICK 模式的 confirming 转账（超过 BATCH_SIZE=16）
-        for i in range(17):
-            Transfer.objects.create(
-                chain=self.chain,
-                block=190,
-                block_hash="0x" + "aa" * 32,
-                hash="0x" + f"{i:064x}",
-                crypto=self.crypto,
-                from_address=self.addr.address,
-                to_address=Web3.to_checksum_address(
-                    "0x00000000000000000000000000000000000000e2"
-                ),
-                value="1",
-                amount="1",
-                timestamp=1700000000 + i,
-                datetime=timezone.now(),
-                status=TransferStatus.CONFIRMING,
-                confirm_mode=ConfirmMode.QUICK,
-                type=TransferType.Deposit,
-                processed_at=timezone.now(),
-            )
+        with patch("chains.tasks.CONFIRM_ENQUEUE_BATCH_SIZE", 2):
+            first = self.enqueue()
+            second = self.enqueue()
 
-        block_number_updated.run(self.chain.pk)
+        self.assertEqual(list(first), [transfers[0].pk, transfers[1].pk])
+        self.assertEqual(
+            list(second), [transfers[0].pk, transfers[1].pk, transfers[2].pk]
+        )
 
-        # 应派发 16 个确认任务
-        self.assertEqual(confirm_delay_mock.call_count, 16)
-        # 应自调度一次补偿
-        reschedule_mock.assert_called_once_with(args=(self.chain.pk,), countdown=2)
+    def test_dispatch_skips_when_chain_height_did_not_advance(self):
+        from chains.tasks import dispatch_block_confirmation_checks_if_needed
 
-    @patch("chains.tasks.block_number_updated.apply_async")
-    @patch("chains.tasks.confirm_transfer.delay")
-    def test_no_reschedule_when_batch_not_full(
-        self, confirm_delay_mock, reschedule_mock
-    ):
-        from chains.tasks import block_number_updated
+        self.make_transfer()
 
-        # 只创建 3 个转账，不满批
-        for i in range(3):
-            Transfer.objects.create(
-                chain=self.chain,
-                block=190,
-                block_hash="0x" + "aa" * 32,
-                hash="0x" + f"{i+100:064x}",
-                crypto=self.crypto,
-                from_address=self.addr.address,
-                to_address=Web3.to_checksum_address(
-                    "0x00000000000000000000000000000000000000e2"
-                ),
-                value="1",
-                amount="1",
-                timestamp=1700000000 + i,
-                datetime=timezone.now(),
-                status=TransferStatus.CONFIRMING,
-                confirm_mode=ConfirmMode.QUICK,
-                type=TransferType.Deposit,
-                processed_at=timezone.now(),
-            )
+        dispatch_block_confirmation_checks_if_needed(
+            chain=self.chain, previous_latest_block=200
+        )
+        self.assertEqual(queued_jobs("chains.confirm_transfer"), [])
 
-        block_number_updated.run(self.chain.pk)
-
-        self.assertEqual(confirm_delay_mock.call_count, 3)
-        reschedule_mock.assert_not_called()
+        dispatch_block_confirmation_checks_if_needed(
+            chain=self.chain, previous_latest_block=199
+        )
+        self.assertEqual(len(queued_jobs("chains.confirm_transfer")), 1)
 
 
-class ProcessTransferAutoretryTests(SimpleTestCase):
-    """process_transfer 死锁自动重试回归测试。
+class ProcessTransferRetryTests(SimpleTestCase):
+    """process_transfer 死锁自动重试。
 
-    PostgreSQL 死锁的设计前提是被牺牲方应重试；高并发压测场景里，
-    `try_match_invoice` / `confirm_invoice` 等行锁链路会偶发 deadlock。
-    若 process_transfer 不配置 OperationalError 重试，单次死锁就会让
-    Transfer 永久卡在未处理状态，对应的账单也无法被匹配。
+    PostgreSQL 死锁的设计前提是被牺牲方应重试；高并发场景里 try_match_invoice /
+    confirm_invoice 等行锁链路会偶发 deadlock。若不重试，单次死锁就会让 Transfer
+    卡到兜底派发才被重新处理；其它异常不重试，避免确定性错误被反复执行。
     """
 
-    def test_process_transfer_autoretries_on_database_deadlock(self):
+    def test_deadlock_is_retried_and_other_errors_are_not(self):
         from django.db import OperationalError
 
-        self.assertIn(
-            OperationalError,
-            process_transfer.autoretry_for,
-            "process_transfer 必须把 OperationalError 配进 autoretry_for "
-            "以覆盖 PG deadlock detected",
+        strategy = process_transfer.retry_strategy
+        job = SimpleNamespace(attempts=0)
+
+        self.assertIsNotNone(
+            strategy.get_retry_decision(
+                exception=OperationalError("deadlock detected"), job=job
+            )
         )
-        self.assertGreaterEqual(
-            process_transfer.max_retries,
-            1,
-            "max_retries 必须 >= 1 才能真正触发重试",
-        )
-        self.assertTrue(
-            getattr(process_transfer, "retry_backoff", False),
-            "retry_backoff 必须启用，避免死锁后密集重试加剧锁冲突",
+        self.assertIsNone(
+            strategy.get_retry_decision(exception=ValueError("bad data"), job=job)
         )
 
 
@@ -2065,7 +2102,7 @@ class ReapStaleConfirmingTransfersTests(TestCase):
 
         with patch("chains.tasks.AdapterFactory.get_adapter") as get_adapter:
             get_adapter.return_value.tx_result.return_value = tx_result
-            return reap_stale_confirming_transfers.run()
+            return reap_stale_confirming_transfers()
 
     def test_reaps_stale_transfer_when_chain_fact_is_missing(self):
         transfer = self.make_confirming_transfer(suffix="1a")
@@ -2080,14 +2117,13 @@ class ReapStaleConfirmingTransfersTests(TestCase):
         # 已完成业务归类的转账才允许直接补派确认。
         Transfer.objects.filter(pk=transfer.pk).update(processed_at=timezone.now())
 
-        with patch("chains.tasks.confirm_transfer.delay") as confirm_delay:
-            reaped = self.reap_with_tx_result(
-                TxCheckResult(status=TxCheckStatus.SUCCEEDED)
-            )
+        reaped = self.reap_with_tx_result(TxCheckResult(status=TxCheckStatus.SUCCEEDED))
 
         self.assertEqual(reaped, 0)
         self.assertTrue(Transfer.objects.filter(pk=transfer.pk).exists())
-        confirm_delay.assert_called_once_with(transfer.pk)
+        self.assertEqual(
+            queued_args("chains.confirm_transfer"), [{"transfer_id": transfer.pk}]
+        )
 
     def test_succeeded_unprocessed_transfer_redispatches_process_not_confirm(self):
         # 业务归类未完成（processed_at 为空、type 仍 Unmatched）时绝不能直接确认：
@@ -2095,18 +2131,14 @@ class ReapStaleConfirmingTransfersTests(TestCase):
         # 确认动作，造成链上有钱、账上无单。必须改派 process，确认交回正常调度。
         transfer = self.make_confirming_transfer(suffix="7a")
 
-        with (
-            patch("chains.tasks.confirm_transfer.delay") as confirm_delay,
-            patch("chains.tasks.process_transfer.delay") as process_delay,
-        ):
-            reaped = self.reap_with_tx_result(
-                TxCheckResult(status=TxCheckStatus.SUCCEEDED)
-            )
+        reaped = self.reap_with_tx_result(TxCheckResult(status=TxCheckStatus.SUCCEEDED))
 
         self.assertEqual(reaped, 0)
         self.assertTrue(Transfer.objects.filter(pk=transfer.pk).exists())
-        confirm_delay.assert_not_called()
-        process_delay.assert_called_once_with(transfer.pk)
+        self.assertEqual(queued_args("chains.confirm_transfer"), [])
+        self.assertEqual(
+            queued_args("chains.process_transfer"), [{"transfer_id": transfer.pk}]
+        )
 
     def test_stops_after_budget_and_leaves_rest_for_next_round(self):
         # 协作式预算：预算为 0 时也至少终验一条；剩余超龄转账按 created_at 顺序下一轮继续。
@@ -2155,7 +2187,7 @@ class ReapStaleConfirmingTransfersTests(TestCase):
         from chains.tasks import reap_stale_confirming_transfers
 
         with patch("chains.tasks.AdapterFactory.get_adapter") as get_adapter:
-            reaped = reap_stale_confirming_transfers.run()
+            reaped = reap_stale_confirming_transfers()
 
         self.assertEqual(reaped, 0)
         get_adapter.assert_not_called()

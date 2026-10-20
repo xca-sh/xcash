@@ -303,7 +303,7 @@ class EvmTaskQueueTests(TestCase):
         )
         EvmTxTask.objects.filter(pk=fresh_head.pk).update(created_at=timezone.now())
 
-        alerted = scan_stuck_queued_evm_tx_tasks.run()
+        alerted = scan_stuck_queued_evm_tx_tasks()
 
         self.assertEqual(alerted, 1)
         warning_mock.assert_called_once()

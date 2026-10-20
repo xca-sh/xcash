@@ -18,8 +18,8 @@ from evm.internal_tx.routing import UnknownInternalBroadcastError
 from evm.internal_tx.routing import get_matcher
 from evm.internal_tx.vault_slot_deploy import confirm_initial_native_balance_transfer
 from evm.internal_tx.vault_slot_deploy import process_vault_slot_initial_native_balance
-from evm.saas_gas_billing import notify_vault_slot_collect_gas_fee
-from evm.saas_gas_billing import notify_vault_slot_deploy_gas_fee
+from evm.saas_gas_billing import enqueue_vault_slot_collect_gas_fee_report
+from evm.saas_gas_billing import enqueue_vault_slot_deploy_gas_fee_report
 
 logger = structlog.get_logger()
 
@@ -114,10 +114,9 @@ def _finalize_deploy_success(
         if updated:
             tx_task.refresh_from_db()
             mark_deployed_by_task(tx_task)
+            # 计费上报与终局推进同事务提交：只有赢得终局 CAS 的一方入队，且不会因提交后崩溃漏报。
+            enqueue_vault_slot_deploy_gas_fee_report(tx_task=tx_task)
         confirm_initial_native_balance_transfer(transfer)
-
-    if updated:
-        notify_vault_slot_deploy_gas_fee(tx_task=tx_task)
     return True
 
 
@@ -138,18 +137,32 @@ def _finalize_collect_success(
             tx_hash=tx_hash,
             tx_task_id=tx_task.pk,
         )
+        finalize_collect_success_and_enqueue_report(
+            chain=chain, tx_hash=tx_hash, tx_task=tx_task
+        )
+        return True
+
+    if finalize_collect_success_and_enqueue_report(
+        chain=chain, tx_hash=tx_hash, tx_task=tx_task
+    ):
+        # 余额刷新要读链上真值（RPC），放在终局事务之外，不拉长事务。
+        refresh_vault_slot_balance_for_collect_task(tx_task)
+    return True
+
+
+def finalize_collect_success_and_enqueue_report(
+    *,
+    chain: Chain,
+    tx_hash: str,
+    tx_task: TxTask,
+) -> bool:
+    """归集成功终局，并在同一事务内入队 gas 计费上报；返回本次是否推进了终局。"""
+    with db_transaction.atomic():
         updated = TxTask.mark_finalized_success(chain=chain, tx_hash=tx_hash)
         if updated:
             tx_task.refresh_from_db()
-            notify_vault_slot_collect_gas_fee(tx_task=tx_task)
-        return True
-
-    updated = TxTask.mark_finalized_success(chain=chain, tx_hash=tx_hash)
-    if updated:
-        tx_task.refresh_from_db()
-        refresh_vault_slot_balance_for_collect_task(tx_task)
-        notify_vault_slot_collect_gas_fee(tx_task=tx_task)
-    return True
+            enqueue_vault_slot_collect_gas_fee_report(tx_task=tx_task)
+    return bool(updated)
 
 
 def process_internal_transaction(

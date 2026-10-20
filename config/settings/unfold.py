@@ -300,7 +300,7 @@ SIDEBAR_UNFOLD = {
                         "title": _("任务日志"),
                         "icon": "task",
                         "link": reverse_lazy(
-                            "admin:django_celery_results_taskresult_changelist",
+                            "admin:procrastinate_procrastinatejob_changelist",
                         ),
                     },
                     {

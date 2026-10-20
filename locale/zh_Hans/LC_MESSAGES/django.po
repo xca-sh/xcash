@@ -1179,8 +1179,8 @@ msgid "请检查 Redis 连接与服务日志，当前无法确认任务处理是
 msgstr "请检查 Redis 连接与服务日志，当前无法确认任务处理是否正常。"
 
 #: xcash/core/dashboard.py:275
-msgid "业务任务消费心跳异常"
-msgstr "业务任务消费心跳异常"
+msgid "业务任务心跳异常"
+msgstr "业务任务心跳异常"
 
 #: xcash/core/dashboard.py:276
 msgid "链扫描进程心跳异常"
@@ -1198,10 +1198,10 @@ msgstr ""
 #, python-format
 msgid ""
 "尚未收到心跳，或最近 %(seconds)s 秒内没有新鲜的调度与执行回执。请检查 "
-"worker、Beat、Redis 与任务积压。"
+"worker 进程、数据库与任务积压。"
 msgstr ""
 "尚未收到心跳，或最近 %(seconds)s 秒内没有新鲜的调度与执行回执。请检查 "
-"worker、Beat、Redis 与任务积压。"
+"worker 进程、数据库与任务积压。"
 
 #: xcash/core/dashboard.py:307
 msgid "后台安全配置"

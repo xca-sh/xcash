@@ -372,11 +372,11 @@ class Invoice(models.Model):
                 chain=chain,
                 crypto_amount=crypto_amount,
             ):
-                from chains.vault_slots import schedule_deploy_after_commit_if_needed
+                from chains.vault_slots import enqueue_deploy_if_needed
 
-                # 复用槽位与新建槽位走同一个预部署入口：提交后投递 Celery 任务，
+                # 复用槽位与新建槽位走同一个预部署入口：事务内入队部署调度任务，
                 # 不在请求线程里内联链上 RPC（否则节点抖动会把已落库的下单打成 500）。
-                schedule_deploy_after_commit_if_needed(
+                enqueue_deploy_if_needed(
                     slot=slot,
                     chain=chain,
                     crypto=crypto,

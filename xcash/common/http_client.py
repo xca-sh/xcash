@@ -7,8 +7,8 @@ httpx.get/post 和每次新建的 httpx.Client 都会现场构造 SSLContext、�
 固定主机的出站调用（Tron 节点、SaaS、AML、行情源）统一走这里的共享 Client：连接按 origin
 keep-alive 复用，SSLContext 只构造一次。超时、请求头等仍由调用方逐请求传入。
 
-按进程惰性创建并记录创建者 pid：Celery prefork / gunicorn 的子进程各自持有一份，fork 后
-首次使用会重建，绝不跨进程共享 socket。httpx.Client 本身线程安全，gthread 下可直接共用。
+按进程惰性创建并记录创建者 pid：gunicorn 的子进程各自持有一份，fork 后首次使用会重建，
+绝不跨进程共享 socket。httpx.Client 本身线程安全，gthread 与 worker 线程池下可直接共用。
 
 商户 Webhook 不能用共享 Client：投递时把连接固定到已校验的 IP、经 sni_hostname 指定证书
 主机名，而连接池按 IP 复用连接，同 IP 的两个商户会复用对方已建立的 TLS 连接、绕过证书校验。

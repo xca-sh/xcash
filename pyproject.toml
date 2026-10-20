@@ -1,10 +1,5 @@
 [tool.uv]
 package = false
-# billiard 4.3 在 macOS 上默认改用 spawn 启动 prefork 子进程，celery 5.6.x 的
-# process_initializer 识别不了，子进程每个任务都在 fast_trace_task 报 ValueError
-# （celery#10683，修复只在 5.7）。Linux 默认 fork 不受影响，所以 CI 绿也测不出来。
-# celery 升到含该修复的正式版后再放开。
-constraint-dependencies = ["billiard<4.3"]
 
 [project]
 name = "xcash"
@@ -31,10 +26,7 @@ dependencies = [
     "django-smart-ratelimit[redis]==4.12.1",
     # 生产静态文件由 Django 直接从镜像内 STATIC_ROOT 返回，Caddy 只做反代
     "whitenoise==6.12.0",
-    # Celery
-    "celery==5.6.3",
-    "django-celery-results==2.6.0",
-    # PostgreSQL 任务队列（取代 Celery）
+    # PostgreSQL 任务队列
     "procrastinate[django]==3.10.0",
     # Logging
     "structlog==26.1.0",
@@ -46,7 +38,6 @@ dependencies = [
 [dependency-groups]
 dev = [
     "psycopg[binary]==3.3.6",
-    "celery-types==0.26.0",
     "django-extensions==4.1",
     "watchfiles==1.3.0",
     "werkzeug[watchdog]==3.1.9",

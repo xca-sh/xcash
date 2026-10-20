@@ -75,12 +75,6 @@ TEMPLATES[0]["OPTIONS"]["debug"] = True  # type: ignore[index]
 # 邮件仍走内存后端，避免测试期间依赖外部 SMTP。
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 
-# CELERY
-# ------------------------------------------------------------------------------
-# 测试保持真实的 Redis broker；未启动 worker 时任务只会入队，不会被立即执行。
-CELERY_TASK_ALWAYS_EAGER = False
-CELERY_TASK_EAGER_PROPAGATES = True
-
 # MEDIA
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#media-url

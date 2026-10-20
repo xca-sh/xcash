@@ -6,8 +6,8 @@ from decimal import Decimal
 from typing import Any
 
 import structlog
-from celery import shared_task
-from django.db import transaction
+from django.conf import settings
+from procrastinate.contrib.django import app
 from web3.exceptions import TransactionNotFound
 
 from chains.constants import ChainCode
@@ -15,13 +15,18 @@ from chains.models import Chain
 from chains.models import TxTask
 from chains.models import VaultSlot
 from chains.models import VaultSlotCollectSchedule
+from common.jobs import BackoffTable
+from common.jobs import defer_once
+from common.saas_callback import SAAS_CALLBACK_RETRY_DELAYS
 from common.saas_callback import CallbackEvent
 from common.saas_callback import SaasCallback
 from common.saas_callback import send_saas_callback
 
 logger = structlog.get_logger()
 
-GAS_FEE_CALLBACK_RETRY_BACKOFF_SECONDS = 60
+# 计费上报任务：先查 receipt 算出成本，再入队 SaaS 回调；任一步失败按回调同一张退避表
+# 重试（最长每小时一次，总窗口约 15 小时）。SaaS 以 sys_no 去重，重跑只扣一次。
+GAS_FEE_REPORT_RETRY = BackoffTable(SAAS_CALLBACK_RETRY_DELAYS)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -96,28 +101,6 @@ def _build_tx_detail(*, chain: Chain, tx_hash: str) -> GasTxDetail:
     )
 
 
-def notify_vault_slot_deploy_gas_fee(*, tx_task: TxTask) -> None:
-    """VaultSlot 部署确认后，通知 SaaS 对项目收取系统热钱包 gas 成本。"""
-    if not tx_task.tx_hash:
-        return
-    try:
-        send_vault_slot_deploy_gas_fee(tx_task=tx_task)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "saas_gas_fee_callback_build_failed",
-            operation="vault_slot_deploy",
-            tx_task_id=tx_task.pk,
-            tx_hash=tx_task.tx_hash,
-            error=str(exc),
-        )
-        transaction.on_commit(
-            lambda tx_task_id=tx_task.pk: retry_vault_slot_deploy_gas_fee.delay(
-                tx_task_id
-            )
-        )
-        return
-
-
 def send_vault_slot_deploy_gas_fee(*, tx_task: TxTask) -> None:
     slot = VaultSlot.objects.select_related("project", "chain", "customer").get(
         deploy_tx_task=tx_task
@@ -133,28 +116,6 @@ def send_vault_slot_deploy_gas_fee(*, tx_task: TxTask) -> None:
             uid=slot.customer.uid if slot.customer_id else None,
         )
     )
-
-
-def notify_vault_slot_collect_gas_fee(*, tx_task: TxTask) -> None:
-    """VaultSlot 归集确认后，通知 SaaS 对项目收取系统热钱包 gas 成本。"""
-    if not tx_task.tx_hash:
-        return
-    try:
-        send_vault_slot_collect_gas_fee(tx_task=tx_task)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "saas_gas_fee_callback_build_failed",
-            operation="vault_slot_collect",
-            tx_task_id=tx_task.pk,
-            tx_hash=tx_task.tx_hash,
-            error=str(exc),
-        )
-        transaction.on_commit(
-            lambda tx_task_id=tx_task.pk: retry_vault_slot_collect_gas_fee.delay(
-                tx_task_id
-            )
-        )
-        return
 
 
 def send_vault_slot_collect_gas_fee(*, tx_task: TxTask) -> None:
@@ -177,41 +138,53 @@ def send_vault_slot_collect_gas_fee(*, tx_task: TxTask) -> None:
     )
 
 
-@shared_task(bind=True, ignore_result=True, max_retries=20)
-def retry_vault_slot_deploy_gas_fee(self, tx_task_id: int) -> None:
+def enqueue_vault_slot_deploy_gas_fee_report(*, tx_task: TxTask) -> None:
+    """在部署成功终局的事务内入队 gas 计费上报，与终局状态推进同一事务提交。
+
+    终局推进与上报分开提交时，两者之间崩溃会让 SaaS 永久漏计费；同事务后要么都没发生、
+    下一轮轮询重新终局，要么上报任务已在队列里。未对接 SaaS 时不入队。
+    """
+    if not settings.IS_SAAS or not tx_task.tx_hash:
+        return
+    defer_once(report_vault_slot_deploy_gas_fee, tx_task_id=tx_task.pk)
+
+
+def enqueue_vault_slot_collect_gas_fee_report(*, tx_task: TxTask) -> None:
+    """在归集成功终局的事务内入队 gas 计费上报（语义同部署）。"""
+    if not settings.IS_SAAS or not tx_task.tx_hash:
+        return
+    defer_once(report_vault_slot_collect_gas_fee, tx_task_id=tx_task.pk)
+
+
+@app.task(name="evm.report_vault_slot_deploy_gas_fee", retry=GAS_FEE_REPORT_RETRY)
+def report_vault_slot_deploy_gas_fee(*, tx_task_id: int) -> None:
+    """按部署交易的 receipt 算出 gas 成本，入队 SaaS 计费回调。"""
     tx_task = TxTask.objects.get(pk=tx_task_id)
     try:
         send_vault_slot_deploy_gas_fee(tx_task=tx_task)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
-            "saas_gas_fee_callback_retry_failed",
+            "saas_gas_fee_report_failed",
             operation="vault_slot_deploy",
             tx_task_id=tx_task_id,
+            tx_hash=tx_task.tx_hash,
             error=str(exc),
-            retry=self.request.retries,  # noqa
         )
-        raise self.retry(  # noqa
-            exc=exc,
-            countdown=GAS_FEE_CALLBACK_RETRY_BACKOFF_SECONDS
-            * (2**self.request.retries),  # noqa
-        ) from exc
+        raise
 
 
-@shared_task(bind=True, ignore_result=True, max_retries=20)
-def retry_vault_slot_collect_gas_fee(self, tx_task_id: int) -> None:
+@app.task(name="evm.report_vault_slot_collect_gas_fee", retry=GAS_FEE_REPORT_RETRY)
+def report_vault_slot_collect_gas_fee(*, tx_task_id: int) -> None:
+    """按归集交易的 receipt 算出 gas 成本，入队 SaaS 计费回调。"""
     tx_task = TxTask.objects.get(pk=tx_task_id)
     try:
         send_vault_slot_collect_gas_fee(tx_task=tx_task)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
-            "saas_gas_fee_callback_retry_failed",
+            "saas_gas_fee_report_failed",
             operation="vault_slot_collect",
             tx_task_id=tx_task_id,
+            tx_hash=tx_task.tx_hash,
             error=str(exc),
-            retry=self.request.retries,  # noqa
         )
-        raise self.retry(  # noqa
-            exc=exc,
-            countdown=GAS_FEE_CALLBACK_RETRY_BACKOFF_SECONDS
-            * (2**self.request.retries),  # noqa
-        ) from exc
+        raise

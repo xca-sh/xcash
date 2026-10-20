@@ -16,8 +16,8 @@ from tron.client import TronClientError
 from tron.client import TronHttpClient
 from tron.models import TRON_MAX_BROADCAST_HASHES
 from tron.models import TronTxTask
-from tron.saas_gas_billing import notify_vault_slot_collect_gas_fee
-from tron.saas_gas_billing import notify_vault_slot_deploy_gas_fee
+from tron.saas_gas_billing import enqueue_vault_slot_collect_gas_fee_report
+from tron.saas_gas_billing import enqueue_vault_slot_deploy_gas_fee_report
 
 from chains.adapters import TX_MISSING
 from chains.adapters import AdapterFactory
@@ -173,12 +173,12 @@ def broadcast_retry_due_q() -> Q:
     )
 
 
-def notify_gas_fee_for_receipt_task(task: TxTask) -> None:
-    """按任务类型把成功终局的链上成本回调给 SaaS 计费。"""
+def enqueue_gas_fee_report_for_receipt_task(task: TxTask) -> None:
+    """按任务类型入队成功终局的链上成本计费上报；须在终局事务内调用。"""
     if task.tx_type == TxTaskType.VaultSlotDeploy:
-        notify_vault_slot_deploy_gas_fee(tx_task=task)
+        enqueue_vault_slot_deploy_gas_fee_report(tx_task=task)
     elif task.tx_type == TxTaskType.VaultSlotCollect:
-        notify_vault_slot_collect_gas_fee(tx_task=task)
+        enqueue_vault_slot_collect_gas_fee_report(tx_task=task)
 
 
 def process_tron_receipt_task(task: TxTask) -> bool:
@@ -211,18 +211,22 @@ def process_tron_receipt_task(task: TxTask) -> bool:
             task.tx_hash = matched_tx_hash
         if not has_required_confirmations(chain=task.chain, result=raw_result):
             return True
-        updated = TxTask.mark_finalized_success(
-            chain=task.chain,
-            tx_hash=matched_tx_hash,
-        )
+        # 终局推进与计费上报同事务提交：只有赢得终局 CAS 的一方入队，且不会因提交后
+        # 崩溃漏报。部署标记与余额刷新（RPC）放在事务之外，不拉长事务。
+        with db_transaction.atomic():
+            updated = TxTask.mark_finalized_success(
+                chain=task.chain,
+                tx_hash=matched_tx_hash,
+            )
+            if updated:
+                task.tx_hash = matched_tx_hash
+                task.status = TxTaskStatus.SUCCEEDED
+                enqueue_gas_fee_report_for_receipt_task(task)
         if updated:
-            task.tx_hash = matched_tx_hash
-            task.status = TxTaskStatus.SUCCEEDED
             if task.tx_type == TxTaskType.VaultSlotDeploy:
                 mark_deployed_by_task(task)
             elif task.tx_type == TxTaskType.VaultSlotCollect:
                 refresh_vault_slot_balance_for_collect_task(task)
-            notify_gas_fee_for_receipt_task(task)
         return True
 
     if status == TxCheckStatus.MISSING:

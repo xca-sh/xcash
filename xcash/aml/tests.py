@@ -27,6 +27,7 @@ from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
 from chains.tests_fixtures import make_evm_chain
 from common.saas_callback import CallbackEvent
+from common.tests.job_helpers import queued_args
 from core.models import SystemSettings
 from currencies.models import Crypto
 from currencies.models import Fiat
@@ -459,33 +460,30 @@ class AmlPaymentFlowTests(AmlTestMixin, TestCase):
         self.transfer.save(update_fields=["datetime"])
         return invoice
 
-    @patch("invoices.service.screen_transfer_aml.delay")
-    def test_invoice_match_starts_screening(self, delay):
+    def test_invoice_match_starts_screening(self):
         self.make_waiting_invoice()
 
-        with self.captureOnCommitCallbacks(execute=True):
-            self.assertTrue(InvoiceService.try_match_invoice(self.transfer))
+        self.assertTrue(InvoiceService.try_match_invoice(self.transfer))
 
-        delay.assert_called_once_with(self.transfer.pk)
+        self.assertEqual(
+            queued_args("aml.screen_transfer_aml"), [{"transfer_id": self.transfer.pk}]
+        )
         self.transfer.refresh_from_db()
         self.assertEqual(self.transfer.confirm_mode, ConfirmMode.FULL)
 
-    @patch("invoices.service.screen_transfer_aml.delay")
-    def test_quick_confirm_invoice_is_not_screened(self, delay):
+    def test_quick_confirm_invoice_is_not_screened(self):
         """快速确认优先：价值高于 AML 阈值但低于快速确认阈值的账单照常快速确认、不查 AML。"""
         self.project.fast_confirm_threshold = Decimal("1000")
         self.project.save(update_fields=["fast_confirm_threshold"])
         self.make_waiting_invoice()
 
-        with self.captureOnCommitCallbacks(execute=True):
-            self.assertTrue(InvoiceService.try_match_invoice(self.transfer))
+        self.assertTrue(InvoiceService.try_match_invoice(self.transfer))
 
-        delay.assert_not_called()
+        self.assertEqual(queued_args("aml.screen_transfer_aml"), [])
         self.transfer.refresh_from_db()
         self.assertEqual(self.transfer.confirm_mode, ConfirmMode.QUICK)
 
-    @patch("deposits.service.screen_transfer_aml.delay")
-    def test_deposit_match_starts_screening(self, delay):
+    def test_deposit_match_starts_screening(self):
         Transfer.objects.filter(pk=self.transfer.pk).update(
             type=TransferType.Unmatched, amount=Decimal("1")
         )
@@ -498,11 +496,12 @@ class AmlPaymentFlowTests(AmlTestMixin, TestCase):
             salt=b"\x33" * 32,
         )
 
-        with self.captureOnCommitCallbacks(execute=True):
-            self.assertTrue(DepositService.try_match_deposit_transfer(self.transfer))
+        self.assertTrue(DepositService.try_match_deposit_transfer(self.transfer))
 
         # 1 ETH × 2000 USD 超过 100 USD 阈值
-        delay.assert_called_once_with(self.transfer.pk)
+        self.assertEqual(
+            queued_args("aml.screen_transfer_aml"), [{"transfer_id": self.transfer.pk}]
+        )
 
     @patch("aml.service.send_saas_callback")
     def test_invoice_confirm_writes_risk_into_webhook_and_bills(self, report):

@@ -4,7 +4,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from django.conf import settings
-from django.db import transaction
 
 from webhooks.models import WebhookEvent
 
@@ -26,10 +25,10 @@ class WebhookService:
 
     @staticmethod
     def enqueue_delivery(event: WebhookEvent) -> None:
-        """在事务提交后派发投递任务，避免回滚后仍消费悬空 WebhookEvent。"""
-        from webhooks.tasks import deliver_event
+        """在事件创建的事务内入队投递任务：同事务提交，回滚时事件与任务一起消失。"""
+        from webhooks.tasks import enqueue_deliver_event
 
-        transaction.on_commit(lambda event_id=event.pk: deliver_event.delay(event_id))
+        enqueue_deliver_event(event.pk)
 
     @staticmethod
     def create_event(

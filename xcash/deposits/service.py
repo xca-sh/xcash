@@ -5,9 +5,8 @@ from decimal import Decimal
 
 import structlog
 from aml.service import AmlScreeningService
-from aml.tasks import screen_transfer_aml
+from aml.tasks import enqueue_screen_transfer_aml
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import transaction as db_transaction
 from django.utils import timezone
 
 from chains.capabilities import ChainProductCapabilityService
@@ -206,9 +205,7 @@ class DepositService:
                 project=slot.customer.project, worth=worth, transfer=transfer
             )
         ):
-            db_transaction.on_commit(
-                lambda transfer_id=transfer.pk: screen_transfer_aml.delay(transfer_id)
-            )
+            enqueue_screen_transfer_aml(transfer.pk)
         return True
 
     @classmethod

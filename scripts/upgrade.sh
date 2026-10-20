@@ -11,7 +11,7 @@ umask 077
 ENV_FILE="${ENV_FILE:-.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 # 默认在线 dump（不停机生成演练数据，缩短停机窗口、提升升级体验）：dump 期间
-# django/worker/beat 继续服务，仅在 production migrate 前才停机。
+# django/worker/chain-runner 继续服务，仅在 production migrate 前才停机。
 # 代价：dump 时刻到停机时刻之间的新写入不在演练样本内。要求"演练样本即上线前最后
 # 状态"时显式设 STOP_BEFORE_REHEARSAL=true 走停机 dump（停机更久）。
 STOP_BEFORE_REHEARSAL="${STOP_BEFORE_REHEARSAL:-false}"
@@ -36,12 +36,13 @@ LOCK_ACQUIRED=false
 # worker 单独分组，确保排空时保留 HTTP；迁移前仍停止所有业务服务。
 APP_WORKER_SERVICES=(worker chain-runner)
 APP_RUNTIME_SERVICES=(django "${APP_WORKER_SERVICES[@]}")
-APP_SERVICES=("${APP_RUNTIME_SERVICES[@]}" beat)
+APP_SERVICES=("${APP_RUNTIME_SERVICES[@]}")
 # 已从 compose 删除的旧业务服务。运行本脚本前已 git pull，compose 不再认识它们，
 # `compose stop` 停不到：旧容器会带着旧代码一直跑到启动阶段的 --remove-orphans，期间
 # 可能在 migrate 时读写中间态 schema。迁移前按 compose 标签找到并停止，删除仍交给
 # --remove-orphans；迁移前失败时与其他服务一起恢复原样。
-RETIRED_SERVICES=(worker-scan)
+# beat 是旧版本 Celery 的周期任务投递源（生产者），必须在排空 worker 之前停掉。
+RETIRED_SERVICES=(worker-scan beat)
 APP_SERVICES_STOP_REQUESTED=false
 APP_SERVICES_TO_RESTORE=()
 RETIRED_CONTAINERS_TO_RESTORE=()
@@ -49,6 +50,8 @@ REHEARSAL_IN_PROGRESS=false
 PRODUCTION_MIGRATE_STARTED=false
 PRODUCTION_MIGRATE_COMPLETED=false
 PRODUCTION_SETUP_COMPLETED=false
+# 旧版本留在 Redis 里的 Celery 在途消息尚未迁移完成（迁移阶段失败时提示运维手工重跑）。
+CELERY_MESSAGES_PENDING=false
 APPLICATION_START_ATTEMPTED=false
 HTTP_STOPPED_AT=""
 # 演练 dump 文件路径，dump 时赋值；cleanup 在 nounset 下引用，故先声明为空。
@@ -114,6 +117,11 @@ cleanup() {
       printf '\n[upgrade] application startup/readiness failed; inspect running services before retrying.\n' >&2
     elif [[ "${PRODUCTION_MIGRATE_COMPLETED}" == "true" ]]; then
       printf '\n[upgrade] failure after production migrations completed; retrying setup before starting services\n' >&2
+      if [[ "${CELERY_MESSAGES_PENDING}" == "true" ]]; then
+        printf '[upgrade] Redis 里的 Celery 在途消息未迁移，原样保留；新进程不读 Redis，可先恢复服务。\n' >&2
+        printf '[upgrade] 看上方 replay 的 celery-messages.log 定位原因，处理后手工执行：\n' >&2
+        printf '[upgrade]   docker compose run --rm django python manage.py migrate_celery_messages\n' >&2
+      fi
       run_cleanup_command "start services on migrated schema" \
         recover_application_services
     elif [[ "${REHEARSAL_IN_PROGRESS}" == "true" ]]; then
@@ -251,13 +259,14 @@ stop_app_services() {
   fi
 
   APP_SERVICES_STOP_REQUESTED=true
-  # 先停调度源，再停消费者，避免 worker 退出时旧 Beat 继续向旧队列投递。
-  run_stage "stop Beat" "${COMPOSE[@]}" stop beat || return 1
-  # 此时 schema 尚未改变，旧 HTTP 可继续处理请求；新投递的异步任务留在 broker，
-  # 待旧消费者全部退出后由新版消费。生产迁移仍须等 Django 也停止，不能交错版本。
+  # 先停退役服务：其中的旧 beat 是调度源，必须先于消费者停止，避免 worker 退出时它继续
+  # 向旧队列投递。
+  stop_retired_services || return 1
+  # 此时 schema 尚未改变，旧 HTTP 可继续处理请求。旧 Celery worker 温停时把内存里持有的
+  # ETA 消息放回 Redis，由迁移后的 migrate_celery_messages 转进 PG 队列。生产迁移仍须等
+  # Django 也停止，不能交错版本。
   run_stage "drain workers; HTTP remains available" \
     "${COMPOSE[@]}" stop "${APP_WORKER_SERVICES[@]}" || return 1
-  stop_retired_services || return 1
   HTTP_STOPPED_AT="$(date +%s)"
   run_stage "stop Django; HTTP downtime begins" "${COMPOSE[@]}" stop django
 }
@@ -303,31 +312,34 @@ start_application_services() {
   fi
   # override 只供本次启动使用，不写 .env，不改变普通首次部署的初始化入口。
   printf 'services:\n  django:\n    command: ["/start", "--prepared"]\n' >"${prepared_override}" || return 1
+  # 新进程一启动就可能写下心跳，可能早于等待命令自身完成启动；以发起启动的时刻作为
+  # 就绪下限。旧进程早已停止，此后执行的心跳只可能来自新进程。
+  local start_requested_at
+  start_requested_at="$(date +%s)"
   # cleanup 的条件调用会抑制 errexit，每个门控必须显式传播失败。
+  # --remove-orphans 删除已退役服务的旧容器（如旧 beat）。
   run_stage "start prepared application services" \
     "${COMPOSE[@]}" -f "${prepared_override}" up -d --remove-orphans "${APP_RUNTIME_SERVICES[@]}" caddy \
     || return 1
   "${COMPOSE[@]}" exec -T django python -u manage.py wait_for_runtime \
-    --phase consumers --timeout "${APP_READY_TIMEOUT}" "${readiness_args[@]}" \
+    --timeout "${APP_READY_TIMEOUT}" --started-after "${start_requested_at}" \
+    "${readiness_args[@]}" \
     || return 1
-  # 新 Beat 启动即投递健康探针，可能早于等待命令自身完成启动；以发起 Beat 启动的
-  # 时刻作为探针发布下限。旧 Beat 早已停止，此后发布的探针只可能来自新 Beat。
-  local beat_start_requested_at
-  beat_start_requested_at="$(date +%s)"
-  run_stage "start Beat" "${COMPOSE[@]}" up -d --no-deps beat || return 1
-  if ! "${COMPOSE[@]}" exec -T django python -u manage.py wait_for_runtime \
-    --phase scheduler --timeout "${APP_READY_TIMEOUT}" \
-    --published-after "${beat_start_requested_at}"; then
-    # 消费回执不完整时暂停投递源，保留应用进程供排查；不能打印升级成功。
-    "${COMPOSE[@]}" stop beat || true
-    return 1
-  fi
   # Caddy 不监视配置文件；caddy 容器未被重建时，git pull 带来的 Caddyfile 变更不会
   # 自动生效，这里显式 reload。reload 平滑切换、不断开连接；新配置有误时 reload
   # 失败、旧配置继续服务。放在最后执行：此时刚（重）建的 caddy 管理端口早已就绪，
-  # 且配置错误不会拖住 Beat 等业务进程的启动。
+  # 且配置错误不会拖住业务进程的启动。
   run_stage "reload Caddy config" "${COMPOSE[@]}" exec -T caddy \
     caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+}
+
+migrate_celery_messages() {
+  # 旧版本 Celery 留在 Redis 里的在途消息（SaaS 回调、gas 计费等带退避的重试）不能由
+  # 数据库重建，转进 PG 队列后再删除；此时生产者已全部停止。命令幂等，Redis 空时为空操作。
+  run_stage "migrate in-flight Celery messages from Redis" \
+    run_main_manage db migrate_celery_messages 2>&1 \
+    | tee "${TMP_DIR}/celery-messages.log" || return 1
+  CELERY_MESSAGES_PENDING=false
 }
 
 remove_unused_images() {
@@ -461,6 +473,12 @@ if [[ -z "$(extract_plan "${MAIN_PENDING_PLAN}")" ]]; then
   log "no pending migrations; skip migration rehearsal"
 fi
 
+# 停服务前用新镜像只读预览 Redis 里的 Celery 在途消息：存在新版本不认识的任务名时
+# 在这里中止，线上服务不受影响；正式迁移在生产迁移之后执行。
+run_stage "preview in-flight Celery messages" \
+  run_main_manage db migrate_celery_messages --dry-run 2>&1 \
+  | tee "${TMP_DIR}/celery-messages-preview.log"
+
 if [[ "${RUN_MIGRATION_REHEARSAL}" == "true" ]]; then
 if [[ "${STOP_BEFORE_REHEARSAL}" == "true" ]]; then
   log "quiesced dump: stop app services before dump (backup == production at migrate time)"
@@ -511,8 +529,10 @@ if [[ "${APP_SERVICES_STOP_REQUESTED}" != "true" ]]; then
 fi
 
 # 跨过此线后 production 主库可能进入（部分）迁移后状态；迁移完成后
-# cleanup 才会按新 schema 尝试拉起服务。
+# cleanup 才会按新 schema 尝试拉起服务。新进程不读 Redis，在途消息迁移成功之前
+# 任何失败都要提示运维手工迁移。
 PRODUCTION_MIGRATE_STARTED=true
+CELERY_MESSAGES_PENDING=true
 
 bootstrap_result=0
 run_stage "migrate and initialize production runtime" run_main_manage db bootstrap_runtime 2>&1 \
@@ -530,6 +550,8 @@ case "${bootstrap_result}" in
     ;;
   *) exit "${bootstrap_result}" ;;
 esac
+
+migrate_celery_messages
 
 log "start application services"
 start_application_services

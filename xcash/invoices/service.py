@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 from aml.service import AmlScreeningService
-from aml.tasks import screen_transfer_aml
+from aml.tasks import enqueue_screen_transfer_aml
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
@@ -623,9 +623,7 @@ class InvoiceService:
 
         # 匹配即开始 AML 查询，与区块确认并行；确认时再从 Transfer 读取结果。
         if needs_aml:
-            transaction.on_commit(
-                lambda transfer_id=transfer.pk: screen_transfer_aml.delay(transfer_id)
-            )
+            enqueue_screen_transfer_aml(transfer.pk)
 
         return True
 

@@ -5,7 +5,6 @@ import time
 
 import httpx
 import structlog
-from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 
 from chains.constants import TRON_MAINNET_BASE_URL
@@ -102,12 +101,6 @@ class TronHttpClient:
                     raise ValueError(  # noqa: TRY301
                         f"unsupported HTTP method: {method}"
                     )
-            except SoftTimeLimitExceeded:
-                # 软超时必须原样立即穿透。它继承自 Exception，落进下面的通用分支后会被
-                # _is_retriable_http_error 判为不可重试，进而包成 TronClientError——而
-                # Celery 任务里的调用方通常把该错误当普通 RPC 故障处理、任务"正常完成"，
-                # 软超时语义被彻底抹掉。（扫描已不在 Celery 内运行，不会遇到软超时。）
-                raise
             except Exception as exc:  # noqa: BLE001
                 if not self._is_retriable_http_error(exc):
                     raise TronClientError(f"{request_label} from {chain_code}") from exc

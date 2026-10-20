@@ -53,12 +53,11 @@ COPY --from=python-build-stage --chown=django:django ${APP_HOME}/.venv ${APP_HOM
 # 复制项目启动脚本
 COPY --chown=django:django ./compose/production/django/entrypoint /entrypoint
 COPY --chown=django:django ./compose/production/django/start /start
-COPY --chown=django:django ./compose/production/django/celery/worker/start /start-worker
-COPY --chown=django:django ./compose/production/django/celery/beat/start /start-beat
+COPY --chown=django:django ./compose/production/django/worker/start /start-worker
 COPY --chown=django:django ./compose/production/django/chain-runner/start /start-chain-runner
 RUN set -eux; \
-    sed -i 's/\r$//g' /entrypoint /start /start-worker /start-beat /start-chain-runner; \
-    chmod +x /entrypoint /start /start-worker /start-beat /start-chain-runner
+    sed -i 's/\r$//g' /entrypoint /start /start-worker /start-chain-runner; \
+    chmod +x /entrypoint /start /start-worker /start-chain-runner
 
 # 源码独立成层；.dockerignore 排除本地虚拟环境和运行密钥。
 COPY --chown=django:django . ${APP_HOME}

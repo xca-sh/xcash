@@ -8,6 +8,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import RedirectView
 
 from config.worker_health import CHAIN_RUNNER_HEALTH_GROUP
+from config.worker_health import WORKER_HEALTH_GROUP
 from config.worker_health import WORKER_HEALTH_MAX_AGE_SECONDS
 from config.worker_health import worker_health_status
 from core.dashboard_metrics import build_dashboard_metrics
@@ -273,11 +274,11 @@ def build_worker_health_rows(health):
             )
         ]
     messages = {
-        "celery": (
-            _("业务任务消费心跳异常"),
+        WORKER_HEALTH_GROUP: (
+            _("业务任务心跳异常"),
             _(
                 "尚未收到心跳，或最近 %(seconds)s 秒内没有新鲜的调度与执行回执。"
-                "请检查 worker、Beat、Redis 与任务积压。"
+                "请检查 worker 进程、数据库与任务积压。"
             ),
         ),
         CHAIN_RUNNER_HEALTH_GROUP: (

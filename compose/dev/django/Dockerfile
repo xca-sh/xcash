@@ -49,10 +49,9 @@ ENV PYTHONPATH="${APP_HOME}/.venv/lib/python3.13/site-packages:$PYTHONPATH"
 # 复制启动脚本，一次性处理 CRLF 与权限；并设置归属 dev-user
 COPY --chown=dev-user:dev-user ./compose/production/django/entrypoint /entrypoint
 COPY --chown=dev-user:dev-user ./compose/dev/django/start /start
-COPY --chown=dev-user:dev-user ./compose/dev/django/celery/worker/start /start-worker
-COPY --chown=dev-user:dev-user ./compose/dev/django/celery/beat/start /start-beat
+COPY --chown=dev-user:dev-user ./compose/dev/django/worker/start /start-worker
 RUN set -eux; \
-    sed -i 's/\r$//g' /entrypoint /start /start-worker /start-beat; \
-    chmod +x /entrypoint /start /start-worker /start-beat
+    sed -i 's/\r$//g' /entrypoint /start /start-worker; \
+    chmod +x /entrypoint /start /start-worker
 
 ENTRYPOINT ["/entrypoint"]

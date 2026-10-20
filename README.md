@@ -221,7 +221,7 @@ docker compose exec -T db sh -c 'pg_dump --format=custom --no-owner --no-privile
 
 ```bash
 # 1. 停止业务服务，保留数据库
-docker compose stop django worker chain-runner beat
+docker compose stop django worker chain-runner
 
 # 2. 把 .env 恢复到位（务必是与该 dump 同时点的那一份）
 
@@ -247,10 +247,12 @@ git pull && ./scripts/upgrade.sh
 
 脚本会拉取新镜像、执行迁移并平滑重启，全部就绪才报告成功；失败时会返回非零状态并输出排查提示。
 
+升级请始终使用该脚本，不要手工 `docker compose up -d`：脚本会按顺序停掉旧进程、迁移旧版本留在 Redis 里的在途任务，并用 `--remove-orphans` 删除已退役的服务。尤其是从 Celery 版本升级时，手工 `up -d` 会让旧的 beat 以孤儿容器的身份继续往 Redis 投递无人消费的任务，最终吃满内存上限。
+
 ## 技术栈
 
 - **后端**：Django 5.2 + Django REST Framework
-- **任务队列**：Celery + Redis
+- **任务队列**：Procrastinate（PostgreSQL 任务队列）
 - **数据库**：PostgreSQL
 - **区块链交互**：web3.py（EVM）、TronGrid HTTP API（Tron）
 - **钱包派生**：BIP44 HD 钱包（bip-utils）

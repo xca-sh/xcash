@@ -25,8 +25,8 @@ services:
     image: redis:8.2.1
     container_name: xcash_dev_redis
     restart: unless-stopped
-    # 与生产一致：maxmemory 上限 + volatile-lru（只淘汰带 TTL 的可重建缓存，broker
-    # 任务键与 timeout=None 的配置缓存豁免），让本地也能复现生产的淘汰行为。
+    # 与生产一致：maxmemory 上限 + volatile-lru（只淘汰带 TTL 的可重建缓存，
+    # timeout=None 的配置缓存豁免），让本地也能复现生产的淘汰行为。
     # 改动前请先读生产 compose 里关于该策略的说明。
     command:
       - redis-server
@@ -40,23 +40,6 @@ services:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
-
-  flower:
-    image: mher/flower:2.0
-    container_name: xcash_dev_flower
-    restart: unless-stopped
-    depends_on:
-       - redis
-    environment:
-      FLOWER_BROKER_URL: ${FLOWER_BROKER_URL:-redis://redis:6379/0}
-      FLOWER_PORT: 5555
-    ports:
-      - "${FLOWER_PORT:-5555}:5555"
-    command:
-      - celery
-      - --broker=${FLOWER_BROKER_URL:-redis://redis:6379/0}
-      - flower
-      - --port=5555
 
   # 本地 EVM 模拟链统一叫 anvil：与 ChainCode.Anvil、调试默认起的
   # 唯一 EVM 链保持同名，避免「服务叫 ethereum、链代码却是 anvil」的认知割裂。
@@ -88,7 +71,7 @@ services:
       - "8545"
       - --chain-id
       - "${LOCAL_EVM_CHAIN_ID:-31337}"
-      # 每秒自动出块，模拟真实链的区块推进，使 FULL 确认模式和 block_number_updated 正常工作。
+      # 定时自动出块，模拟真实链的区块推进，使 FULL 确认模式与链高推进触发的确认入队正常工作。
       - --block-time
       - "${LOCAL_EVM_BLOCK_TIME:-12}"
       # 持久化本地链状态，使账户 nonce、合约代码、余额和区块环境随容器重启保留。

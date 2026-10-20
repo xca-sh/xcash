@@ -182,7 +182,7 @@ class ChainLoop:
     def run(self) -> None:
         try:
             while not self.stop_event.is_set():
-                # 每轮前后做 Celery Django fixup 在任务前后做的连接清理：按 CONN_MAX_AGE
+                # 每轮前后做与 HTTP 请求前后相同的连接清理：按 CONN_MAX_AGE
                 # 回收、丢弃失效连接，PG 重启后下一轮自动重连。
                 close_old_connections()
                 self.run_once()

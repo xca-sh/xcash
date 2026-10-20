@@ -5,11 +5,13 @@ from unittest.mock import patch
 
 import httpx
 from django.core.cache import cache
+from django.db import transaction
 from django.test import SimpleTestCase
 from django.test import TestCase
 from django.test import override_settings
 from django.utils import timezone
 
+from common.tests.job_helpers import queued_args
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from core.models import SystemSettings
 from projects.models import Project
@@ -52,18 +54,24 @@ class WebhookServiceTests(TestCase):
         cache.delete(SYSTEM_SETTINGS_CACHE_KEY)
         super().tearDown()
 
-    @patch("webhooks.tasks.deliver_event.delay")
-    def test_create_event_enqueues_delivery_after_commit(self, deliver_event_mock):
-        # webhook 事件创建后必须显式在 on_commit 派发投递任务，而不是依赖 model signal。
+    def test_create_event_enqueues_delivery_in_same_transaction(self):
+        # webhook 事件创建后必须显式入队投递任务，而不是依赖 model signal；
+        # 与事件同事务提交，回滚时一起消失。
         project = _make_project()
 
-        with self.captureOnCommitCallbacks(execute=True):
-            event = WebhookService.create_event(
-                project=project,
-                payload={"type": "deposit", "data": {"foo": "bar"}},
-            )
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            WebhookService.create_event(project=project, payload={"type": "x"})
+            raise RuntimeError("rollback")
+        self.assertEqual(queued_args("webhooks.deliver_event"), [])
 
-        deliver_event_mock.assert_called_once_with(event.pk)
+        event = WebhookService.create_event(
+            project=project,
+            payload={"type": "deposit", "data": {"foo": "bar"}},
+        )
+
+        self.assertEqual(
+            queued_args("webhooks.deliver_event"), [{"event_pk": event.pk}]
+        )
 
     def test_next_backoff_uses_system_settings_cap(self):
         # Webhook 退避上限应可由系统参数中心调整，避免固定 120 秒无法匹配实际值守策略。
@@ -97,7 +105,7 @@ class DeliverEventTests(TestCase):
         mock_http.return_value = (True, 200, {}, "ok", "", 50)
         event = self._create_event()
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.SUCCEEDED)
@@ -111,7 +119,7 @@ class DeliverEventTests(TestCase):
         project = _make_project()
         event = self._create_event(project=project)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         project.refresh_from_db()
         self.assertTrue(project.webhook_open)
@@ -121,7 +129,7 @@ class DeliverEventTests(TestCase):
         mock_http.return_value = (True, 200, {}, "ok", "", 50)
         event = self._create_event()
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         self.assertEqual(DeliveryAttempt.objects.filter(event=event).count(), 1)
         attempt = DeliveryAttempt.objects.get(event=event)
@@ -135,7 +143,7 @@ class DeliverEventTests(TestCase):
         mock_http.return_value = (False, 500, {}, "Internal Server Error", "", 50)
         event = self._create_event()
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
@@ -150,7 +158,7 @@ class DeliverEventTests(TestCase):
         mock_http.return_value = (False, 404, {}, "Not Found", "", 50)
         event = self._create_event()
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -164,7 +172,7 @@ class DeliverEventTests(TestCase):
         mock_http.return_value = (False, 301, {}, "", "", 50)
         event = self._create_event()
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -176,7 +184,7 @@ class DeliverEventTests(TestCase):
         mock_http.return_value = (False, None, None, "", "ConnectError: ...", 5000)
         event = self._create_event()
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
@@ -192,7 +200,7 @@ class DeliverEventTests(TestCase):
         project = _make_project()
         event = self._create_event(project=project)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         project.refresh_from_db()
         self.assertTrue(project.webhook_open)
@@ -206,7 +214,7 @@ class DeliverEventTests(TestCase):
     def test_skip_non_pending_event(self, mock_http):
         event = self._create_event(status=WebhookEvent.Status.SUCCEEDED)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         mock_http.assert_not_called()
 
@@ -217,7 +225,7 @@ class DeliverEventTests(TestCase):
             schedule_locked_until=timezone.now() + timezone.timedelta(minutes=5),
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
@@ -230,21 +238,20 @@ class DeliverEventTests(TestCase):
             delivery_locked_until=timezone.now() + timezone.timedelta(seconds=30),
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
         mock_http.assert_not_called()
 
-    @patch("webhooks.tasks.deliver_event.delay")
-    def test_schedule_events_skips_event_with_active_delivery_claim(self, delay_mock):
+    def test_schedule_events_skips_event_with_active_delivery_claim(self):
         self._create_event(
             delivery_locked_until=timezone.now() + timezone.timedelta(seconds=30),
         )
 
         schedule_events()
 
-        delay_mock.assert_not_called()
+        self.assertEqual(queued_args("webhooks.deliver_event"), [])
 
     # ── webhook 未配置 ──
 
@@ -258,7 +265,7 @@ class DeliverEventTests(TestCase):
         project = _make_project(webhook="")
         event = self._create_event(project=project)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
@@ -273,7 +280,7 @@ class DeliverEventTests(TestCase):
         project = _make_project(webhook="")
         event = self._create_event(project=project)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -284,7 +291,7 @@ class DeliverEventTests(TestCase):
         project = _make_project(webhook="https://127.0.0.1:8080/internal")
         event = self._create_event(project=project)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -304,7 +311,7 @@ class DeliverEventTests(TestCase):
         project = _make_project(webhook="https://merchant.internal.example/hook")
         event = self._create_event(project=project)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -327,7 +334,7 @@ class DeliverEventTests(TestCase):
         project = _make_project(webhook="https://merchant.example.com/hook")
         event = self._create_event(project=project)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
@@ -349,7 +356,7 @@ class DeliverEventTests(TestCase):
         project = _make_project(webhook="https://merchant.example.com/hook")
         event = self._create_event(project=project)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -364,7 +371,7 @@ class DeliverEventTests(TestCase):
         project = _make_project(webhook="http://localhost:8000/webhook")
         event = self._create_event(project=project)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.SUCCEEDED)
@@ -378,7 +385,7 @@ class DeliverEventTests(TestCase):
         project = _make_project(webhook_open=False)
         event = self._create_event(project=project)
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
@@ -403,7 +410,7 @@ class DeliverEventTests(TestCase):
             duration_ms=50,
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -432,7 +439,7 @@ class WebhookDeliveryPolicyTests(TestCase):
             expected_response_body="success",
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.SUCCEEDED)
@@ -473,7 +480,7 @@ class WebhookDeliveryPolicyTests(TestCase):
             expected_response_body="success",
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         # 请求 URL 改为代理地址，原商户 URL 通过 header 传递给代理
         self.assertEqual(captured["request_url"], "https://93.184.216.36/forward")
@@ -502,7 +509,7 @@ class WebhookDeliveryPolicyTests(TestCase):
             expected_response_body="success",
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         call_kwargs = mock_http.call_args.kwargs
         self.assertEqual(call_kwargs["request_url"], "https://93.184.216.34/notify")
@@ -522,7 +529,7 @@ class WebhookDeliveryPolicyTests(TestCase):
             expected_response_body="success",
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -544,7 +551,7 @@ class WebhookDeliveryPolicyTests(TestCase):
             expected_response_body="success",
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         attempt = DeliveryAttempt.objects.get(event=event)
         self.assertIsNone(attempt.request_headers.get("CF-Worker-Key"))
@@ -559,7 +566,7 @@ class WebhookDeliveryPolicyTests(TestCase):
             payload={"type": "invoice", "data": {"sys_no": "INV-1"}},
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.SUCCEEDED)
@@ -580,7 +587,7 @@ class WebhookDeliveryPolicyTests(TestCase):
             expected_response_body="success",
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.SUCCEEDED)
@@ -733,7 +740,7 @@ class DeliveryAttemptCountingTests(TestCase):
             project=_make_project(), payload={"type": "test"}, attempt_count=4
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         attempt = event.attempts.get()
         self.assertEqual(attempt.try_number, 5)
@@ -755,7 +762,7 @@ class RetryableStatusTests(TestCase):
             project=_make_project(), payload={"type": "test"}
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
@@ -768,7 +775,7 @@ class RetryableStatusTests(TestCase):
             project=_make_project(), payload={"type": "test"}
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
@@ -781,7 +788,7 @@ class RetryableStatusTests(TestCase):
             project=_make_project(), payload={"type": "test"}
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -801,7 +808,7 @@ class RetryableStatusTests(TestCase):
         mock_http.return_value = (False, 200, {}, "fail", "", 50)
         event = self._create_epay_event()
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
@@ -813,7 +820,7 @@ class RetryableStatusTests(TestCase):
         mock_http.return_value = (False, 200, {}, "fail", "", 50)
         event = self._create_epay_event()
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -827,7 +834,7 @@ class RetryableStatusTests(TestCase):
             project=_make_project(), payload={"type": "test"}
         )
 
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
@@ -1061,7 +1068,7 @@ class WebhookDeliveryTotalTimeoutTests(TestCase):
         )
 
         started = time.monotonic()
-        deliver_event(event.pk)
+        deliver_event(event_pk=event.pk)
         elapsed = time.monotonic() - started
 
         self.assertLess(elapsed, 4)

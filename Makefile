@@ -1,7 +1,7 @@
 ENV_FILE ?= .env
 DC = docker compose --env-file $(ENV_FILE) -f docker-compose.dev.yml
 
-.PHONY: help init-env up down upgrade dev-sync lint fmt typecheck clean dev-up dev-up-pro dev-up-deps dev-up-chain dev-down dev-logs dev-chain-logs dev-ps dev-web dev-worker dev-chain-runner dev-beat dev-manage dev-mm dev-migrate dev-clear-migrations dev-shell dev-test pytest dev-local-init dev-bootstrap
+.PHONY: help init-env up down upgrade dev-sync lint fmt typecheck clean dev-up dev-up-pro dev-up-deps dev-up-chain dev-down dev-logs dev-chain-logs dev-ps dev-web dev-worker dev-chain-runner dev-manage dev-mm dev-migrate dev-clear-migrations dev-shell dev-test pytest dev-local-init dev-bootstrap
 
 help:
 	@echo "可用命令："
@@ -16,7 +16,7 @@ help:
 	@echo "  make fmt                   black 格式化"
 	@echo "  make typecheck             mypy 增量类型排查（存量错误多，非门禁）"
 	@echo "  make clean                 清理本地缓存产物（pycache / mypy / ruff / pytest / staticfiles）"
-	@echo "  make dev-up                前台运行 Django + Celery（开发模式）"
+	@echo "  make dev-up                前台运行 Django + worker + chain-runner（开发模式）"
 	@echo "  make dev-up-pro            生产级方式运行（gunicorn + 高并发 worker，适合压测）"
 	@echo "  make dev-up-deps           仅启动 db/redis"
 	@echo "  make dev-up-chain          启动 db/redis/anvil"
@@ -25,9 +25,8 @@ help:
 	@echo "  make dev-chain-logs        查看本地区块链容器日志"
 	@echo "  make dev-ps                查看依赖容器状态"
 	@echo "  make dev-web               宿主机启动 Django"
-	@echo "  make dev-worker            宿主机启动业务 Celery worker"
+	@echo "  make dev-worker            宿主机启动业务任务 worker（含周期任务投递）"
 	@echo "  make dev-chain-runner      宿主机启动链扫描与主动交易常驻进程"
-	@echo "  make dev-beat              宿主机启动 Celery beat"
 	@echo "  make dev-manage ARGS='check'"
 	@echo "  make dev-mm                宿主机执行 Django makemigrations"
 	@echo "  make dev-migrate           宿主机执行 Django migrate"
@@ -91,7 +90,7 @@ dev-down:
 	$(DC) down
 
 dev-logs:
-	$(DC) logs -f db redis flower
+	$(DC) logs -f db redis
 
 dev-chain-logs:
 	$(DC) logs -f anvil
@@ -107,9 +106,6 @@ dev-worker:
 
 dev-chain-runner:
 	ENV_FILE=$(ENV_FILE) ./scripts/dev-chain-runner.sh
-
-dev-beat:
-	ENV_FILE=$(ENV_FILE) ./scripts/dev-beat.sh
 
 dev-manage:
 	ENV_FILE=$(ENV_FILE) ./scripts/dev-manage.sh $(ARGS)

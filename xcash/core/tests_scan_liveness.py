@@ -87,7 +87,7 @@ class ScanLivenessTests(TestCase):
         self.assertGreaterEqual(chain.last_scanned_at, cursor.last_error_at)
         self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 503)
 
-    @patch("chains.tasks.block_number_updated.delay")
+    @patch("chains.tasks.enqueue_due_confirmations")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_evm_rpc_failures_keep_confirmation_live_and_probe_recovers(
@@ -111,7 +111,7 @@ class ScanLivenessTests(TestCase):
         self.assertIsNone(cursor.last_error_at)
         self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 200)
 
-    @patch("chains.tasks.block_number_updated.delay")
+    @patch("chains.tasks.enqueue_due_confirmations")
     @patch("tron.scanner.TronHttpClient")
     def test_tron_rpc_failures_keep_confirmation_live_and_idle_recovery_clears_error(
         self, client_cls, dispatch
@@ -137,7 +137,7 @@ class ScanLivenessTests(TestCase):
         self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 200)
         self.assertEqual(dispatch.call_count, 5)  # 链高未推进，不重复派发。
 
-    @patch("chains.tasks.block_number_updated.delay")
+    @patch("chains.tasks.enqueue_due_confirmations")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs", return_value=[])
     @patch(
         "evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number", return_value=200
@@ -147,7 +147,7 @@ class ScanLivenessTests(TestCase):
     ):
         chain, cursor = self.make_scan_case()
         self.run_round(chain, expired_budget=True)
-        dispatch.assert_called_once_with(chain.pk)
+        dispatch.assert_called_once_with(chain)
         # 窗口从 97 起（回放 4 块），预算耗尽前仍扫完首段 [97, 106]。
         self.assert_scan_failed(
             chain=chain,
@@ -156,7 +156,7 @@ class ScanLivenessTests(TestCase):
             error="ScanRoundBudgetExceeded",
         )
 
-    @patch("chains.tasks.block_number_updated.delay")
+    @patch("chains.tasks.enqueue_due_confirmations")
     @patch("tron.scanner.TronHttpClient")
     def test_tron_budget_exhaustion_retains_progress_and_reports_failing(
         self, client_cls, dispatch
@@ -166,7 +166,7 @@ class ScanLivenessTests(TestCase):
         client.get_latest_solid_block_number.return_value = 200
         client.get_transaction_infos_by_block.return_value = []
         self.run_round(chain, expired_budget=True)
-        dispatch.assert_called_once_with(chain.pk)
+        dispatch.assert_called_once_with(chain)
         self.assert_scan_failed(
             chain=chain,
             cursor=cursor,
@@ -175,8 +175,8 @@ class ScanLivenessTests(TestCase):
         )
 
     @patch(
-        "chains.tasks.block_number_updated.delay",
-        side_effect=ConnectionError("broker down"),
+        "chains.tasks.enqueue_due_confirmations",
+        side_effect=ConnectionError("database down"),
     )
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs", return_value=[])
     @patch(
@@ -187,6 +187,6 @@ class ScanLivenessTests(TestCase):
     ):
         chain, cursor = self.make_scan_case()
         self.run_round(chain)
-        dispatch.assert_called_once_with(chain.pk)
+        dispatch.assert_called_once_with(chain)
         cursor.refresh_from_db()
         self.assertEqual(cursor.last_scanned_block, 119)

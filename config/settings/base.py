@@ -1,7 +1,6 @@
 # ruff: noqa: ERA001, E501
 """Base settings to build other settings files upon."""
 
-import ssl
 import sys
 from pathlib import Path
 
@@ -20,9 +19,6 @@ from common.logger import configure_structlog  # noqa: E402
 from common.logger import shared_processors  # noqa: E402
 from config.admin_path import admin_route_prefix  # noqa: E402
 from config.admin_path import normalize_admin_path  # noqa: E402
-from config.performance import get_bool_default  # noqa: E402
-from config.performance import get_int  # noqa: E402
-from config.periodic_tasks import PERIODIC_TASK_QUEUES  # noqa: E402
 
 configure_structlog()
 
@@ -35,10 +31,12 @@ REDIS_DB = env.int("REDIS_DB", default=0)
 REDIS_URL = env.str(
     "REDIS_URL", default=f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 )
-# 缓存与 broker 共用同一 Redis 实例但分逻辑库：broker 在 REDIS_DB（默认 0），
-# 缓存独占 REDIS_CACHE_DB（默认 1）。Redis 的 maxmemory 淘汰策略是实例级、无法按库隔离，
-# 实例侧统一配 volatile-lru：只淘汰带 TTL 的临时缓存键，broker 任务键（无 TTL）与
-# timeout=None 的配置型缓存（watch set / runtime settings / 权限）天然豁免，永不被淘汰。
+# Redis 只承担缓存、限流与签名 nonce，任务队列在 PostgreSQL（Procrastinate）。
+# 限流键在 REDIS_DB（默认 0），缓存独占 REDIS_CACHE_DB（默认 1）。REDIS_URL 另供
+# migrate_celery_messages 读取旧版本留在 Redis 里的 Celery 在途消息。
+# Redis 的 maxmemory 淘汰策略是实例级、无法按库隔离，实例侧统一配 volatile-lru：
+# 只淘汰带 TTL 的临时缓存键，timeout=None 的配置型缓存（watch set / runtime settings /
+# 权限）天然豁免，永不被淘汰。
 REDIS_CACHE_DB = env.int("REDIS_CACHE_DB", default=1)
 REDIS_CACHE_URL = env.str(
     "REDIS_CACHE_URL", default=f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_CACHE_DB}"
@@ -206,7 +204,6 @@ DJANGO_APPS = [
     "django.contrib.staticfiles",
 ]
 THIRD_PARTY_APPS = [
-    "django_celery_results",
     # PostgreSQL 任务队列。须排在本地 app 之前：core.admin 要替换它自带的任务后台。
     "procrastinate.contrib.django",
     "rest_framework",
@@ -393,77 +390,16 @@ LOGGING = {
     },
 }
 
-# Celery
+# Procrastinate（PostgreSQL 任务队列）
 # ------------------------------------------------------------------------------
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#std:setting-timezone
-CELERY_TIMEZONE = TIME_ZONE
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#std:setting-broker_url
-CELERY_BROKER_URL = REDIS_URL
-# 沿用 Redis transport，仅替换可合并周期队列的原子写入与重投。
-CELERY_BROKER_TRANSPORT = "common.redis_transport:Transport"
-# 自定义 transport 名称不会触发 Kombu 对 rediss 别名的自动 TLS 设置。
-CELERY_BROKER_USE_SSL = (
-    {"ssl_cert_reqs": ssl.CERT_REQUIRED} if REDIS_URL.startswith("rediss://") else False
-)
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#std:setting-result_backend
-CELERY_RESULT_BACKEND = "django-db"
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#result-extended
-CELERY_RESULT_EXTENDED = get_bool_default("CELERY_RESULT_EXTENDED", default=True)
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#result-backend-always-retry
-# https://github.com/celery/celery/pull/6122
-CELERY_RESULT_BACKEND_ALWAYS_RETRY = True
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#result-backend-max-retries
-CELERY_RESULT_BACKEND_MAX_RETRIES = 10
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#std:setting-accept_content
-CELERY_ACCEPT_CONTENT = ["json"]
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#std:setting-task_serializer
-CELERY_TASK_SERIALIZER = "json"
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#std:setting-result_serializer
-CELERY_RESULT_SERIALIZER = "json"
-# 生产默认只保留失败任务记录，避免高频周期任务持续写入成功结果。
-CELERY_TASK_IGNORE_RESULT = get_bool_default(
-    "CELERY_TASK_IGNORE_RESULT",
-    default=True,
-)
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#task-time-limit
-# 默认 60s 硬超时：覆盖绝大多数链上轮询/投递任务，防止僵尸任务长期占用 worker。
-CELERY_TASK_TIME_LIMIT = 60
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#task-soft-time-limit
-# 默认 30s 软超时：给任务预留清理与记录日志时间，避免直接被硬杀。
-CELERY_TASK_SOFT_TIME_LIMIT = 30
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#worker-send-task-events
-CELERY_WORKER_SEND_TASK_EVENTS = get_bool_default(
-    "CELERY_WORKER_SEND_TASK_EVENTS",
-    default=False,
-)
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#std-setting-task_send_sent_event
-CELERY_TASK_SEND_SENT_EVENT = get_bool_default(
-    "CELERY_TASK_SEND_SENT_EVENT",
-    default=False,
-)
-
-CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-CELERY_TASK_STORE_ERRORS_EVEN_IF_IGNORED = True
-# 子进程跑满 256 个任务即重建，这是子进程内存的唯一回收手段（高频队列几分钟一轮）。
-# 有意不设 CELERY_WORKER_MAX_MEMORY_PER_CHILD：billiard 用 getrusage().ru_maxrss 判定，
-# 该值是峰值 RSS 且含 fork 时继承的主进程页，子进程一出生就≈主进程 RSS。主进程会随运行
-# 时长缓慢增长，一旦逼近上限，每个子进程跑一个任务就被回收，反复 fork 并重建 DB/Redis/
-# RPC 连接（生产曾因 256MB 上限导致子进程仅存活数秒、CPU 持续高抖）。
-CELERY_WORKER_MAX_TASKS_PER_CHILD = 256
-CELERY_WORKER_CONCURRENCY = get_int(
-    "CELERY_WORKER_CONCURRENCY",
-    "celery_worker_concurrency",
-)
-
-CELERY_WORKER_DISABLE_RATE_LIMITS = True
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1
-CELERY_WORKER_POOL_RESTARTS = True  # 允许 Worker 池重启
-CELERY_WORKER_HIJACK_ROOT_LOGGER = False  # 减少日志开销
-
-# 链扫描不在 Celery 内运行（见 chains.runner）；这里只为可合并周期任务路由专属队列。
-CELERY_TASK_ROUTES = {
-    **{task: {"queue": queue} for task, queue in PERIODIC_TASK_QUEUES.items()},
-}
+# 各 app 的 tasks 模块自动发现；不在 tasks 模块里的任务与周期登记在这里显式列出，
+# 否则 worker 不认识这些任务名，任务会以 TaskNotFound 落为 failed。
+PROCRASTINATE_IMPORT_PATHS = [
+    "config.periodic_jobs",
+    "common.saas_callback",
+    "evm.saas_gas_billing",
+    "tron.saas_gas_billing",
+]
 
 # -------------------------------------------------------------------------------
 # django-rest-framework - https://www.django-rest-framework.org/api-guide/settings/

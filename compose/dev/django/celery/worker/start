@@ -1,9 +1,0 @@
-#!/bin/bash
-
-set -o errexit
-set -o nounset
-
-export CELERY_WORKER_POOL="${CELERY_WORKER_POOL:-threads}"
-export CELERY_WORKER_CONCURRENCY="${CELERY_WORKER_CONCURRENCY:-8}"
-
-exec watchfiles --filter python celery.__main__.main --args "-A config.celery worker -l WARNING --pool=${CELERY_WORKER_POOL} --concurrency=${CELERY_WORKER_CONCURRENCY} --without-heartbeat --without-gossip"

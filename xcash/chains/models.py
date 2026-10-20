@@ -9,7 +9,6 @@ from urllib.parse import urlparse
 
 import environ
 import structlog
-from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import ImproperlyConfigured
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
@@ -49,7 +48,7 @@ env = environ.Env()
 logger = structlog.get_logger()
 
 
-# 进程级 Web3 复用表：(rpc, poa) -> Web3。每个 Celery 任务都会重新查出 Chain 实例，若
+# 进程级 Web3 复用表：(rpc, poa) -> Web3。每个任务、每轮链循环都会重新查出 Chain 实例，若
 # Web3 只缓存在实例上，每个任务都会新建 HTTPProvider（web3 7.x 的 requests.Session 按
 # provider 实例缓存）并重新 TCP+TLS 握手。按 RPC 地址在进程内复用，连接即可 keep-alive；
 # 运维改了 RPC 地址自然命中新键。按 pid 隔离：fork 出的子进程首次使用即重建，不跨进程共享连接。
@@ -67,7 +66,7 @@ def shared_web3(*, rpc: str, poa: bool) -> Web3:
     w3 = _shared_web3_instances.get(key)
     if w3 is None:
         # 关闭 web3 内置重试：web3 7.x 默认对 eth_getBalance / eth_call 等最多尝试 5 次、
-        # 每次超时 8s，单次调用最坏约 42s，节点挂起时单条归集计划即可耗尽任务软超时。
+        # 每次超时 8s，单次调用最坏约 42s，节点挂起时单条归集计划即可耗尽批处理时间预算。
         # 重试统一交给调用方：扫描器自带退避重试，其余路径由下一轮调度自然重试。
         w3 = Web3(
             Web3.HTTPProvider(
@@ -1258,9 +1257,6 @@ class VaultSlotCollectSchedule(models.Model):
                 break
             try:
                 created_count += cls.execute_one_due(pk)
-            except SoftTimeLimitExceeded:
-                # 软超时是 Celery 要求收尾的控制信号，必须穿透逐计划容错上抛。
-                raise
             except Exception as exc:  # noqa: BLE001
                 # execute_due 是所有链共享的唯一归集派发入口且按 due_at 升序取批；
                 # 单条计划的确定性异常（如价格数据形态损坏）若不退避，会每轮在批次
@@ -1296,7 +1292,7 @@ class VaultSlotCollectSchedule(models.Model):
         if schedule is None:
             return 0
         # 租约：任何链上 RPC 之前先把 due_at 推后一个退避窗口。下面的部署判活、余额刷新、
-        # gas 估算在节点挂起时会耗尽任务软超时，而软超时必须原样上抛、来不及退避；
+        # gas 估算在节点挂起时可能卡到看门狗退出进程，来不及在失败分支退避；
         # 若不预先推后，该计划会恒占 execute_due 批次头部，每轮都卡在同一条挂起链上，
         # 饿死所有链的归集。成功绑定任务后 due_at 不再有意义，零余额/粉尘按原逻辑删除
         # 计划，其余提前返回都已处在退避窗口内，无需再逐个分支退避。
@@ -1359,11 +1355,6 @@ class VaultSlotCollectSchedule(models.Model):
                 tx_task = locked.create_tx_task(collect_gas_hint=collect_gas_hint)
                 locked.tx_task = tx_task
                 locked.save(update_fields=["tx_task", "updated_at"])
-        except SoftTimeLimitExceeded:
-            # 软超时是 Celery 要求任务收尾的控制信号，它继承自 Exception，被下面的
-            # 容错分支吞掉后 execute_due 会继续消费剩余计划，直到硬超时被 SIGKILL：
-            # 那时 singleton 锁不走 finally 释放，只能等 TTL 过期。必须原样上抛。
-            raise
         except Exception as exc:  # noqa: BLE001
             # 租约已在 RPC 前把 due_at 推后，这里只需留痕。
             logger.warning(
@@ -1520,7 +1511,7 @@ class Transfer(models.Model):
                 condition=models.Q(processed_at__isnull=True),
                 name="transfer_unprocessed_idx",
             ),
-            # 每条链推进高度后按 timestamp 取本链确认中的转账（block_number_updated）。
+            # 每条链推进高度后按 timestamp 取本链确认中的转账（enqueue_due_confirmations）。
             models.Index(
                 fields=("chain", "timestamp"),
                 condition=models.Q(status=TransferStatus.CONFIRMING),
@@ -1533,7 +1524,7 @@ class Transfer(models.Model):
 
     @db_transaction.atomic
     def process(self):
-        # 加行锁的同时刷新（一次 SELECT ... FOR UPDATE），防止两个 Celery worker 并发处理同一笔转账
+        # 加行锁的同时刷新（一次 SELECT ... FOR UPDATE），防止并发处理同一笔转账
         self.refresh_from_db(from_queryset=Transfer.objects.select_for_update())
         if self.processed_at:
             return
@@ -1578,11 +1569,13 @@ class Transfer(models.Model):
         self._mark_processed()
 
         if self.confirm_mode == ConfirmMode.QUICK:
-            from .tasks import confirm_transfer
+            # QUICK 不等确认深度：在 process() 事务末尾入队确认，提交后 worker 立即取到。
+            # 与业务归类同事务提交，确认任务不可能先于归类结果可见。
+            from common.jobs import PRIORITY_URGENT
 
-            db_transaction.on_commit(
-                lambda transfer_id=self.pk: confirm_transfer.delay(transfer_id)
-            )
+            from .tasks import enqueue_confirm_transfer
+
+            enqueue_confirm_transfer(self.pk, priority=PRIORITY_URGENT)
 
     def _mark_processed(self) -> None:
         self.processed_at = timezone.now()

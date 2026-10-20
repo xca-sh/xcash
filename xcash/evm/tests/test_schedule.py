@@ -4,6 +4,7 @@ from unittest.mock import patch
 from django.db import transaction
 from django.test import TestCase
 from django.test import TransactionTestCase
+from procrastinate.contrib.django.models import ProcrastinateJob
 from web3 import Web3
 
 from chains.constants import ChainCode
@@ -128,16 +129,13 @@ class EvmTxTaskScheduleTests(TestCase):
         self.assertEqual(TxTask.objects.count(), 0)
         self.assertEqual(EvmTxTask.objects.count(), 0)
 
-    def test_schedule_wakes_chain_loop_without_publishing_to_celery(self):
-        # 首播不再经 Celery：在建任务的同一事务内发 PG 通知，唤醒该链的 chain-runner 线程。
-        with (
-            patch("evm.models.notify_chain_tx_pending") as notify,
-            patch("celery.app.task.Task.apply_async") as apply_async,
-        ):
+    def test_schedule_wakes_chain_loop_without_enqueuing_jobs(self):
+        # 首播不经任务队列：在建任务的同一事务内发 PG 通知，唤醒该链的 chain-runner 线程。
+        with patch("evm.models.notify_chain_tx_pending") as notify:
             EvmTxTask.schedule(self._intent())
 
         notify.assert_called_once_with(self.chain.pk)
-        apply_async.assert_not_called()
+        self.assertFalse(ProcrastinateJob.objects.exists())
 
     def test_back_to_back_schedules_are_broadcast_in_nonce_order(self):
         # 同地址连续建的两笔任务由链线程按 nonce 顺序发出，高 nonce 不会抢先进入 mempool。

@@ -6,15 +6,16 @@ from unittest.mock import patch
 
 import httpx
 from django.core.cache import cache
+from django.db import transaction
 from django.test import TestCase
 from django.test import override_settings
 
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
-from common.permission_check import _refresh_saas_permission
 from common.permission_check import check_saas_permission
 from common.permission_check import get_saas_deposit_customer_limit
 from common.permission_check import get_saas_invoice_vault_slot_limit
+from common.permission_check import refresh_saas_permission
 
 
 @override_settings(
@@ -31,15 +32,17 @@ class CheckSaasPermissionTest(TestCase):
     def setUp(self):
         cache.clear()
 
-    @patch("common.permission_check._refresh_saas_permission.delay")
-    def test_cold_start_passes_through_and_schedules_refresh(self, mock_delay):
+    @patch("common.permission_check.refresh_executor")
+    def test_cold_start_passes_through_and_schedules_refresh(self, mock_executor):
         """无缓存 → 默认放行 + 派发刷新任务。"""
 
         check_saas_permission(appid="XC-new", action="deposit")  # 不抛
-        mock_delay.assert_called_once_with(appid="XC-new")
+        mock_executor.return_value.submit.assert_called_once_with(
+            refresh_saas_permission, appid="XC-new"
+        )
 
-    @patch("common.permission_check._refresh_saas_permission.delay")
-    def test_fresh_cache_no_refresh(self, mock_delay):
+    @patch("common.permission_check.refresh_executor")
+    def test_fresh_cache_no_refresh(self, mock_executor):
         """命中新缓存（fetched_at < 60s）→ 不派发刷新。"""
 
         cache.set(
@@ -49,10 +52,10 @@ class CheckSaasPermissionTest(TestCase):
         )
 
         check_saas_permission(appid="XC-a", action="deposit")
-        mock_delay.assert_not_called()
+        mock_executor.return_value.submit.assert_not_called()
 
-    @patch("common.permission_check._refresh_saas_permission.delay")
-    def test_stale_cache_triggers_refresh_but_uses_cache(self, mock_delay):
+    @patch("common.permission_check.refresh_executor")
+    def test_stale_cache_triggers_refresh_but_uses_cache(self, mock_executor):
         """命中 stale 缓存（fetched_at > 60s）→ 派发刷新，本次仍按旧缓存判定。"""
 
         cache.set(
@@ -62,10 +65,12 @@ class CheckSaasPermissionTest(TestCase):
         )
 
         check_saas_permission(appid="XC-a", action="deposit")  # 旧缓存说放行
-        mock_delay.assert_called_once_with(appid="XC-a")
+        mock_executor.return_value.submit.assert_called_once_with(
+            refresh_saas_permission, appid="XC-a"
+        )
 
-    @patch("common.permission_check._refresh_saas_permission.delay")
-    def test_refresh_lock_dedupes_within_window(self, mock_delay):
+    @patch("common.permission_check.refresh_executor")
+    def test_refresh_lock_dedupes_within_window(self, mock_executor):
         """同一 appid 在锁窗口内多次触发，只派发一次刷新任务。"""
 
         # 3 次 cold start，预期只派发 1 次
@@ -73,16 +78,16 @@ class CheckSaasPermissionTest(TestCase):
         check_saas_permission(appid="XC-dup", action="deposit")
         check_saas_permission(appid="XC-dup", action="deposit")
 
-        self.assertEqual(mock_delay.call_count, 1)
+        self.assertEqual(mock_executor.return_value.submit.call_count, 1)
 
-    @patch("common.permission_check._refresh_saas_permission.delay")
-    def test_refresh_lock_is_per_appid(self, mock_delay):
+    @patch("common.permission_check.refresh_executor")
+    def test_refresh_lock_is_per_appid(self, mock_executor):
         """不同 appid 的刷新锁互不干扰。"""
 
         check_saas_permission(appid="XC-a", action="deposit")
         check_saas_permission(appid="XC-b", action="deposit")
 
-        self.assertEqual(mock_delay.call_count, 2)
+        self.assertEqual(mock_executor.return_value.submit.call_count, 2)
 
     def test_frozen_user_denied(self):
         """缓存里 frozen=True → 拒绝。"""
@@ -96,6 +101,25 @@ class CheckSaasPermissionTest(TestCase):
         with self.assertRaises(APIError) as ctx:
             check_saas_permission(appid="XC-frozen", action="deposit")
         self.assertEqual(ctx.exception.error_code, ErrorCode.ACCOUNT_FROZEN)
+
+    @patch("common.permission_check.refresh_executor")
+    def test_frozen_rejection_still_refreshes_after_request_rollback(
+        self, mock_executor
+    ):
+        """冻结态被拒的请求事务会回滚，刷新不能跟着回滚：否则 SaaS 侧解冻后仍被拒到缓存过期。"""
+
+        cache.set(
+            "saas:permission:XC-thaw",
+            {"frozen": True, "_fetched_at": time.time() - 120},
+            None,
+        )
+
+        with self.assertRaises(APIError), transaction.atomic():
+            check_saas_permission(appid="XC-thaw", action="deposit")
+
+        mock_executor.return_value.submit.assert_called_once_with(
+            refresh_saas_permission, appid="XC-thaw"
+        )
 
     def test_deposit_action_does_not_require_legacy_feature_flag(self):
         """旧充值权限字段已移除；缓存缺该字段时 deposit 也只看 frozen。"""
@@ -197,12 +221,12 @@ class CheckSaasPermissionTest(TestCase):
             self.assertIsNone(get_saas_invoice_vault_slot_limit(appid=appid))
 
     @override_settings(IS_SAAS=False)
-    @patch("common.permission_check._refresh_saas_permission.delay")
-    def test_self_hosted_pass_through_no_refresh(self, mock_delay):
+    @patch("common.permission_check.refresh_executor")
+    def test_self_hosted_pass_through_no_refresh(self, mock_executor):
         """IS_SAAS=False（自托管）：直接放行，且不派发任务。"""
 
         check_saas_permission(appid="XC-a", action="deposit")
-        mock_delay.assert_not_called()
+        mock_executor.return_value.submit.assert_not_called()
 
     def test_missing_appid_raises_invalid_appid(self):
         """appid=None 直接抛 INVALID_APPID。"""
@@ -225,7 +249,7 @@ class CheckSaasPermissionTest(TestCase):
     SAAS_CALLBACK_URL="http://saas",
 )
 class RefreshSaasPermissionTaskTest(TestCase):
-    """_refresh_saas_permission celery 任务本体的行为测试。"""
+    """refresh_saas_permission 后台刷新本体的行为测试。"""
 
     def setUp(self):
         cache.clear()
@@ -243,7 +267,7 @@ class RefreshSaasPermissionTaskTest(TestCase):
         mock_http.post.return_value = mock_resp
 
         before = time.time()
-        _refresh_saas_permission.run(appid="XC-r")
+        refresh_saas_permission(appid="XC-r")
         after = time.time()
 
         cached = cache.get("saas:permission:XC-r")
@@ -260,7 +284,7 @@ class RefreshSaasPermissionTaskTest(TestCase):
         cache.set("saas:permission:XC-keep", old, None)
 
         mock_http.post.side_effect = httpx.ConnectError("boom")
-        _refresh_saas_permission.run(appid="XC-keep")
+        refresh_saas_permission(appid="XC-keep")
 
         self.assertEqual(cache.get("saas:permission:XC-keep"), old)
 
@@ -279,7 +303,7 @@ class RefreshSaasPermissionTaskTest(TestCase):
         )
         mock_http.post.return_value = mock_resp
 
-        _refresh_saas_permission.run(appid="XC-4xx")
+        refresh_saas_permission(appid="XC-4xx")
 
         self.assertEqual(cache.get("saas:permission:XC-4xx"), old)
 
@@ -288,6 +312,6 @@ class RefreshSaasPermissionTaskTest(TestCase):
     def test_task_skips_when_no_token(self, mock_http):
         """自托管模式下任务被错误派发也不会调 SaaS。"""
 
-        _refresh_saas_permission.run(appid="XC-x")
+        refresh_saas_permission(appid="XC-x")
 
         mock_http.post.assert_not_called()

@@ -1,0 +1,12 @@
+#!/bin/bash
+
+set -o errexit
+set -o pipefail
+set -o nounset
+
+eval "$(python /app/config/performance.py shell-env worker)"
+
+# 业务任务 worker（见 xcash/core/management/commands/run_worker.py）：单进程，线程池执行
+# PG 队列里的任务，事件循环负责取任务、心跳与周期任务投递（取代 beat）。SIGTERM 后停止
+# 取新任务、等在途任务做完再退出；compose 的 stop_grace_period 覆盖最长任务的收尾时间。
+exec python -u manage.py run_worker --concurrency "${WORKER_CONCURRENCY}"

@@ -36,7 +36,8 @@ if tool == "timeout":
 if args[0] != "compose":
     # 非 compose 的 docker 命令：按标签查询退役服务的容器，其余（stop/start/image）直接成功。
     if args[0] == "ps":
-        print(os.environ["RETIRED_CONTAINERS"])
+        service = args[-1].removeprefix("label=com.docker.compose.service=")
+        print("\n".join(json.loads(os.environ["RETIRED_CONTAINERS"]).get(service, [])))
     sys.exit(0)
 
 args = args[1:]  # docker compose
@@ -93,7 +94,13 @@ elif command in ("run", "exec") and "manage.py" in args:
         if failure == "bootstrap" or (failure == "bootstrap_once" and attempts == 1):
             sys.exit(20)
     elif operation[:1] == ["wait_for_runtime"]:
-        if failure == "ready_" + operation[operation.index("--phase") + 1]:
+        if failure == "ready":
+            sys.exit(23)
+    elif operation == ["migrate_celery_messages", "--dry-run"]:
+        if failure == "celery_messages_preview":
+            sys.exit(23)
+    elif operation == ["migrate_celery_messages"]:
+        if failure == "celery_messages":
             sys.exit(23)
 """
 
@@ -119,7 +126,7 @@ def run_upgrade(tmp_path):
         running=None,
         dirty=False,
         ready_timeout="360",
-        retired="",
+        retired=None,
     ):
         env = {
             **os.environ,
@@ -134,9 +141,12 @@ def run_upgrade(tmp_path):
             "STOP_BEFORE_REHEARSAL": str(quiesced).lower(),
             "PENDING_MIGRATIONS": str(migrations).lower(),
             "FAIL_POINT": failure,
-            "RUNNING_SERVICES": running or "django\nworker\nchain-runner\nbeat",
+            "RUNNING_SERVICES": running or "django\nworker\nchain-runner",
             "APP_READY_TIMEOUT": ready_timeout,
-            "RETIRED_CONTAINERS": retired,
+            # 按退役服务名给出仍在运行的旧容器，默认有一个旧版本的 beat。
+            "RETIRED_CONTAINERS": json.dumps(
+                {"beat": ["old-beat-1"]} if retired is None else retired
+            ),
         }
         result = subprocess.run(  # noqa: S603 - 实际升级命令全部被隔离的 CLI 替身接管
             ["/bin/bash", str(UPGRADE_SCRIPT)],
@@ -182,10 +192,31 @@ def production_bootstraps(commands):
     ]
 
 
+def retired_lookup(service):
+    return [
+        "docker:",
+        "ps",
+        "-q",
+        "--filter",
+        "label=com.docker.compose.project=xcash",
+        "--filter",
+        f"label=com.docker.compose.service={service}",
+    ]
+
+
+def manage_command(commands, *operation):
+    return next(
+        index
+        for index, command in enumerate(commands)
+        if command[0] == "run"
+        and command[command.index("manage.py") + 1 :] == list(operation)
+    )
+
+
 @pytest.mark.parametrize(
     ("migrations", "quiesced"), [(False, False), (True, False), (True, True)]
 )
-def test_upgrade_switches_old_processes_before_starting_new_beat(
+def test_upgrade_switches_old_processes_before_starting_new_runtime(
     run_upgrade,
     migrations,
     quiesced,
@@ -193,30 +224,33 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
     result, commands = run_upgrade(migrations=migrations, quiesced=quiesced)
     assert result.returncode == 0, result.stdout + result.stderr
     pull = command_index(commands, ["pull"])
-    stop_beat = commands.index(["stop", "beat"])
+    preview = manage_command(commands, "migrate_celery_messages", "--dry-run")
+    stop_beat = commands.index(["docker:", "stop", "old-beat-1"])
     stop_workers = commands.index(["stop", "worker", "chain-runner"])
     stop_django = commands.index(["stop", "django"])
+    migrate_messages = manage_command(commands, "migrate_celery_messages")
     start_runtime = command_index(commands, ["up"], contains="worker")
-    start_beat = commands.index(["up", "-d", "--no-deps", "beat"])
-    consumers_ready = command_index(commands, ["exec"], contains="consumers")
-    scheduler_ready = command_index(commands, ["exec"], contains="scheduler")
+    ready = command_index(commands, ["exec"], contains="wait_for_runtime")
     reload_caddy = command_index(commands, ["exec"], contains="reload")
     [bootstrap] = production_bootstraps(commands)
+    # 旧 beat 是生产者，先于 worker 排空停止；在途消息在生产迁移之后、新进程启动之前迁移。
     assert (
         pull
+        < preview
         < stop_beat
         < stop_workers
         < stop_django
         < bootstrap
+        < migrate_messages
         < start_runtime
-        < start_beat
+        < ready
+        < reload_caddy
     )
-    assert start_runtime < consumers_ready < start_beat < scheduler_ready
-    # 新 Beat 启动即投递探针，等待命令必须拿到启动前的发布下限，不能用自身开始时刻。
-    assert "--published-after" in commands[scheduler_ready]
-    # Caddyfile 有误时 reload 会失败，放在最后才不会拖住 Beat 等业务进程的启动。
-    assert scheduler_ready < reload_caddy
-    assert commands.count(["stop", "beat"]) == 1
+    # 新进程一启动就可能写心跳，就绪下限必须是发起启动的时刻，而不是等待命令自身开始时刻。
+    assert "--started-after" in commands[ready]
+    # --remove-orphans 删除退役服务（旧 beat）的容器。
+    assert "--remove-orphans" in commands[start_runtime]
+    assert not any("beat" in command for command in commands if command[0] != "docker:")
     assert commands.count(["stop", "worker", "chain-runner"]) == 1
     assert commands.count(["stop", "django"]) == 1
     assert commands[bootstrap][-1] == "bootstrap_runtime"
@@ -244,29 +278,21 @@ def test_upgrade_switches_old_processes_before_starting_new_beat(
         assert rehearsal == []
 
 
-def test_retired_service_containers_are_stopped_before_migration(run_upgrade):
+def test_retired_service_containers_are_stopped_before_draining_workers(run_upgrade):
     """compose 已不认识退役服务，必须按标签停掉旧容器，不能让旧代码跑过 migrate。"""
-    result, commands = run_upgrade(migrations=True, retired="old-scan-1\nold-scan-2")
-    assert result.returncode == 0, result.stdout + result.stderr
-    lookup = commands.index(
-        [
-            "docker:",
-            "ps",
-            "-q",
-            "--filter",
-            "label=com.docker.compose.project=xcash",
-            "--filter",
-            "label=com.docker.compose.service=worker-scan",
-        ]
+    result, commands = run_upgrade(
+        migrations=True,
+        retired={"worker-scan": ["old-scan-1", "old-scan-2"], "beat": ["old-beat-1"]},
     )
-    stop_retired = commands.index(["docker:", "stop", "old-scan-1", "old-scan-2"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    stop_scan = commands.index(["docker:", "stop", "old-scan-1", "old-scan-2"])
+    stop_beat = commands.index(["docker:", "stop", "old-beat-1"])
     stop_workers = commands.index(["stop", "worker", "chain-runner"])
     stop_django = commands.index(["stop", "django"])
     [bootstrap] = production_bootstraps(commands)
-    start_runtime = command_index(commands, ["up"], contains="worker")
-    assert stop_workers < lookup < stop_retired < stop_django < bootstrap
-    # 删除交给启动阶段的 --remove-orphans。
-    assert "--remove-orphans" in commands[start_runtime]
+    assert retired_lookup("worker-scan") in commands
+    assert retired_lookup("beat") in commands
+    assert max(stop_scan, stop_beat) < stop_workers < stop_django < bootstrap
     assert not any(c[:2] == ["docker:", "start"] for c in commands)
 
 
@@ -274,16 +300,16 @@ def test_pre_migration_failure_restores_retired_service_containers(run_upgrade):
     result, commands = run_upgrade(
         migrations=True,
         failure="stop_django",
-        running="worker\nbeat",
-        retired="old-scan-1",
+        running="worker",
+        retired={"beat": ["old-beat-1"]},
     )
     assert result.returncode != 0
-    assert ["docker:", "start", "old-scan-1"] in commands
-    assert ["start", "worker", "beat"] in commands
+    assert ["docker:", "start", "old-beat-1"] in commands
+    assert ["start", "worker"] in commands
 
 
 def test_upgrade_without_retired_containers_skips_retired_stop(run_upgrade):
-    result, commands = run_upgrade()
+    result, commands = run_upgrade(retired={})
     assert result.returncode == 0, result.stdout + result.stderr
     assert not any(c[:2] == ["docker:", "stop"] for c in commands)
 
@@ -294,11 +320,15 @@ def test_pull_failure_leaves_existing_services_running(run_upgrade):
     assert not any(c[0] in ("stop", "start") for c in commands)
 
 
-@pytest.mark.parametrize("failure", ["pending_plan", "production_plan", "rehearsal"])
+@pytest.mark.parametrize(
+    "failure",
+    ["pending_plan", "production_plan", "rehearsal", "celery_messages_preview"],
+)
 def test_pre_stop_failure_aborts_before_touching_production(run_upgrade, failure):
     result, commands = run_upgrade(migrations=True, failure=failure)
     assert result.returncode != 0
     assert not any(c[0] in ("stop", "start") for c in commands)
+    assert not any(c[:2] == ["docker:", "stop"] for c in commands)
     assert production_bootstraps(commands) == []
     assert ("迁移演练失败" in result.stderr) is (failure == "rehearsal")
 
@@ -328,10 +358,10 @@ def test_pre_migration_failure_restores_only_previously_running_containers(
         migrations=True,
         quiesced=quiesced,
         failure=failure,
-        running="worker\nbeat",
+        running="worker",
     )
     assert result.returncode != 0
-    assert ["start", "worker", "beat"] in commands
+    assert ["start", "worker"] in commands
     assert not any(c[0] == "up" and "worker" in c for c in commands)
 
 
@@ -339,28 +369,46 @@ def test_pre_migration_failure_restores_only_previously_running_containers(
 def test_failed_or_unconfirmed_migration_does_not_restart_apps(run_upgrade, failure):
     result, commands = run_upgrade(failure=failure)
     assert result.returncode != 0
-    assert ["stop", "beat"] in commands
+    assert ["stop", "worker", "chain-runner"] in commands
     assert not any(c[0] in ("start", "up") and "worker" in c for c in commands)
-    assert ["up", "-d", "--no-deps", "beat"] not in commands
+    assert not any(
+        "migrate_celery_messages" in c
+        for c in commands
+        if c[0] == "run" and "--dry-run" not in c
+    )
 
 
 def test_post_migration_recovery_retries_setup_before_starting_services(run_upgrade):
     result, commands = run_upgrade(failure="bootstrap_once")
     assert result.returncode != 0
     runtime = command_index(commands, ["up"], contains="worker")
-    beat = commands.index(["up", "-d", "--no-deps", "beat"])
     bootstrap = [i for i, c in enumerate(commands) if "bootstrap_runtime" in c]
     assert len(bootstrap) == 2
     assert commands[bootstrap[0]][-1] == "bootstrap_runtime"
     assert commands[bootstrap[-1]][-1] == "--skip-migrations"
-    assert bootstrap[-1] < runtime < beat
+    assert bootstrap[-1] < runtime
     assert not any(c[0] == "start" for c in commands)
+    # 在途消息尚未迁移：恢复服务后提示运维手工执行迁移命令。
+    assert "manage.py migrate_celery_messages" in result.stderr
 
 
-def test_worker_start_failure_cannot_start_beat_even_during_cleanup(run_upgrade):
+def test_celery_message_migration_failure_still_restores_service(run_upgrade):
+    """迁移已完成：在途消息迁移失败时按新 schema 恢复服务，消息留在 Redis 等运维手工迁移。"""
+    result, commands = run_upgrade(failure="celery_messages")
+    assert result.returncode != 0
+    migrate_messages = manage_command(commands, "migrate_celery_messages")
+    runtime = command_index(commands, ["up"], contains="worker")
+    recovery_setup = command_index(commands, ["run"], contains="--skip-migrations")
+    assert migrate_messages < recovery_setup < runtime
+    assert "manage.py migrate_celery_messages" in result.stderr
+    assert "upgrade completed" not in result.stdout
+
+
+def test_runtime_start_failure_does_not_wait_or_report_success(run_upgrade):
     result, commands = run_upgrade(failure="start_runtime")
     assert result.returncode != 0
-    assert ["up", "-d", "--no-deps", "beat"] not in commands
+    assert not any("wait_for_runtime" in c for c in commands)
+    assert "upgrade completed" not in result.stdout
 
 
 def test_persistent_setup_failure_cannot_start_unprepared_services(run_upgrade):
@@ -368,7 +416,6 @@ def test_persistent_setup_failure_cannot_start_unprepared_services(run_upgrade):
     assert result.returncode != 0
     assert sum("bootstrap_runtime" in c for c in commands) == 2
     assert not any(c[0] == "up" and "worker" in c for c in commands)
-    assert ["up", "-d", "--no-deps", "beat"] not in commands
 
 
 def test_worker_stop_failure_does_not_take_http_down(run_upgrade):
@@ -379,19 +426,10 @@ def test_worker_stop_failure_does_not_take_http_down(run_upgrade):
     assert not any(c[-2:] == ["migrate", "--noinput"] for c in commands)
 
 
-def test_consumer_readiness_failure_never_starts_beat(run_upgrade):
-    result, commands = run_upgrade(failure="ready_consumers")
+def test_readiness_failure_is_not_reported_as_success(run_upgrade):
+    result, commands = run_upgrade(failure="ready")
     assert result.returncode != 0
-    assert ["up", "-d", "--no-deps", "beat"] not in commands
-    assert "upgrade completed" not in result.stdout
-
-
-def test_scheduler_readiness_failure_stops_beat_without_cleanup_restart(run_upgrade):
-    result, commands = run_upgrade(failure="ready_scheduler")
-    assert result.returncode != 0
-    start = commands.index(["up", "-d", "--no-deps", "beat"])
-    assert ["stop", "beat"] in commands[start + 1 :]
-    assert commands.count(["up", "-d", "--no-deps", "beat"]) == 1
+    assert not any("reload" in c for c in commands)
     assert "upgrade completed" not in result.stdout
 
 

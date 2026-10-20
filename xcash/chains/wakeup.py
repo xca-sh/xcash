@@ -1,6 +1,6 @@
 """新建主动交易时唤醒对应链的 chain-runner 线程（PG LISTEN/NOTIFY）。
 
-交易由 web 请求、Celery 任务、后台操作等不同进程创建，而发送它们的是 chain-runner
+交易由 web 请求、worker 任务、后台操作等不同进程创建，而发送它们的是 chain-runner
 进程里的链线程，进程内唤醒无从谈起。NOTIFY 是 PG 原生的跨进程通知，并且天然具有
 on_commit 语义：只在最外层事务提交时投递，回滚（含 savepoint 回滚）即丢弃；同一事务
 内同一链的多次通知只投递一条；没有监听者时直接丢弃，不会积压。

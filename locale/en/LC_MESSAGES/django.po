@@ -1199,8 +1199,8 @@ msgstr ""
 "confirmed healthy right now."
 
 #: xcash/core/dashboard.py:275
-msgid "业务任务消费心跳异常"
-msgstr "Business task consumer heartbeat is unhealthy"
+msgid "业务任务心跳异常"
+msgstr "Business task worker heartbeat is unhealthy"
 
 #: xcash/core/dashboard.py:276
 msgid "链扫描进程心跳异常"
@@ -1218,10 +1218,11 @@ msgstr ""
 #, python-format
 msgid ""
 "尚未收到心跳，或最近 %(seconds)s 秒内没有新鲜的调度与执行回执。请检查 "
-"worker、Beat、Redis 与任务积压。"
+"worker 进程、数据库与任务积压。"
 msgstr ""
 "No heartbeat received, or no fresh scheduling and execution receipts in the "
-"last %(seconds)s seconds. Check the worker, Beat, Redis and the task backlog."
+"last %(seconds)s seconds. Check the worker process, the database and the task "
+"backlog."
 
 #: xcash/core/dashboard.py:307
 msgid "后台安全配置"

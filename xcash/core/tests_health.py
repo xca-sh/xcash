@@ -62,7 +62,7 @@ class HealthEndpointTests(TestCase):
 class ScanningHealthEndpointTests(TestCase):
     """/health/scanning 是「扫描还在不在转」的唯一外部信号，其 200/503 契约必须锁死。
 
-    Celery worker 死亡时，跑在它内部的巡检任务会一起停摆，无法自我上报。该端点由
+    worker 死亡时，跑在它内部的巡检任务会一起停摆，无法自我上报。该端点由
     django 进程回答，故障域与被监控对象分离，使扫描停摆能在一个探测周期内被发现。
 
     两类失效都必须锁死，它们的信号来源不同：

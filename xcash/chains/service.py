@@ -81,14 +81,14 @@ class TransferService:
 
     @staticmethod
     def enqueue_processing(transfer: Transfer) -> None:
-        """在事务提交后异步处理 Transfer，替代隐式 post_save signal。"""
-        from chains.tasks import process_transfer
+        """在落库事务内入队 Transfer 业务处理，替代隐式 post_save signal。
 
-        transaction.on_commit(
-            lambda transfer_id=transfer.pk: process_transfer.apply_async(
-                (transfer_id,), countdown=1
-            )
-        )
+        与转账同一事务提交：提交前 worker 看不到任务，不会处理到尚未提交的转账；
+        提交后崩溃也不会丢任务。
+        """
+        from chains.tasks import enqueue_process_transfer
+
+        enqueue_process_transfer(transfer.pk)
 
     @staticmethod
     def _build_observed_transfer_kwargs(

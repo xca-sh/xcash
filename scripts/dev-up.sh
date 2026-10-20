@@ -52,7 +52,4 @@ child_pids+=("$!")
 ENV_FILE="${ENV_FILE}" "${SCRIPT_DIR}/dev-chain-runner.sh" &
 child_pids+=("$!")
 
-ENV_FILE="${ENV_FILE}" "${SCRIPT_DIR}/dev-beat.sh" &
-child_pids+=("$!")
-
 wait_for_first_exit

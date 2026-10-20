@@ -1,23 +1,26 @@
 import structlog
-from celery import shared_task
 from django.db.models import Exists
 from django.db.models import OuterRef
+from procrastinate.contrib.django import app
 
 from chains.models import TxTaskStatus
-from common.decorators import singleton_task
 from common.time import ago
 from evm.models import EvmTxTask
 
 logger = structlog.get_logger()
 
 # EVM 主动交易的派发、广播与终局轮询由 chain-runner 的按链循环负责（见 evm.tx_loop）。
-# 这里只留跨进程的独立观察者：链循环自身停摆时，卡在 nonce 队首的任务仍能被告警出来。
+# 这里只留跨进程的独立观察者（跑在 worker 进程）：链循环自身停摆时，卡在 nonce 队首的任务
+# 仍能被告警出来。
 EVM_QUEUED_STUCK_ALERT_AFTER_MINUTES = 30
 
 
-@shared_task(ignore_result=True, soft_time_limit=25, time_limit=30)
-@singleton_task(timeout=35)
-def scan_stuck_queued_evm_tx_tasks(limit: int = 32) -> int:
+@app.task(name="evm.scan_stuck_queued_evm_tx_tasks")
+def scan_stuck_queued_evm_tx_tasks(
+    *,
+    timestamp: int | None = None,  # noqa: ARG001
+    limit: int = 32,
+) -> int:
     """告警长期卡在 QUEUED 队首的 EVM 任务，避免 nonce 队列无声停摆。"""
     lower_queued = EvmTxTask.objects.filter(
         sender_id=OuterRef("sender_id"),

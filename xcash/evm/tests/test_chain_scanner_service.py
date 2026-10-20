@@ -327,7 +327,8 @@ class EvmChainScannerServiceTests(TestCase):
         # 观察到链上 Transfer 只创建 Transfer；TxTask 不再维护“确认中”中间态。
         chain = self.chain
         crypto = chain.native_coin
-        transfer_create_mock.return_value = Mock()
+        # 落库后会在同一事务内入队处理任务，任务参数需要一个可序列化的主键。
+        transfer_create_mock.return_value = Mock(pk=1)
         observed = ObservedTransferPayload(
             chain=chain,
             block=1,

@@ -1,6 +1,13 @@
 import structlog
-from celery import shared_task
 from django.db import OperationalError
+from django.db.models import CharField
+from django.db.models import Exists
+from django.db.models import OuterRef
+from django.db.models import Value
+from django.db.models.functions import Cast
+from django.db.models.functions import Concat
+from procrastinate.contrib.django import app
+from procrastinate.contrib.django.models import ProcrastinateJob
 
 from chains.adapters import AdapterFactory
 from chains.adapters import TxCheckResult
@@ -13,26 +20,76 @@ from chains.models import VaultSlotCollectSchedule
 from chains.scanning import deadline_passed
 from chains.scanning import step_deadline
 from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
-from common.decorators import singleton_task
+from common.jobs import PRIORITY_DEFAULT
+from common.jobs import PRIORITY_URGENT
+from common.jobs import BackoffTable
+from common.jobs import defer_once
 from common.time import ago
 
 logger = structlog.get_logger()
 
+PROCESS_TRANSFER_TASK = "chains.process_transfer"
+CONFIRM_TRANSFER_TASK = "chains.confirm_transfer"
+SCHEDULE_VAULT_SLOT_DEPLOY_TASK = "chains.schedule_vault_slot_deploy"
 
 # 高并发下 try_match_invoice / confirm_invoice 等行锁链路会触发 PostgreSQL 死锁，
-# PG 死锁的设计前提就是被牺牲方应重试；这里通过 autoretry_for 让 Celery 在死锁时
-# 指数退避自动重试，避免单次失败导致 transfer 永久卡在未处理状态。
-@shared_task(
-    ignore_result=True,
-    autoretry_for=(OperationalError,),
-    retry_backoff=True,
-    retry_backoff_max=10,
-    retry_jitter=True,
-    max_retries=3,
+# PG 死锁的设计前提就是被牺牲方应重试；死锁（OperationalError）时按表退避重试，
+# 避免单次失败导致 transfer 永久卡在未处理状态。其它异常不重试，由兜底派发接手。
+PROCESS_TRANSFER_RETRY = BackoffTable((2, 4, 8), retry_exceptions=(OperationalError,))
+# 链上查询失败与 receipt 暂不可见：8s → 16s → 32s → 64s → 128s，避免节点抖动时密集重试。
+CONFIRM_TRANSFER_RETRY = BackoffTable((8, 16, 32, 64, 128))
+SCHEDULE_VAULT_SLOT_DEPLOY_RETRY = BackoffTable((8, 16, 32, 64, 128))
+
+
+def job_lock(task_name: str, pk: int) -> str:
+    """按任务名与业务主键构造 queueing_lock：同一对象至多一个待执行任务（含等待中的重试）。"""
+    return f"{task_name}:{pk}"
+
+
+def pending_job(task_name: str) -> Exists:
+    """子查询：OuterRef("pk") 对应的对象是否已有待执行或执行中的该类任务。
+
+    批量入队前先排除已在队列里的对象：只靠 queueing_lock 冲突去重也正确，但每次冲突
+    都会在 PG 日志里记一条唯一约束 ERROR，周期性批量入队会持续刷出噪音。极少数并发
+    竞争仍由 defer_once 的冲突处理兜住。
+    """
+    return Exists(
+        ProcrastinateJob.objects.filter(
+            queueing_lock=Concat(
+                Value(f"{task_name}:"),
+                Cast(OuterRef("pk"), output_field=CharField()),
+            ),
+            status__in=("todo", "doing"),
+        )
+    )
+
+
+def enqueue_process_transfer(transfer_id: int) -> None:
+    """在当前事务内入队转账处理。"""
+    defer_once(
+        process_transfer,
+        queueing_lock=job_lock(PROCESS_TRANSFER_TASK, transfer_id),
+        transfer_id=transfer_id,
+    )
+
+
+def enqueue_confirm_transfer(transfer_id: int, *, priority: int) -> None:
+    """在当前事务内入队转账确认；QUICK 用 URGENT 优先级，FULL 用 DEFAULT。"""
+    defer_once(
+        confirm_transfer,
+        queueing_lock=job_lock(CONFIRM_TRANSFER_TASK, transfer_id),
+        priority=priority,
+        transfer_id=transfer_id,
+    )
+
+
+@app.task(
+    name=PROCESS_TRANSFER_TASK,
+    retry=PROCESS_TRANSFER_RETRY,
+    priority=PRIORITY_URGENT,
 )
-@singleton_task(timeout=5, use_params=True)
-def process_transfer(pk):
-    transfer = Transfer.objects.get(pk=pk)
+def process_transfer(*, transfer_id: int) -> None:
+    transfer = Transfer.objects.get(pk=transfer_id)
     transfer.process()
 
 
@@ -42,18 +99,24 @@ def process_transfer(pk):
 FALLBACK_PROCESS_TRANSFER_BATCH_SIZE = 256
 
 
-@shared_task(ignore_result=True, soft_time_limit=25, time_limit=30)
-def fallback_process_transfer():
-    transfer_pks = (
+@app.task(name="chains.fallback_process_transfer")
+def fallback_process_transfer(*, timestamp: int | None = None) -> None:  # noqa: ARG001
+    """兜底派发 30s 前仍未处理的转账。
+
+    入队与扫描同事务，正常情况下不会漏派；这里兜住的是重试耗尽后失败的处理任务
+    （如持续死锁、处理器装配异常），已在队列里的不再重复入队。
+    """
+    transfer_pks = list(
         Transfer.objects.filter(
             processed_at__isnull=True,
             created_at__lte=ago(seconds=30),
         )
+        .exclude(pending_job(PROCESS_TRANSFER_TASK))
         .order_by("created_at")
         .values_list("pk", flat=True)[:FALLBACK_PROCESS_TRANSFER_BATCH_SIZE]
     )
     for pk in transfer_pks:
-        process_transfer.delay(pk)
+        enqueue_process_transfer(pk)
 
 
 # CONFIRMING 转账的最大观察时限。各链确认深度最多分钟级，超过该时限仍未确认，
@@ -69,12 +132,14 @@ COLLECT_BALANCE_RECONCILE_BUDGET_SECONDS = 90
 REAP_STALE_CONFIRMING_BUDGET_SECONDS = 200
 
 
-# 每条超龄转账都要打一次链上终验 RPC，limit=200 时单轮可达数分钟，必须显式声明
-# 时间预算：用 Celery 默认的 30s 软超时会让每天一轮只清理十几条，而这个任务正是
-# 「确认批次被链上已消失的转账占满」的唯一自愈手段，清理速度跟不上就等于失效。
-@shared_task(ignore_result=True, soft_time_limit=280, time_limit=290)
-@singleton_task(timeout=300)
-def reap_stale_confirming_transfers(limit: int = 200) -> int:
+# 每条超龄转账都要打一次链上终验 RPC，limit=200 时单轮可达数分钟，必须给足时间预算：
+# 这个任务是「确认批次被链上已消失的转账占满」的唯一自愈手段，清理速度跟不上就等于失效。
+@app.task(name="chains.reap_stale_confirming_transfers")
+def reap_stale_confirming_transfers(
+    *,
+    timestamp: int | None = None,  # noqa: ARG001
+    limit: int = 200,
+) -> int:
     """清理超龄且链上已无事实的 CONFIRMING 转账，返回清理条数。
 
     确认调度按 timestamp 升序取批（batch 封顶）：链上已消失的转账会恒占批次
@@ -133,11 +198,11 @@ def reap_stale_confirming_transfers(limit: int = 200) -> int:
             # 业务归类未完成（processed_at 为空）时不能直接确认：type 仍为 Unmatched，
             # confirm 的业务分发会空转，之后补上的匹配再也等不到确认动作，
             # 造成链上有钱、账上无单。此时先补处理，确认交回正常调度
-            # （block_number_updated 过滤 processed_at，QUICK 由 process 内部派发）。
+            # （enqueue_due_confirmations 过滤 processed_at，QUICK 由 process 内部入队）。
             if transfer.processed_at is None:
-                process_transfer.delay(transfer.pk)
+                enqueue_process_transfer(transfer.pk)
                 continue
-            confirm_transfer.delay(transfer.pk)
+            enqueue_confirm_transfer(transfer.pk, priority=PRIORITY_DEFAULT)
         else:
             logger.warning(
                 "超龄 CONFIRMING 转账链上终验结果异常，保留待人工排查",
@@ -149,42 +214,35 @@ def reap_stale_confirming_transfers(limit: int = 200) -> int:
     return reaped_count
 
 
-@shared_task(
-    ignore_result=True,
-    bind=True,
-    max_retries=5,
-    soft_time_limit=25,
-    time_limit=30,
+@app.task(
+    name=SCHEDULE_VAULT_SLOT_DEPLOY_TASK,
+    retry=SCHEDULE_VAULT_SLOT_DEPLOY_RETRY,
 )
-@singleton_task(timeout=35, use_params=True)
-def schedule_vault_slot_deploy(self, slot_pk: int) -> None:
+def schedule_vault_slot_deploy(*, slot_pk: int) -> None:
     """异步触发 VaultSlot 预部署调度。
 
     只有 EVM 原生币需要在暴露地址前预部署（receive() 的事件是入账识别的唯一依据）。
-    此前这一步同步跑在请求线程的 on_commit 回调里，RPC 抖动会把已经落库的下单请求
-    打成 500；挪到这里后请求不再内联链上调用，失败按指数退避重试，最终一致。
+    请求线程不内联链上调用：RPC 抖动会把已经落库的下单请求打成 500；挪到这里后失败按
+    退避表重试（8s → 16s → 32s → 64s → 128s），仍失败则由归集前的部署闸门兜底，不会丢部署。
     """
     from chains.vault_slots import schedule_deploy  # noqa: PLC0415
 
     try:
         schedule_deploy(slot_pk)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "VaultSlot 预部署调度失败，退避重试",
             vault_slot_id=slot_pk,
-            retries=self.request.retries,  # noqa
             error=str(exc),
         )
-        # 8s → 16s → 32s → 64s → 128s，覆盖节点短时抖动；仍失败则由归集前的
-        # ensure_deployed_before_collect 兜底，不会丢部署。
-        raise self.retry(
-            exc=exc, countdown=8 * (2**self.request.retries)
-        ) from exc  # noqa
+        raise
 
 
-@shared_task(ignore_result=True, soft_time_limit=45, time_limit=55)
-@singleton_task(timeout=58)
-def execute_due_vault_slot_collect_schedules() -> None:
+@app.task(name="chains.execute_due_vault_slot_collect_schedules")
+def execute_due_vault_slot_collect_schedules(
+    *,
+    timestamp: int | None = None,  # noqa: ARG001
+) -> None:
     created_count = VaultSlotCollectSchedule.execute_due(
         deadline=step_deadline(budget_seconds=COLLECT_SCHEDULE_BUDGET_SECONDS)
     )
@@ -195,9 +253,11 @@ def execute_due_vault_slot_collect_schedules() -> None:
         )
 
 
-@shared_task(ignore_result=True, soft_time_limit=100, time_limit=110)
-@singleton_task(timeout=115)
-def reconcile_vault_slot_collect_balance_gaps_task() -> None:
+@app.task(name="chains.reconcile_vault_slot_collect_balance_gaps")
+def reconcile_vault_slot_collect_balance_gaps_task(
+    *,
+    timestamp: int | None = None,  # noqa: ARG001
+) -> None:
     summary = reconcile_vault_slot_collect_balance_gaps(
         deadline=step_deadline(budget_seconds=COLLECT_BALANCE_RECONCILE_BUDGET_SECONDS)
     )
@@ -223,17 +283,18 @@ def reconcile_vault_slot_collect_balance_gaps_task() -> None:
         )
 
 
-@shared_task(
-    ignore_result=True,
-    bind=True,
-    max_retries=5,
-    soft_time_limit=50,
-    time_limit=60,
+class ReceiptNotVisibleError(Exception):
+    """交易 receipt 暂不可见，交给重试策略稍后再查。"""
+
+
+@app.task(
+    name=CONFIRM_TRANSFER_TASK,
+    retry=CONFIRM_TRANSFER_RETRY,
+    pass_context=True,
 )
-@singleton_task(timeout=65, use_params=True)
-def confirm_transfer(self, pk):
+def confirm_transfer(context, *, transfer_id: int) -> None:
     try:
-        transfer = Transfer.objects.get(pk=pk)
+        transfer = Transfer.objects.get(pk=transfer_id)
     except Transfer.DoesNotExist:
         # Transfer 已被 drop() 删除，无需再处理
         return
@@ -244,9 +305,8 @@ def confirm_transfer(self, pk):
     raw_result = adapter.tx_result(chain=transfer.chain, tx_hash=transfer.hash)
 
     if isinstance(raw_result, Exception):
-        # 指数退避：8s → 16s → 32s → 64s → 128s，避免节点抖动时密集重试。
-        countdown = 8 * (2**self.request.retries)  # noqa
-        raise self.retry(exc=raw_result, countdown=countdown)  # noqa
+        # 链上查询失败：抛出交给重试策略按退避表重试。
+        raise raw_result
     result = raw_result.status
     if result == TxCheckStatus.SUCCEEDED:
         if _refresh_transfer_chain_position_from_receipt(
@@ -256,7 +316,9 @@ def confirm_transfer(self, pk):
             return
         transfer.confirm()
     elif result == TxCheckStatus.MISSING:
-        if self.request.retries >= self.max_retries:  # noqa
+        if CONFIRM_TRANSFER_RETRY.is_final_attempt(context.job.attempts):
+            # 重试用尽仍不可见：保留观测到的转账，不报错；链高下次推进时会重新入队确认，
+            # 链上事实真的消失则由 reap_stale_confirming_transfers 终验清理。
             logger.warning(
                 "Transfer receipt missing after max retries, keeping observed transfer",
                 chain=transfer.chain.code,
@@ -266,17 +328,12 @@ def confirm_transfer(self, pk):
                 block_hash=transfer.block_hash,
             )
             return
-        countdown = 8 * (2**self.request.retries)  # noqa
-        raise self.retry(  # noqa
-            exc=RuntimeError(f"交易 receipt 暂不可见: {transfer.hash}"),
-            countdown=countdown,
-        )
+        raise ReceiptNotVisibleError(f"交易 receipt 暂不可见: {transfer.hash}")
     elif result == TxCheckStatus.FAILED:
         # 扫描器只在交易成功时才落 Transfer，走到这里说明链上事实已经变了（同 hash
-        # 交易被重组后按失败重新打包）。此前无条件抛异常会让该转账永久停在
-        # CONFIRMING：block_number_updated 按 timestamp 升序切 16 条批次，它会恒占
-        # 批次头部；而 reap_stale_confirming_transfers 对 FAILED 只告警不清理，
-        # 该名额永不释放，累计满批即饿死该链全部 FULL 确认。
+        # 交易被重组后按失败重新打包）。若只抛异常，该转账会永久停在 CONFIRMING、
+        # 每次链高推进都被重新入队确认；而 reap_stale_confirming_transfers 对 FAILED
+        # 只告警不清理，确认永远推进不了。
         # 失败交易本就没有有效入账，按"链上无事实"丢弃并释放唯一约束；日后若再次被
         # 成功打包，扫描器可自然重建（与 reap 的 MISSING 分支同语义）。
         logger.error(
@@ -311,43 +368,43 @@ def _refresh_transfer_chain_position_from_receipt(
     return True
 
 
-@shared_task(ignore_result=True)
-def block_number_updated(chain_pk):
-    batch_size = 16
-    # confirm_block_count 已从 DB 字段瘦身为 property（按 chain 名从常量读取），
-    # only() 只能列具体存量字段；chain 字段本身用于推导确认深度，必须一并加载。
-    chain = Chain.objects.only("code", "latest_block_number").get(pk=chain_pk)
+# 单次入队的批量上限，与兜底派发一致：停摆恢复后到期转账可能成批出现，分多次链高推进
+# 补齐，避免一次插入过多任务。已在队列里的会被排除，剩余的下次推进时接着入队。
+CONFIRM_ENQUEUE_BATCH_SIZE = 256
+
+
+def enqueue_due_confirmations(chain: Chain) -> int:
+    """把本链到期待确认的转账入队确认，返回入队条数。
+
+    判据：只取已完成业务归类（processed_at 非空）的 CONFIRMING 转账；QUICK 不看块高，
+    FULL 要达到确认深度且创建超过 10s。已有待执行或执行中确认任务的不再入队。
+    QUICK 用 URGENT 优先级，FULL 用 DEFAULT。按 timestamp 升序取批，最老的先确认。
+    """
     base_qs = Transfer.objects.filter(
         chain=chain,
         status=TransferStatus.CONFIRMING,
         processed_at__isnull=False,
-    )
+    ).exclude(pending_job(CONFIRM_TRANSFER_TASK))
 
     quick_pks = list(
-        base_qs.filter(
-            confirm_mode=ConfirmMode.QUICK,
-        )
-        .order_by("timestamp")[:batch_size]
-        .values_list("pk", flat=True)
+        base_qs.filter(confirm_mode=ConfirmMode.QUICK)
+        .order_by("timestamp")
+        .values_list("pk", flat=True)[:CONFIRM_ENQUEUE_BATCH_SIZE]
     )
-
     full_pks = list(
         base_qs.filter(
             confirm_mode=ConfirmMode.FULL,
             block__lte=chain.latest_block_number - chain.confirm_block_count,
             created_at__lte=ago(seconds=10),
         )
-        .order_by("timestamp")[:batch_size]
-        .values_list("pk", flat=True)
+        .order_by("timestamp")
+        .values_list("pk", flat=True)[:CONFIRM_ENQUEUE_BATCH_SIZE]
     )
-
-    dispatched = quick_pks + full_pks
-    for pk in dispatched:
-        confirm_transfer.delay(pk)
-
-    # 当任一模式满批时，可能还有积压；延迟自调度继续消化，避免大量转账等到下个区块才处理。
-    if len(quick_pks) >= batch_size or len(full_pks) >= batch_size:
-        block_number_updated.apply_async(args=(chain_pk,), countdown=2)
+    for pk in quick_pks:
+        enqueue_confirm_transfer(pk, priority=PRIORITY_URGENT)
+    for pk in full_pks:
+        enqueue_confirm_transfer(pk, priority=PRIORITY_DEFAULT)
+    return len(quick_pks) + len(full_pks)
 
 
 def dispatch_block_confirmation_checks_if_needed(
@@ -355,25 +412,15 @@ def dispatch_block_confirmation_checks_if_needed(
     chain: Chain,
     previous_latest_block: int,
 ) -> None:
-    """链扫描推进高度后，按需派发 Transfer 确认检查。
+    """链扫描推进高度后，把到期的转账入队确认。
 
-    链高事实由各链扫描器在同一链路内刷新；确认调度只关心“高度确实前进”
-    且存在已完成业务归类的 CONFIRMING 转账，避免空链每轮扫描都投递任务。
-    调用点必须在批量扫块之前；普通派发故障仅记录，不能反过来阻断扫描入库。
+    链高事实由各链扫描器在同一链路内刷新；只在高度确实前进时才判定到期，空链每轮
+    扫描不做多余查询。调用点必须在批量扫块之前；入队故障仅记录，不能反过来阻断扫描入库。
     """
     try:
         chain.refresh_from_db(fields=["latest_block_number"])
         if chain.latest_block_number <= previous_latest_block:
             return
-
-        has_confirming_transfers = Transfer.objects.filter(
-            chain=chain,
-            status=TransferStatus.CONFIRMING,
-            processed_at__isnull=False,
-        ).exists()
-        if not has_confirming_transfers:
-            return
-
-        block_number_updated.delay(chain.pk)
+        enqueue_due_confirmations(chain)
     except Exception:  # noqa: BLE001
         logger.exception("充值确认调度派发失败", chain=chain.code)

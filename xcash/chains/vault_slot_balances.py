@@ -3,7 +3,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import structlog
-from celery.exceptions import SoftTimeLimitExceeded
 from django.db import transaction
 from django.db.models import Exists
 from django.db.models import OuterRef
@@ -121,12 +120,6 @@ def refresh_vault_slot_balance_safely(
             trigger_tx_hash=trigger_tx_hash,
             block_number=block_number,
         )
-    except SoftTimeLimitExceeded:
-        # SoftTimeLimitExceeded 继承自 Exception，会被下面的宽泛 except 吞掉。一旦吞掉，
-        # 任务不会收尾而是继续跑下一条计划，直到撞上硬超时被 SIGKILL——那时 singleton
-        # 锁不会走 finally 释放、只能等 TTL 过期，worker 子进程也被连带杀掉。
-        # 软超时是「请尽快收尾」的控制信号，不是业务异常，必须原样上抛。
-        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "VaultSlot 余额刷新失败",
@@ -304,9 +297,6 @@ def reconcile_vault_slot_collect_balance_gaps(
                 vault_slot=balance.vault_slot,
                 crypto=balance.crypto,
             )
-        except SoftTimeLimitExceeded:
-            # 同上：软超时不能被逐行的容错 except 吞掉，否则整批会一直跑到硬超时被杀。
-            raise
         except Exception as exc:  # noqa: BLE001
             errors.append(
                 {

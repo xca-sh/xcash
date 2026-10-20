@@ -12,12 +12,12 @@ from urllib.parse import urlsplit
 import environ
 import httpx
 import structlog
-from celery import shared_task
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
 from django.db.models import Q
 from django.utils import timezone
+from procrastinate.contrib.django import app
 
 from common import http_client
 from common.consts import APPID_HEADER
@@ -25,7 +25,8 @@ from common.consts import NONCE_HEADER
 from common.consts import SIGNATURE_HEADER
 from common.consts import TIMESTAMP_HEADER
 from common.crypto import calc_hmac
-from common.decorators import singleton_task
+from common.jobs import PRIORITY_URGENT
+from common.jobs import defer_once
 from core.runtime_settings import get_webhook_delivery_max_backoff_seconds
 from core.runtime_settings import get_webhook_delivery_max_retries
 from core.runtime_settings import get_webhook_event_timeout
@@ -34,9 +35,11 @@ from webhooks.models import WebhookEvent
 
 logger = structlog.get_logger()
 
+DELIVER_EVENT_TASK = "webhooks.deliver_event"
+# 单次投递尝试（DNS + HTTP）的时间上限，由 DNS 预算与 HTTP 总时限共同保证。
 EVENT_ATTEMPT_TIMEOUT = 10
 DELIVERY_CLAIM_TIMEOUT = EVENT_ATTEMPT_TIMEOUT + 5
-# DNS 解析预算。要显著小于 soft_time_limit(8s)，留出建连、收包与落库的时间。
+# DNS 解析预算。要显著小于单次尝试上限，留出建连、收包与落库的时间。
 DNS_RESOLVE_TIMEOUT = 3
 # HTTP 阶段（建连、TLS、发请求、收完响应）的总时限。httpx 的 timeout 按每次读写分别
 # 计时，商户每 4s 吐 1 字节就能把一次投递拖上数小时，响应体上限也挡不住这种慢滴；
@@ -53,7 +56,7 @@ RETRYABLE_STATUS = frozenset({408, 425, 429})
 # 否则会误杀仍在正常退避重试途中的事件。
 STALLED_EVENT_TIMEOUT_FACTOR = 8
 # 商户回执通常只有 "ok"/"success" 等几字节。设置 64KB 上限既能兼容偶发的 HTML
-# 错误页等场景，又能挡掉恶意商户回包放大 celery worker 内存。
+# 错误页等场景，又能挡掉恶意商户回包放大 worker 内存。
 MAX_RESPONSE_BYTES = 64 * 1024
 
 # 出口代理配置（可选）：设置后 webhook 请求通过代理转发，隐藏服务器真实 IP
@@ -76,7 +79,7 @@ def resolve_addresses(hostname: str, port: int) -> list[str]:
     """带超时的 DNS 解析；拿不到任何结果时抛 DeliveryTargetResolutionError。
 
     socket.getaddrinfo 本身没有超时参数，遇到权威 NS 黑洞（域名过期、NS 被丢包）
-    时会在 C 层阻塞远超任务的 soft_time_limit，把 worker 卡满一整批。这里用线程
+    时会在 C 层阻塞远超单次投递的时间上限，把 worker 卡满一整批。这里用线程
     包一层实现可控超时。
 
     不能写成 `with ThreadPoolExecutor(...)`：with 退出时隐式 shutdown(wait=True)
@@ -156,8 +159,8 @@ def _claim_event_for_delivery(event_pk) -> bool:
     """认领事件并原子自增尝试计数。
 
     计数必须在这里加，而不是等投递结束后按 DeliveryAttempt 行数推算：任务从认领
-    到写 attempt 之间随时可能被 hard time_limit 杀掉（DNS 卡住、worker 重启、
-    OOM），那时事件仍是 PENDING、attempts 仍为空，投递锁一过期就被重新调度，
+    到写 attempt 之间随时可能被中断（看门狗退出进程、worker 重启、OOM），
+    那时事件仍是 PENDING、attempts 仍为空，投递锁一过期就被重新调度，
     重试次数永远停在 1，max_retries 形同虚设——事件变成永不终结的黑洞，还因
     created_at 最老而长期霸占调度批次的头部，饿死其他商户的重试。
     """
@@ -364,9 +367,12 @@ def _execute_http_delivery(
     )
 
 
-@shared_task(ignore_result=True)
-@singleton_task(timeout=60, use_params=False)
-def reap_stalled_events(batch_size=512):
+@app.task(name="webhooks.reap_stalled_events")
+def reap_stalled_events(
+    *,
+    timestamp: int | None = None,  # noqa: ARG001
+    batch_size: int = 512,
+) -> None:
     """把超龄仍未送达的事件强制终结。
 
     attempt_count 已经堵住了已知的"零 attempt 无限重试"路径，但任何新的中断点
@@ -403,9 +409,22 @@ def reap_stalled_events(batch_size=512):
     )
 
 
-@shared_task
-@singleton_task(timeout=15, use_params=False)
-def schedule_events(batch_size=128):
+def enqueue_deliver_event(event_pk: int) -> None:
+    """在当前事务内入队一次投递；同一事件至多一个待执行的投递任务。"""
+    defer_once(
+        deliver_event,
+        queueing_lock=f"{DELIVER_EVENT_TASK}:{event_pk}",
+        event_pk=event_pk,
+    )
+
+
+@app.task(name="webhooks.schedule_events")
+def schedule_events(
+    *,
+    timestamp: int | None = None,  # noqa: ARG001
+    batch_size: int = 128,
+) -> None:
+    """把到期待投递（未被退避或投递锁挡住）的事件入队投递。"""
     qs = (
         WebhookEvent.objects.filter(status=WebhookEvent.Status.PENDING)
         .filter(
@@ -419,18 +438,14 @@ def schedule_events(batch_size=128):
         .order_by("created_at")[:batch_size]
     )
 
-    for ev in qs:
-        deliver_event.delay(ev.pk)
+    for event_pk in qs.values_list("pk", flat=True):
+        enqueue_deliver_event(event_pk)
 
 
-@shared_task(
-    acks_late=True,
-    max_retries=0,
-    soft_time_limit=8,  # httpx timeout=5s，额外留 3s 给 DB 写入，避免 SoftTimeLimitExceeded 打断事务
-    time_limit=EVENT_ATTEMPT_TIMEOUT,
-)
-@singleton_task(timeout=EVENT_ATTEMPT_TIMEOUT + 2, use_params=True)
-def deliver_event(event_pk):
+# 不配重试：重试节奏由事件自身的 attempt_count / schedule_locked_until 管理（DB outbox），
+# 并发安全由认领时的条件更新保证。
+@app.task(name=DELIVER_EVENT_TASK, priority=PRIORITY_URGENT)
+def deliver_event(*, event_pk: int) -> None:
     if not _claim_event_for_delivery(event_pk):
         return
 

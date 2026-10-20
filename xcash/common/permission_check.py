@@ -3,9 +3,16 @@
 设计原则（高可用优先，availability over consistency）：
 - IS_SAAS=False 视为未对接 SaaS（自托管），直接放行
 - 缓存值带 `_fetched_at` 时间戳；判定完全基于缓存
-- 命中缓存且 fetched_at 落后 > REFRESH_AFTER：派发异步刷新任务，本次仍按旧缓存判定
-- 未命中缓存：默认放行，并派发异步刷新任务（让下次有数据可用）
-- 异步刷新失败只 log，不破坏旧缓存；同一 appid REFRESH_AFTER 秒内只派发一次
+- 命中缓存且 fetched_at 落后 > REFRESH_AFTER：提交后台刷新，本次仍按旧缓存判定
+- 未命中缓存：默认放行，并提交后台刷新（让下次有数据可用）
+- 后台刷新失败只 log，不破坏旧缓存；同一 appid REFRESH_AFTER 秒内只提交一次
+
+后台刷新跑在本进程的单线程执行器里，不进任务队列：刷新是缓存维护，不是业务事件。
+check_saas_permission 在 ATOMIC_REQUESTS 的请求事务里调用，缓存显示冻结时抛
+ACCOUNT_FROZEN，请求事务随之回滚——若刷新在事务内入队，会跟着一起回滚：商户在 SaaS
+已解冻，xcash 却每次请求都拒绝、每次都刷新失败，要等缓存 TTL 过期才恢复。刷新只读写
+缓存与 HTTP、不碰数据库，与请求事务完全解耦。进程回收时排队中的刷新会丢失，去重锁
+REFRESH_AFTER 秒后过期，下一个请求会重新提交。
 
 这样设计的目的：SaaS 暂时不可用不会阻塞 xcash 主链路；权限变更靠异步刷新在秒级生效。
 
@@ -18,11 +25,13 @@
 
 from __future__ import annotations
 
+import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import structlog
-from celery import shared_task
 from django.conf import settings
 from django.core.cache import cache
 
@@ -35,13 +44,33 @@ logger = structlog.get_logger()
 # SaaS 侧 endpoint 路径；SAAS_CALLBACK_URL 只配 scheme+host
 _SAAS_PERMISSION_PATH = "/callbacks/xcash/permission"
 
-# fetched_at 落后超过此秒数即派发异步刷新；同时也是去重锁 TTL
+# fetched_at 落后超过此秒数即提交后台刷新；同时也是去重锁 TTL
 REFRESH_AFTER = 5
 # 权限缓存条目的存活上限。远大于 REFRESH_AFTER：新鲜度由异步刷新保证，
 # 这里只防条目永久滞留，绝不能短到让刷新一慢缓存就消失、进而 fail-open 放行。
 PERMISSION_CACHE_TTL = 3600
 
 _TIMEOUT = httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=5.0)
+
+# 后台刷新执行器：按进程惰性创建并记录创建者 pid，fork 出的子进程首次使用时重建
+# （与 common.http_client 相同的处理）。单线程即可：刷新按 appid 去重，量很小。
+_refresh_executor: ThreadPoolExecutor | None = None
+_refresh_executor_pid: int | None = None
+_refresh_executor_lock = threading.Lock()
+
+
+def refresh_executor() -> ThreadPoolExecutor:
+    global _refresh_executor, _refresh_executor_pid  # noqa: PLW0603
+    pid = os.getpid()
+    if _refresh_executor is None or _refresh_executor_pid != pid:
+        with _refresh_executor_lock:
+            if _refresh_executor is None or _refresh_executor_pid != pid:
+                _refresh_executor = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="saas-permission",
+                )
+                _refresh_executor_pid = pid
+    return _refresh_executor
 
 
 def _cache_key(appid: str) -> str:
@@ -53,10 +82,10 @@ def _refresh_lock_key(appid: str) -> str:
 
 
 def _schedule_refresh(appid: str) -> None:
-    """派发异步刷新任务；同一 appid 在 REFRESH_AFTER 秒内只派发一次。"""
-    # cache.add 是原子操作：仅当 key 不存在时写入并返回 True，避免并发请求重复派发
+    """提交后台刷新；同一 appid 在 REFRESH_AFTER 秒内只提交一次。"""
+    # cache.add 是原子操作：仅当 key 不存在时写入并返回 True，避免并发请求重复提交
     if cache.add(_refresh_lock_key(appid), "1", REFRESH_AFTER):
-        _refresh_saas_permission.delay(appid=appid)
+        refresh_executor().submit(refresh_saas_permission, appid=appid)
 
 
 def _read_saas_perm(appid: str) -> dict | None:
@@ -154,28 +183,24 @@ def get_saas_invoice_vault_slot_limit(*, appid: str) -> int | None:
     return limit if limit > 0 else None
 
 
-@shared_task(
-    ignore_result=True,
-    soft_time_limit=8,
-    time_limit=12,
-)
-def _refresh_saas_permission(*, appid: str) -> None:
-    """Celery task：从 SaaS 拉取最新 permission 并覆写缓存。
+def refresh_saas_permission(*, appid: str) -> None:
+    """从 SaaS 拉取最新 permission 并覆写缓存（在后台执行器里运行）。
 
-    任务失败只 log，不重试也不清缓存——下一次主调用发现 stale 会再次派发。
+    失败只 log，不重试也不清缓存——下一次主调用发现 stale 会再次提交。执行器里的
+    异常不会被任何人取走，所以这里兜住全部异常并记录。
     """
     if not settings.IS_SAAS:
         return
 
     try:
         perm = _fetch_from_saas(appid)
+        perm["_fetched_at"] = time.time()
+        cache.set(_cache_key(appid), perm, PERMISSION_CACHE_TTL)
     except httpx.HTTPError as exc:
-        # SaaS 暂时不可达：保留旧缓存继续兜底，下次主调用还会派发新任务
+        # SaaS 暂时不可达：保留旧缓存继续兜底，下次主调用还会提交新刷新
         logger.warning("saas_permission_refresh_failed", appid=appid, error=str(exc))
-        return
-
-    perm["_fetched_at"] = time.time()
-    cache.set(_cache_key(appid), perm, PERMISSION_CACHE_TTL)
+    except Exception:
+        logger.exception("saas_permission_refresh_crashed", appid=appid)
 
 
 def _fetch_from_saas(appid: str) -> dict:

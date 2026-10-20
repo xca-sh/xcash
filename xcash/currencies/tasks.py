@@ -1,6 +1,6 @@
 import structlog
-from celery import shared_task
 from django.utils import timezone
+from procrastinate.contrib.django import app
 
 from common import http_client
 from currencies.models import Crypto
@@ -9,10 +9,8 @@ from currencies.models import Fiat
 logger = structlog.get_logger()
 
 
-@shared_task(
-    ignore_result=True,
-)
-def refresh_crypto_prices():
+@app.task(name="currencies.refresh_crypto_prices")
+def refresh_crypto_prices(*, timestamp: int | None = None) -> None:  # noqa: ARG001
     crypto_ids = list(
         # 无 coingecko_id 的币（未上 CoinGecko 的自定义代币）没有可刷新的行情源，跳过；
         # 它们只支持非支付资产流转，不进按法币计价的支付，无需价格。
@@ -35,7 +33,6 @@ def refresh_crypto_prices():
     if not fiat_codes:
         return
 
-    # 修复：拆分 f-string，避免语法错误阻断 Celery task 导入。
     api_url = (
         "https://api.coingecko.com/api/v3/simple/price"
         f"?ids={','.join(crypto_ids)}"

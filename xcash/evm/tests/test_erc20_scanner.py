@@ -1204,14 +1204,14 @@ class EvmErc20ScannerTests(TestCase):
         self.chain.refresh_from_db()
         self.assertEqual(self.chain.latest_block_number, 200)
 
-    @patch("chains.tasks.block_number_updated.delay")
+    @patch("chains.tasks.enqueue_due_confirmations")
     @patch("evm.scanner.logs.EvmLogScanner.scan_range")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_failure_does_not_block_confirmation_dispatch(
         self,
         get_latest_block_number_mock,
         scan_range_mock,
-        block_number_updated_delay_mock,
+        enqueue_due_confirmations_mock,
     ):
         """扫描段抛出非 RPC 异常时，本轮确认派发仍要照常执行，循环也不中断。"""
         Transfer.objects.create(
@@ -1235,16 +1235,16 @@ class EvmErc20ScannerTests(TestCase):
 
         ChainLoop(self.chain).run_once()
 
-        block_number_updated_delay_mock.assert_called_once_with(self.chain.pk)
+        enqueue_due_confirmations_mock.assert_called_once_with(self.chain)
 
-    @patch("chains.tasks.block_number_updated.delay")
+    @patch("chains.tasks.enqueue_due_confirmations")
     @patch("evm.scanner.logs.EvmLogScanner.scan_range")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
     def test_scan_evm_chain_dispatches_confirmation_checks_after_block_advance(
         self,
         get_latest_block_number_mock,
         scan_range_mock,
-        block_number_updated_delay_mock,
+        enqueue_due_confirmations_mock,
     ):
         # EVM 链高由扫描链路刷新；一旦高度前进，已完成业务归类的 CONFIRMING
         # 转账必须继续进入统一确认检查，替代旧的 update_latest_block beat。
@@ -1268,7 +1268,7 @@ class EvmErc20ScannerTests(TestCase):
 
         ChainLoop(self.chain).run_once()
 
-        block_number_updated_delay_mock.assert_called_once_with(self.chain.pk)
+        enqueue_due_confirmations_mock.assert_called_once_with(self.chain)
 
     @patch("evm.scanner.logs.EvmObservedTransferProcessor.process")
     def test_owned_matching_queries_recipients_first_then_senders_of_hits(

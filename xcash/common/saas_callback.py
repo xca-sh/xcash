@@ -4,22 +4,25 @@ from dataclasses import dataclass
 
 import httpx
 import structlog
-from celery import shared_task
 from django.conf import settings
 from django.db import models
-from django.db import transaction
 from django.utils import timezone
+from procrastinate.contrib.django import app
 
 from common import http_client
+from common.jobs import PRIORITY_URGENT
+from common.jobs import BackoffTable
+from common.jobs import defer_once
 
 logger = structlog.get_logger()
 
 # SaaS 侧接收回调的固定路径；SAAS_CALLBACK_URL 只配 scheme+host，路径由这里拼
 _SAAS_CALLBACK_PATH = "/callbacks/xcash"
 
-# 指数退避序列（秒）：第 N 次重试前等待 _RETRY_BACKOFF[N]，超出长度使用最后一个值
-# 覆盖窗口：前 5 次共 ~46 分钟，之后每小时一次，配合 max_retries=20 总计约 15 小时
-_RETRY_BACKOFF = (8, 60, 300, 600, 1800, 3600)
+# 退避表（秒）：第 n 次失败后等待 SAAS_CALLBACK_RETRY_DELAYS[n] 再试，共重试 20 次。
+# 覆盖窗口：前 5 次共约 46 分钟，之后每小时一次，总计约 15 小时。
+# SaaS 侧以 sys_no 去重，重复送达只扣一次。gas 计费上报任务沿用同一张表。
+SAAS_CALLBACK_RETRY_DELAYS = (8, 60, 300, 600, 1800) + (3600,) * 15
 
 
 class CallbackEvent(models.TextChoices):
@@ -94,37 +97,30 @@ class SaasCallback:
         return payload
 
 
-def _retry_countdown(retries: int) -> int:
-    return _RETRY_BACKOFF[min(retries, len(_RETRY_BACKOFF) - 1)]
-
-
 def send_saas_callback(callback: SaasCallback) -> None:
-    """
-    在事务提交后异步发送回调给 SaaS。
+    """在调用方当前事务内入队 SaaS 回调，随业务事务一起提交或回滚。
+
     IS_SAAS=False 视为未对接 SaaS，直接跳过（没 token 也过不了 SaaS 的鉴权）。
+    不加 queueing_lock：sys_no 由 SaaS 去重，同一事件不会因并发入队而重复扣费。
     """
     if not settings.IS_SAAS:
         return
 
-    transaction.on_commit(
-        lambda: _deliver_saas_callback.delay(payload=callback.to_payload())
+    defer_once(
+        deliver_saas_callback,
+        priority=PRIORITY_URGENT,
+        payload=callback.to_payload(),
     )
 
 
-@shared_task(
-    bind=True,
-    ignore_result=True,
-    max_retries=20,
-    soft_time_limit=10,
-    time_limit=15,
-    acks_late=True,
-    reject_on_worker_lost=True,
+@app.task(
+    name="common.deliver_saas_callback",
+    retry=BackoffTable(SAAS_CALLBACK_RETRY_DELAYS, retry_exceptions=(httpx.HTTPError,)),
 )
-def _deliver_saas_callback(self, *, payload: dict) -> None:
-    """Celery task：向 SaaS 发送回调 POST 请求。
+def deliver_saas_callback(*, payload: dict) -> None:
+    """向 SaaS 发送回调 POST 请求；HTTP 失败抛出，由退避表安排重试。
 
-    入参是已序列化好的 payload（SaasCallback.to_payload()），保持 JSON 可序列化，
-    兼容 broker 里的在途消息。
+    入参是已序列化好的 payload（SaasCallback.to_payload()），保持 JSON 可序列化。
     """
     if not settings.IS_SAAS:
         return
@@ -149,9 +145,8 @@ def _deliver_saas_callback(self, *, payload: dict) -> None:
             appid=payload.get("appid"),
             sys_no=payload.get("sys_no"),
             error=str(exc),
-            retry=self.request.retries,  # noqa
         )
-        # DEBUG 环境不做指数退避重试，只通知一次
+        # DEBUG 环境不做退避重试，只通知一次
         if settings.DEBUG:
             return
-        self.retry(countdown=_retry_countdown(self.request.retries), exc=exc)  # noqa
+        raise

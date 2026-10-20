@@ -11,13 +11,13 @@ from unittest.mock import patch
 
 import eth_abi
 import httpx
-from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.admin.sites import AdminSite
 from django.db import IntegrityError
 from django.test import SimpleTestCase
 from django.test import TestCase
 from django.test import override_settings
 from django.utils import timezone
+from procrastinate.contrib.django.models import ProcrastinateJob
 from tron.admin import TronWatchCursorAdmin
 from tron.client import TronClientError
 from tron.client import TronHttpClient
@@ -405,7 +405,9 @@ class TronTransferConfirmationTests(TestCase):
         }
         client.get_solid_block_id.return_value = "b" * 64
 
-        confirm_transfer.run(transfer.pk)
+        confirm_transfer(
+            SimpleNamespace(job=SimpleNamespace(attempts=0)), transfer_id=transfer.pk
+        )
 
         transfer.refresh_from_db()
         self.assertEqual(transfer.status, TransferStatus.CONFIRMED)
@@ -777,14 +779,8 @@ class TronHttpClientTests(SimpleTestCase):
     TRON_RESOURCE_SAFETY_MARGIN_BPS=10_000,
     TRON_BANDWIDTH_SAFETY_BYTES=0,
 )
-class TronHttpClientSoftTimeLimitTests(SimpleTestCase):
-    """Celery 软超时必须原样穿透 Tron HTTP 重试层。
-
-    SoftTimeLimitExceeded 继承自 Exception，落进 _request_with_retry 的通用分支后
-    会被 _is_retriable_http_error 判为不可重试、进而包成 TronClientError；而 Celery
-    任务里的调用方通常把该错误当普通 RPC 故障处理、任务"正常完成"，软超时语义被
-    彻底抹掉。
-    """
+class TronHttpClientRetryTests(SimpleTestCase):
+    """普通网络故障在 Tron HTTP 层重试，耗尽后统一包装成 TronClientError。"""
 
     def make_chain(self):
         return SimpleNamespace(
@@ -793,26 +789,9 @@ class TronHttpClientSoftTimeLimitTests(SimpleTestCase):
             tron_api_key="",
         )
 
-    @patch("tron.client.time.sleep")
-    @patch("tron.client.http_client.get")
-    def test_soft_time_limit_propagates_without_retry_or_backoff(
-        self, get_mock, sleep_mock
-    ):
-        # 断言 SoftTimeLimitExceeded 本身上抛，即已证明它没有被包装成 TronClientError
-        # （后者是 RuntimeError 子类，类型不匹配会让断言失败）。
-        get_mock.side_effect = SoftTimeLimitExceeded()
-
-        with self.assertRaises(SoftTimeLimitExceeded):
-            TronHttpClient(chain=self.make_chain()).get_latest_solid_block_number()
-
-        # 只尝试一次：软超时后再发请求只会继续消耗剩余的 10s 硬超时预算。
-        self.assertEqual(get_mock.call_count, 1)
-        sleep_mock.assert_not_called()
-
     @patch("tron.client._TRON_HTTP_RETRY_BACKOFF_SECONDS", (0, 0))
     @patch("tron.client.http_client.get")
     def test_ordinary_http_error_still_retries_and_wraps(self, get_mock):
-        # 反向用例：确认穿透分支没有顺带关掉普通网络故障的重试与统一包装。
         get_mock.side_effect = httpx.ConnectError("boom")
 
         with self.assertRaises(TronClientError):
@@ -1473,7 +1452,7 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
         TronTxTask.objects.filter(pk=first.pk).update(last_attempt_at=timezone.now())
         self.assertEqual(self.dispatch(deadline=time.monotonic() - 1), [second.pk])
 
-    def test_schedule_wakes_chain_loop_without_publishing_to_celery(self):
+    def test_schedule_wakes_chain_loop_without_enqueuing_jobs(self):
         from tron.intents import TronTxIntent
 
         intent = TronTxIntent(
@@ -1485,14 +1464,12 @@ class TronTxTaskBroadcastResourceGuardTests(TestCase):
             fee_limit=5_000_000,
             tx_type=TxTaskType.VaultSlotCollect,
         )
-        with (
-            patch("tron.models.notify_chain_tx_pending") as notify,
-            patch("celery.app.task.Task.apply_async") as apply_async,
-        ):
+        with patch("tron.models.notify_chain_tx_pending") as notify:
             TronTxTask.schedule(intent)
 
+        # 主动交易由链循环派发：建任务只发唤醒通知，不进任务队列。
         notify.assert_called_once_with(self.chain.pk)
-        apply_async.assert_not_called()
+        self.assertFalse(ProcrastinateJob.objects.exists())
 
 
 class TronSimulationRevertClassificationTests(SimpleTestCase):
@@ -2420,14 +2397,14 @@ class TronScannerTests(TestCase):
         self.chain.refresh_from_db()
         self.assertEqual(self.chain.latest_block_number, 200)
 
-    @patch("chains.tasks.block_number_updated.delay")
+    @patch("chains.tasks.enqueue_due_confirmations")
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")
     def test_scan_chain_dispatches_confirmation_checks_after_block_advance(
         self,
         client_cls,
         _enqueue_processing_mock,
-        block_number_updated_delay_mock,
+        enqueue_due_confirmations_mock,
     ):
         from tron.scanner import TronScanner
 
@@ -2453,7 +2430,7 @@ class TronScannerTests(TestCase):
 
         TronScanner.scan_chain(chain=self.chain)
 
-        block_number_updated_delay_mock.assert_called_once_with(self.chain.pk)
+        enqueue_due_confirmations_mock.assert_called_once_with(self.chain)
 
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")
@@ -3308,23 +3285,113 @@ class TronReceiptConfirmTaskTests(TestCase):
                 expires_at_ms=expires_at_ms,
             )
 
-    @patch("tron.saas_gas_billing.retry_vault_slot_collect_gas_fee.delay")
     @patch(
         "tron.saas_gas_billing.build_tx_detail", side_effect=RuntimeError("rpc down")
     )
-    def test_collect_gas_fee_build_failure_schedules_retry(
+    def test_collect_gas_fee_report_rpc_failure_is_retried_by_table(
         self,
         _build_tx_detail_mock,
-        retry_delay,
     ):
-        from tron.saas_gas_billing import notify_vault_slot_collect_gas_fee
+        from tron.saas_gas_billing import GAS_FEE_REPORT_RETRY
+        from tron.saas_gas_billing import report_vault_slot_collect_gas_fee
 
         base_task = self.create_collect_task()
 
-        with self.captureOnCommitCallbacks(execute=True):
-            notify_vault_slot_collect_gas_fee(tx_task=base_task)
+        with self.assertRaises(RuntimeError) as error:
+            report_vault_slot_collect_gas_fee(tx_task_id=base_task.pk)
 
-        retry_delay.assert_called_once_with(base_task.pk)
+        job = SimpleNamespace(attempts=0)
+        self.assertIsNotNone(
+            GAS_FEE_REPORT_RETRY.get_retry_decision(exception=error.exception, job=job)
+        )
+
+    def gas_report_jobs(self, task_name: str) -> list[dict]:
+        return list(
+            ProcrastinateJob.objects.filter(task_name=task_name).values_list(
+                "args", flat=True
+            )
+        )
+
+    def succeed_on_chain(self, get_adapter) -> None:
+        adapter = Mock()
+        adapter.tx_result.return_value = TxCheckResult(
+            status=TxCheckStatus.SUCCEEDED,
+            block_number=100,
+            block_hash="b" * 64,
+        )
+        get_adapter.return_value = adapter
+
+    @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
+    def test_success_finalization_enqueues_gas_fee_report_in_same_transaction(
+        self, get_adapter, _refresh_balance
+    ):
+        base_task = self.create_collect_task()
+        self.succeed_on_chain(get_adapter)
+
+        self.poll()
+
+        self.assertEqual(
+            self.gas_report_jobs("tron.report_vault_slot_collect_gas_fee"),
+            [{"tx_task_id": base_task.pk}],
+        )
+
+    @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
+    def test_finalization_rollback_discards_gas_fee_report(
+        self, get_adapter, _refresh_balance
+    ):
+        # 终局事务在提交前出错回滚：计费上报随之消失，任务保持待终局，下一轮重新终局再入队。
+        from tron.saas_gas_billing import enqueue_vault_slot_collect_gas_fee_report
+
+        base_task = self.create_collect_task()
+        self.succeed_on_chain(get_adapter)
+
+        def enqueue_then_crash(task):
+            enqueue_vault_slot_collect_gas_fee_report(tx_task=task)
+            raise RuntimeError("crash before commit")
+
+        with patch(
+            "tron.tx_loop.enqueue_gas_fee_report_for_receipt_task",
+            side_effect=enqueue_then_crash,
+        ):
+            self.poll()
+
+        base_task.refresh_from_db()
+        self.assertEqual(base_task.status, TxTaskStatus.SUBMITTED)
+        self.assertEqual(
+            self.gas_report_jobs("tron.report_vault_slot_collect_gas_fee"), []
+        )
+
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
+    def test_lost_finalization_race_does_not_enqueue_gas_fee_report(self, get_adapter):
+        self.create_collect_task()
+        self.succeed_on_chain(get_adapter)
+
+        # 并发路径已抢先终局：本轮 CAS 推进失败，不能再入队一次计费。
+        with patch("tron.tx_loop.TxTask.mark_finalized_success", return_value=0):
+            self.poll()
+
+        self.assertEqual(
+            self.gas_report_jobs("tron.report_vault_slot_collect_gas_fee"), []
+        )
+
+    @override_settings(IS_SAAS=False)
+    @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
+    @patch("tron.tx_loop.AdapterFactory.get_adapter")
+    def test_self_hosted_finalization_does_not_enqueue_gas_fee_report(
+        self, get_adapter, _refresh_balance
+    ):
+        base_task = self.create_collect_task()
+        self.succeed_on_chain(get_adapter)
+
+        self.poll()
+
+        base_task.refresh_from_db()
+        self.assertEqual(base_task.status, TxTaskStatus.SUCCEEDED)
+        self.assertEqual(
+            self.gas_report_jobs("tron.report_vault_slot_collect_gas_fee"), []
+        )
 
     @patch("tron.saas_gas_billing.TronHttpClient")
     def test_build_tx_detail_charges_burned_trx_and_energy_cost(self, client_cls):
@@ -3402,8 +3469,8 @@ class TronReceiptConfirmTaskTests(TestCase):
                 self.assertEqual(callback.uid, self.customer.uid)
                 send_callback_mock.reset_mock()
 
-    @patch("tron.tx_loop.notify_vault_slot_deploy_gas_fee")
-    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.enqueue_vault_slot_deploy_gas_fee_report")
+    @patch("tron.tx_loop.enqueue_vault_slot_collect_gas_fee_report")
     @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
     @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_finalizes_collect_and_triggers_collect_gas_fee(
@@ -3432,8 +3499,8 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(collect_gas_fee.call_args.kwargs["tx_task"].pk, base_task.pk)
         deploy_gas_fee.assert_not_called()
 
-    @patch("tron.tx_loop.notify_vault_slot_deploy_gas_fee")
-    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.enqueue_vault_slot_deploy_gas_fee_report")
+    @patch("tron.tx_loop.enqueue_vault_slot_collect_gas_fee_report")
     @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
     @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_finalizes_queued_collect_with_known_hash(
@@ -3460,8 +3527,8 @@ class TronReceiptConfirmTaskTests(TestCase):
         collect_gas_fee.assert_called_once()
         deploy_gas_fee.assert_not_called()
 
-    @patch("tron.tx_loop.notify_vault_slot_deploy_gas_fee")
-    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.enqueue_vault_slot_deploy_gas_fee_report")
+    @patch("tron.tx_loop.enqueue_vault_slot_collect_gas_fee_report")
     @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
     @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_finalizes_deploy_marks_slot_deployed_and_triggers_gas_fee(
@@ -3491,7 +3558,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(deploy_gas_fee.call_args.kwargs["tx_task"].pk, base_task.pk)
         collect_gas_fee.assert_not_called()
 
-    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.enqueue_vault_slot_collect_gas_fee_report")
     @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
     @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_marks_failed_collect_without_gas_fee(
@@ -3516,8 +3583,8 @@ class TronReceiptConfirmTaskTests(TestCase):
         refresh_balance.assert_not_called()
         collect_gas_fee.assert_not_called()
 
-    @patch("tron.tx_loop.notify_vault_slot_deploy_gas_fee")
-    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.enqueue_vault_slot_deploy_gas_fee_report")
+    @patch("tron.tx_loop.enqueue_vault_slot_collect_gas_fee_report")
     @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
     @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_collect_resolves_success_from_old_hash(
@@ -3562,7 +3629,7 @@ class TronReceiptConfirmTaskTests(TestCase):
         self.assertEqual(collect_gas_fee.call_args.kwargs["tx_task"].tx_hash, old_hash)
         deploy_gas_fee.assert_not_called()
 
-    @patch("tron.tx_loop.notify_vault_slot_collect_gas_fee")
+    @patch("tron.tx_loop.enqueue_vault_slot_collect_gas_fee_report")
     @patch("tron.tx_loop.refresh_vault_slot_balance_for_collect_task")
     @patch("tron.tx_loop.AdapterFactory.get_adapter")
     def test_confirm_does_not_fail_uncapped_expired_missing_hash(

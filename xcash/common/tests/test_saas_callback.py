@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -12,11 +13,11 @@ class SaasCallbackTest(TestCase):
     )
     @patch("common.saas_callback.http_client")
     def test_deliver_sends_post_with_bearer_token(self, mock_http):
-        from common.saas_callback import _deliver_saas_callback
+        from common.saas_callback import deliver_saas_callback
 
         mock_client = mock_http
 
-        _deliver_saas_callback(
+        deliver_saas_callback(
             payload={
                 "event": "invoice.confirmed",
                 "appid": "XC-test",
@@ -39,9 +40,9 @@ class SaasCallbackTest(TestCase):
     @override_settings(IS_SAAS=False)
     @patch("common.saas_callback.http_client")
     def test_deliver_skips_when_token_missing(self, mock_http):
-        from common.saas_callback import _deliver_saas_callback
+        from common.saas_callback import deliver_saas_callback
 
-        _deliver_saas_callback(
+        deliver_saas_callback(
             payload={
                 "event": "invoice.confirmed",
                 "appid": "XC-test",
@@ -62,7 +63,7 @@ class SaasCallbackTest(TestCase):
     def test_deliver_retries_on_http_error(self, mock_http):
         import httpx
 
-        from common.saas_callback import _deliver_saas_callback
+        from common.saas_callback import deliver_saas_callback
 
         mock_client = mock_http
         mock_response = httpx.Response(
@@ -77,7 +78,7 @@ class SaasCallbackTest(TestCase):
         )
 
         with self.assertRaises(httpx.HTTPStatusError):
-            _deliver_saas_callback(
+            deliver_saas_callback(
                 payload={
                     "event": "invoice.confirmed",
                     "appid": "XC-test",
@@ -175,10 +176,86 @@ class SaasCallbackTest(TestCase):
                 worth="1",
             )
 
-    def test_retry_countdown_is_monotonic_and_capped(self):
-        from common.saas_callback import _retry_countdown
+    def test_http_errors_are_retried_by_table_until_exhausted(self):
+        import httpx
 
-        retry_delays = [_retry_countdown(retries) for retries in range(6)]
-        assert retry_delays == sorted(retry_delays)
-        assert _retry_countdown(6) == retry_delays[-1]
-        assert _retry_countdown(100) == retry_delays[-1]
+        from common.saas_callback import SAAS_CALLBACK_RETRY_DELAYS
+        from common.saas_callback import deliver_saas_callback
+
+        strategy = deliver_saas_callback.retry_strategy
+        error = httpx.ConnectError("saas down")
+
+        for attempts in range(len(SAAS_CALLBACK_RETRY_DELAYS)):
+            job = SimpleNamespace(attempts=attempts)
+            assert strategy.get_retry_decision(exception=error, job=job) is not None
+        exhausted = SimpleNamespace(attempts=len(SAAS_CALLBACK_RETRY_DELAYS))
+        assert strategy.get_retry_decision(exception=error, job=exhausted) is None
+        # 非 HTTP 错误（代码缺陷）不重试，直接落为 failed 供排查。
+        job = SimpleNamespace(attempts=0)
+        assert strategy.get_retry_decision(exception=KeyError("x"), job=job) is None
+
+    @override_settings(
+        IS_SAAS=True,
+        DEBUG=True,
+        SAAS_API_TOKEN="test-token",
+        SAAS_CALLBACK_URL="http://saas.local",
+    )
+    @patch("common.saas_callback.http_client")
+    def test_debug_http_failure_is_not_retried(self, mock_http):
+        import httpx
+
+        from common.saas_callback import deliver_saas_callback
+
+        mock_http.post.side_effect = httpx.ConnectError("saas down")
+
+        # DEBUG 下只通知一次：不抛出，任务不会进入重试。
+        deliver_saas_callback(payload={"event": "invoice.confirmed"})
+
+    @override_settings(IS_SAAS=True)
+    def test_callback_is_enqueued_with_business_transaction(self):
+        from django.db import transaction
+
+        from common.jobs import PRIORITY_URGENT
+        from common.saas_callback import CallbackEvent
+        from common.saas_callback import SaasCallback
+        from common.saas_callback import send_saas_callback
+        from common.tests.job_helpers import queued_jobs
+
+        def callback(sys_no):
+            return SaasCallback(
+                event=CallbackEvent.INVOICE_CONFIRMED,
+                appid="XC-test",
+                sys_no=sys_no,
+                worth="1",
+            )
+
+        # 业务确认事务回滚：回调随之消失，不会出现「SaaS 已计费、账上没确认」。
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            send_saas_callback(callback("INV-ROLLBACK"))
+            raise RuntimeError("rollback")
+        assert queued_jobs("common.deliver_saas_callback") == []
+
+        with transaction.atomic():
+            send_saas_callback(callback("INV-COMMIT"))
+
+        [job] = queued_jobs("common.deliver_saas_callback")
+        assert job.args["payload"]["sys_no"] == "INV-COMMIT"
+        assert job.priority == PRIORITY_URGENT
+
+    @override_settings(IS_SAAS=False)
+    def test_self_hosted_does_not_enqueue_callback(self):
+        from common.saas_callback import CallbackEvent
+        from common.saas_callback import SaasCallback
+        from common.saas_callback import send_saas_callback
+        from common.tests.job_helpers import queued_jobs
+
+        send_saas_callback(
+            SaasCallback(
+                event=CallbackEvent.INVOICE_CONFIRMED,
+                appid="XC-test",
+                sys_no="INV-1",
+                worth="1",
+            )
+        )
+
+        assert queued_jobs("common.deliver_saas_callback") == []

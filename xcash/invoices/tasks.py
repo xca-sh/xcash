@@ -1,13 +1,13 @@
-from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
+from procrastinate.contrib.django import app
 
 from .models import Invoice
 from .models import InvoiceStatus
 
 
-@shared_task
-def fallback_invoice_expired():
+@app.task(name="invoices.fallback_invoice_expired")
+def fallback_invoice_expired(*, timestamp: int | None = None) -> None:  # noqa: ARG001
     """周期批量过期到期未付的账单，是账单过期的唯一机制。
 
     不再为每张账单投递 ETA 任务：过期与支付组合槽位释放最多延后一个周期（15s）。
@@ -29,7 +29,7 @@ def fallback_invoice_expired():
 
     with transaction.atomic():
         # 加锁顺序必须与 try_match_invoice 一致：只锁 Invoice，且按 pk 固定顺序。
-        # order_by("pk") 保证多行锁定顺序一致，避免两个并发 fallback 任务死锁。
+        # order_by("pk") 保证多行锁定顺序一致，避免与并发撮合或另一个过期批次死锁。
         locked_ids = list(
             Invoice.objects.select_for_update()
             .filter(

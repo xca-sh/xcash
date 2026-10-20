@@ -8,7 +8,7 @@
 ENV_FILE="${ENV_FILE:-.env}"
 
 if [[ -f "${ENV_FILE}" ]]; then
-  # 本地开发统一从 .env 注入环境，避免宿主机启动 Django / Celery 时手工 export。
+  # 本地开发统一从 .env 注入环境，避免宿主机启动 Django / worker 时手工 export。
   set -a
   # shellcheck disable=SC1090
   source "${ENV_FILE}"

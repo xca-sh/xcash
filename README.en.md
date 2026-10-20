@@ -222,7 +222,7 @@ Restore:
 
 ```bash
 # 1. Stop application services, keep the database running
-docker compose stop django worker chain-runner beat
+docker compose stop django worker chain-runner
 
 # 2. Put .env back in place (it must be the copy matching this dump)
 
@@ -248,10 +248,12 @@ git pull && ./scripts/upgrade.sh
 
 The script pulls the new image, runs migrations and restarts the services, reporting success only once everything is ready; on failure it exits nonzero and prints troubleshooting hints.
 
+Always upgrade with this script instead of a manual `docker compose up -d`: it stops the old processes in order, migrates in-flight tasks the previous version left in Redis, and removes retired services with `--remove-orphans`. When upgrading from a Celery-based version in particular, a manual `up -d` leaves the old beat running as an orphan container that keeps publishing tasks nobody consumes until Redis hits its memory limit.
+
 ## Tech stack
 
 - **Backend**: Django 5.2 + Django REST Framework
-- **Task queue**: Celery + Redis
+- **Task queue**: Procrastinate (PostgreSQL task queue)
 - **Database**: PostgreSQL
 - **Blockchain interaction**: web3.py (EVM), TronGrid HTTP API (Tron)
 - **Wallet derivation**: BIP44 HD wallets (bip-utils)

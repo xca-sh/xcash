@@ -12,6 +12,7 @@ from django.db import IntegrityError
 from django.db import connections
 from django.db import transaction as db_transaction
 from django.test import TestCase
+from django.test import override_settings
 from django.utils import timezone
 from eth_utils import keccak
 from web3 import Web3
@@ -32,9 +33,11 @@ from chains.models import VaultSlot
 from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.models import Wallet
+from chains.tasks import schedule_vault_slot_deploy
 from chains.vault_slots import create_collect_tx_task_for_slot
 from chains.vault_slots import ensure_deposit_address
 from chains.vault_slots import schedule_deploy
+from common.tests.job_helpers import queued_args
 from core.models import SystemSettings
 from core.models import SystemWallet
 from currencies.models import Crypto
@@ -303,17 +306,18 @@ class VaultSlotAddressSchedulingTests(TestCase):
         )
 
     @staticmethod
-    def patch_deploy_task_delay():
-        """把预部署的 Celery 投递就地执行，同时保留"确实投递了任务"的可断言性。
+    def run_enqueued_deploy_jobs() -> list[int]:
+        """执行已入队的预部署调度任务，返回各任务的 slot_pk。
 
-        预部署已从 on_commit 回调改为投递 Celery 任务（回调跑在请求线程里，内联
-        RPC 会把已落库的下单请求打成 500）。测试环境 ALWAYS_EAGER=False，故用
-        side_effect 同步跑任务体，让断言仍能覆盖到部署 intent 的构造。
+        预部署在请求事务内入队，由 worker 异步执行（请求线程内联 RPC 会把已落库的下单
+        打成 500）。测试里没有 worker，这里同步跑任务体，让断言覆盖到部署 intent 的构造。
         """
-        return patch(
-            "chains.tasks.schedule_vault_slot_deploy.delay",
-            side_effect=schedule_deploy,
-        )
+        slot_pks = [
+            args["slot_pk"] for args in queued_args("chains.schedule_vault_slot_deploy")
+        ]
+        for slot_pk in slot_pks:
+            schedule_vault_slot_deploy(slot_pk=slot_pk)
+        return slot_pks
 
     def test_first_ensure_deposit_address_delays_deploy_for_token(self):
         self.project.evm_vault = Web3.to_checksum_address(
@@ -349,18 +353,18 @@ class VaultSlotAddressSchedulingTests(TestCase):
         with (
             address_patch,
             patch.object(EvmTxTask, "schedule") as schedule,
-            self.patch_deploy_task_delay() as deploy_delay,
-            self.captureOnCommitCallbacks(execute=True),
         ):
             address = ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.chain.native_coin,
             )
+            schedule.assert_not_called()
+            deployed_slot_pks = self.run_enqueued_deploy_jobs()
 
         slot = VaultSlot.objects.get(chain=self.chain, customer=self.customer)
         self.assertEqual(address, slot.address)
-        deploy_delay.assert_called_once_with(slot.pk)
+        self.assertEqual(deployed_slot_pks, [slot.pk])
         self.assertEqual(schedule.call_count, 1)
 
         intent = schedule.call_args.args[0]
@@ -551,7 +555,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertTrue(slot.is_deployed)
         schedule.assert_not_called()
 
-    @patch("evm.internal_tx.processor.notify_vault_slot_deploy_gas_fee")
+    @patch("evm.internal_tx.processor.enqueue_vault_slot_deploy_gas_fee_report")
     def test_confirmed_deploy_marks_vault_slot_deployed(
         self,
         notify_gas_fee,
@@ -592,7 +596,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         notify_gas_fee.assert_called_once()
         self.assertEqual(notify_gas_fee.call_args.kwargs["tx_task"].pk, task.pk)
 
-    @patch("evm.internal_tx.processor.notify_vault_slot_deploy_gas_fee")
+    @patch("evm.internal_tx.processor.enqueue_vault_slot_deploy_gas_fee_report")
     def test_deploy_status_success_without_on_chain_code_finalizes_failed(
         self,
         notify_gas_fee,
@@ -635,7 +639,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         # 空成功不应向 SaaS 计费（部署实际没成功）。
         notify_gas_fee.assert_not_called()
 
-    @patch("evm.internal_tx.processor.notify_vault_slot_deploy_gas_fee")
+    @patch("evm.internal_tx.processor.enqueue_vault_slot_deploy_gas_fee_report")
     def test_deploy_code_check_rpc_error_keeps_task_submitted(self, notify_gas_fee):
         """链上有码检查不确定时不能误成功或误失败，交给 poller 下轮重试。"""
         from evm.poller import EvmTaskPoller
@@ -675,7 +679,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertFalse(slot.is_deployed)
         notify_gas_fee.assert_not_called()
 
-    @patch("evm.internal_tx.processor.notify_vault_slot_deploy_gas_fee")
+    @patch("evm.internal_tx.processor.enqueue_vault_slot_deploy_gas_fee_report")
     def test_deploy_without_linked_slot_finalizes_instead_of_polling_forever(
         self,
         notify_gas_fee,
@@ -727,7 +731,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         # 没有槽位就没有项目可计费，不能触发 SaaS gas 回调（否则会因 DoesNotExist 反复重试）。
         notify_gas_fee.assert_not_called()
 
-    @patch("evm.internal_tx.processor.notify_vault_slot_deploy_gas_fee")
+    @patch("evm.internal_tx.processor.enqueue_vault_slot_deploy_gas_fee_report")
     def test_confirmed_deposit_deploy_initial_native_balance_creates_confirmed_deposit(
         self,
         notify_gas_fee,
@@ -760,7 +764,6 @@ class VaultSlotAddressSchedulingTests(TestCase):
             patch("chains.service.TransferService.enqueue_processing"),
             patch("chains.vault_slot_balances.refresh_vault_slot_balance_for_transfer"),
             patch("deposits.service.WebhookService.create_event"),
-            patch("deposits.service.screen_transfer_aml.delay"),
             patch("deposits.service.send_saas_callback"),
         ):
             w3_mock.return_value.eth.get_transaction.return_value = {
@@ -798,7 +801,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(deposit.customer, self.customer)
         notify_gas_fee.assert_called_once()
 
-    @patch("evm.internal_tx.processor.notify_vault_slot_deploy_gas_fee")
+    @patch("evm.internal_tx.processor.enqueue_vault_slot_deploy_gas_fee_report")
     def test_confirmed_invoice_deploy_initial_native_balance_confirms_invoice(
         self,
         notify_gas_fee,
@@ -856,7 +859,6 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 "invoices.service.InvoiceService.schedule_collect_for_invoice"
             ) as schedule_collect,
             patch("invoices.service.WebhookService.create_event"),
-            patch("invoices.service.screen_transfer_aml.delay"),
             patch("invoices.service.send_saas_callback"),
         ):
             w3_mock.return_value.eth.get_transaction.return_value = {
@@ -895,7 +897,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         schedule_collect.assert_called_once_with(invoice.pk)
         notify_gas_fee.assert_called_once()
 
-    @patch("evm.internal_tx.processor.notify_vault_slot_collect_gas_fee")
+    @patch("evm.internal_tx.processor.enqueue_vault_slot_collect_gas_fee_report")
     @patch("evm.internal_tx.processor.refresh_vault_slot_balance_for_collect_task")
     def test_confirmed_collect_finalizes_task_without_transfer(
         self,
@@ -980,7 +982,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         schedule.refresh_from_db()
         self.assertEqual(schedule.tx_task_id, task.pk)
 
-    @patch("evm.internal_tx.processor.notify_vault_slot_collect_gas_fee")
+    @patch("evm.internal_tx.processor.enqueue_vault_slot_collect_gas_fee_report")
     @patch("evm.internal_tx.processor.refresh_vault_slot_balance_for_collect_task")
     def test_successful_empty_collect_finalizes_task_without_balance_refresh(
         self,
@@ -1030,7 +1032,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         notify_gas_fee.assert_called_once()
         self.assertEqual(notify_gas_fee.call_args.kwargs["tx_task"].pk, task.pk)
 
-    @patch("evm.internal_tx.processor.notify_vault_slot_collect_gas_fee")
+    @patch("evm.internal_tx.processor.enqueue_vault_slot_collect_gas_fee_report")
     @patch("evm.internal_tx.processor.refresh_vault_slot_balance_for_collect_task")
     def test_successful_empty_native_collect_finalizes_task_without_balance_refresh(
         self,
@@ -1080,7 +1082,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
         notify_gas_fee.assert_called_once()
         self.assertEqual(notify_gas_fee.call_args.kwargs["tx_task"].pk, task.pk)
 
-    @patch("evm.internal_tx.processor.notify_vault_slot_deploy_gas_fee")
+    @patch("evm.internal_tx.processor.enqueue_vault_slot_deploy_gas_fee_report")
     def test_failed_deploy_marks_deployed_when_slot_has_external_code(
         self,
         notify_gas_fee,
@@ -1107,7 +1109,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     @patch("evm.saas_gas_billing.send_saas_callback")
     def test_confirmed_deploy_notifies_saas_gas_fee(self, send_callback_mock):
-        from evm.saas_gas_billing import notify_vault_slot_deploy_gas_fee
+        from evm.saas_gas_billing import report_vault_slot_deploy_gas_fee
 
         slot = self._create_vault_slot()
         native_crypto = self.chain.native_coin
@@ -1139,7 +1141,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
         with patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock:
             w3_mock.return_value = w3
-            notify_vault_slot_deploy_gas_fee(tx_task=task)
+            report_vault_slot_deploy_gas_fee(tx_task_id=task.pk)
 
         send_callback_mock.assert_called_once()
         callback = send_callback_mock.call_args.args[0]
@@ -1156,16 +1158,15 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(tx_detail["gas_price"], 1_000_000_000)
         self.assertEqual(tx_detail["native_price"], "2000")
 
-    @patch("evm.saas_gas_billing.retry_vault_slot_deploy_gas_fee.delay")
     @patch(
         "evm.saas_gas_billing._build_tx_detail", side_effect=RuntimeError("rpc down")
     )
-    def test_deploy_gas_fee_build_failure_schedules_retry(
+    def test_deploy_gas_fee_report_rpc_failure_is_retried_by_table(
         self,
         _build_tx_detail_mock,
-        retry_delay,
     ):
-        from evm.saas_gas_billing import notify_vault_slot_deploy_gas_fee
+        from evm.saas_gas_billing import GAS_FEE_REPORT_RETRY
+        from evm.saas_gas_billing import report_vault_slot_deploy_gas_fee
 
         slot = self._create_vault_slot()
         address_patch = self.patch_address_derivation()
@@ -1174,10 +1175,126 @@ class VaultSlotAddressSchedulingTests(TestCase):
         task.tx_hash = "0x" + "ef" * 32
         task.save(update_fields=["tx_hash", "updated_at"])
 
-        with self.captureOnCommitCallbacks(execute=True):
-            notify_vault_slot_deploy_gas_fee(tx_task=task)
+        with self.assertRaises(RuntimeError) as error:
+            report_vault_slot_deploy_gas_fee(tx_task_id=task.pk)
 
-        retry_delay.assert_called_once_with(task.pk)
+        job = SimpleNamespace(attempts=0)
+        self.assertIsNotNone(
+            GAS_FEE_REPORT_RETRY.get_retry_decision(exception=error.exception, job=job)
+        )
+
+    def finalize_deploy_successfully(self, *, tx_hash: str) -> TxTask:
+        """按回执成功收口一笔部署，返回部署任务（gas 计费上报走真实入队）。"""
+        from evm.poller import EvmTaskPoller
+
+        slot = self._create_vault_slot()
+        Chain.objects.filter(pk=self.chain.pk).update(latest_block_number=100)
+        self.chain.refresh_from_db()
+        with self.patch_address_derivation():
+            task = schedule_deploy(slot.pk)
+        task.append_tx_hash(tx_hash)
+        TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.SUBMITTED)
+        with (
+            patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock,
+            patch("evm.vault_slots.is_deployed_on_chain", return_value=True),
+        ):
+            w3_mock.return_value.eth.get_transaction.return_value = {
+                "hash": tx_hash,
+                "from": self.system_sender.address,
+            }
+            EvmTaskPoller.process_succeeded_receipt(
+                evm_task=task.evm_task,
+                tx_hash=tx_hash,
+                receipt={"status": 1, "blockNumber": 1},
+            )
+        return task
+
+    def test_deploy_success_enqueues_gas_fee_report_with_finalization(self):
+        task = self.finalize_deploy_successfully(tx_hash="0x" + "a1" * 32)
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, TxTaskStatus.SUCCEEDED)
+        self.assertEqual(
+            queued_args("evm.report_vault_slot_deploy_gas_fee"),
+            [{"tx_task_id": task.pk}],
+        )
+
+    def test_deploy_finalization_rollback_discards_gas_fee_report(self):
+        # 终局事务在提交前出错：终局推进与计费上报一起回滚，下一轮轮询重新终局再入队。
+        with (
+            patch(
+                "evm.internal_tx.processor.confirm_initial_native_balance_transfer",
+                side_effect=RuntimeError("crash before commit"),
+            ),
+            self.assertRaises(RuntimeError),
+        ):
+            self.finalize_deploy_successfully(tx_hash="0x" + "a2" * 32)
+
+        self.assertEqual(queued_args("evm.report_vault_slot_deploy_gas_fee"), [])
+        self.assertFalse(TxTask.objects.filter(status=TxTaskStatus.SUCCEEDED).exists())
+
+    def test_deploy_lost_finalization_race_does_not_enqueue_gas_fee_report(self):
+        # 并发路径已抢先终局：本次 CAS 推进失败，不能再入队一次计费。
+        with patch(
+            "evm.internal_tx.processor.TxTask.mark_finalized_success", return_value=0
+        ):
+            self.finalize_deploy_successfully(tx_hash="0x" + "a3" * 32)
+
+        self.assertEqual(queued_args("evm.report_vault_slot_deploy_gas_fee"), [])
+
+    @override_settings(IS_SAAS=False)
+    def test_self_hosted_deploy_success_does_not_enqueue_gas_fee_report(self):
+        task = self.finalize_deploy_successfully(tx_hash="0x" + "a4" * 32)
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, TxTaskStatus.SUCCEEDED)
+        self.assertEqual(queued_args("evm.report_vault_slot_deploy_gas_fee"), [])
+
+    @patch("evm.internal_tx.processor.refresh_vault_slot_balance_for_collect_task")
+    def test_collect_success_enqueues_gas_fee_report_with_finalization(
+        self, refresh_balance
+    ):
+        from evm.poller import EvmTaskPoller
+
+        slot = self._create_vault_slot()
+        tx_hash = "0x" + "a5" * 32
+        Chain.objects.filter(pk=self.chain.pk).update(latest_block_number=100)
+        self.chain.refresh_from_db()
+        self._mark_vault_slot_deployed(slot)
+        with self.patch_address_derivation():
+            task = create_collect_tx_task_for_slot(
+                chain=self.chain,
+                crypto=self.token,
+                slot=slot,
+            )
+        VaultSlotCollectSchedule.objects.create(
+            chain=self.chain,
+            vault_slot=slot,
+            crypto=self.token,
+            due_at=timezone.now(),
+            tx_task=task,
+        )
+        task.append_tx_hash(tx_hash)
+        TxTask.objects.filter(pk=task.pk).update(status=TxTaskStatus.SUBMITTED)
+
+        with patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock:
+            w3_mock.return_value.eth.get_transaction.return_value = {
+                "hash": tx_hash,
+                "from": self.system_sender.address,
+            }
+            # 回执里没有资产移动事实：按空归集终局，同样要计 gas。
+            EvmTaskPoller.process_succeeded_receipt(
+                evm_task=task.evm_task,
+                tx_hash=tx_hash,
+                receipt={"status": 1, "blockNumber": 1, "logs": []},
+            )
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, TxTaskStatus.SUCCEEDED)
+        self.assertEqual(
+            queued_args("evm.report_vault_slot_collect_gas_fee"),
+            [{"tx_task_id": task.pk}],
+        )
 
     def test_ensure_deposit_address_rejects_project_without_vault(self):
         Project.objects.filter(pk=self.project.pk).update(evm_vault=None)
@@ -1245,14 +1362,13 @@ class VaultSlotAddressSchedulingTests(TestCase):
         with (
             address_patch,
             patch.object(EvmTxTask, "schedule") as schedule,
-            self.patch_deploy_task_delay(),
-            self.captureOnCommitCallbacks(execute=True),
         ):
             address = ensure_deposit_address(
                 chain=self.chain,
                 customer=self.customer,
                 crypto=self.chain.native_coin,
             )
+            self.assertEqual(self.run_enqueued_deploy_jobs(), [slot.pk])
 
         self.assertEqual(address, slot.address)
         self.assertEqual(schedule.call_count, 1)
@@ -1883,10 +1999,13 @@ class VaultSlotAddressSchedulingTests(TestCase):
         # 失败计划必须退避，否则恒占 execute_due 批次头部。
         self.assertGreater(first.due_at, timezone.now())
 
-    def test_soft_timeout_mid_rpc_leases_schedule_and_unblocks_other_schedules(self):
-        # 节点挂起导致软超时会原样穿透上抛、来不及在失败分支退避；
+    def test_process_killed_mid_rpc_leases_schedule_and_unblocks_other_schedules(
+        self,
+    ):
+        # 节点挂起时看门狗会直接退出进程，来不及在失败分支退避；
         # 计划必须在 RPC 前已按租约推后，否则恒占批次头部、饿死其它计划的归集。
-        from celery.exceptions import SoftTimeLimitExceeded
+        class ProcessKilledError(BaseException):
+            """模拟进程在 RPC 中途被终止：不是 Exception，逐计划的容错分支接不住。"""
 
         slot = self._create_vault_slot()
         self._mark_vault_slot_deployed(slot)
@@ -1908,7 +2027,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
         def refresh_balance(*, slot, crypto, reason):
             if crypto == self.token:
-                raise SoftTimeLimitExceeded
+                raise ProcessKilledError
             return SimpleNamespace(value=1)
 
         with (
@@ -1918,7 +2037,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 side_effect=refresh_balance,
             ),
         ):
-            with self.assertRaises(SoftTimeLimitExceeded):
+            with self.assertRaises(ProcessKilledError):
                 VaultSlotCollectSchedule.execute_due()
             stuck.refresh_from_db()
             self.assertGreater(stuck.due_at, timezone.now())
@@ -2153,7 +2272,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
     @patch("evm.saas_gas_billing.send_saas_callback")
     def test_confirmed_collect_task_notifies_saas_gas_fee(self, send_callback_mock):
-        from evm.saas_gas_billing import notify_vault_slot_collect_gas_fee
+        from evm.saas_gas_billing import report_vault_slot_collect_gas_fee
 
         slot = self._create_vault_slot()
         native_crypto = self.chain.native_coin
@@ -2195,7 +2314,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
         with patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock:
             w3_mock.return_value = w3
-            notify_vault_slot_collect_gas_fee(tx_task=task)
+            report_vault_slot_collect_gas_fee(tx_task_id=task.pk)
 
         send_callback_mock.assert_called_once()
         callback = send_callback_mock.call_args.args[0]

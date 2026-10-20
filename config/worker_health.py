@@ -1,7 +1,8 @@
-"""由真实执行形成存活心跳；HTTP 只读缓存，不发布任务或调用 inspect。
+"""由真实执行形成存活心跳；HTTP 只读缓存，不发布任务、不查询进程。
 
 两类心跳共用一套判定：
-- celery 业务 worker：Beat 投递探针、worker 实际消费后写入，同时证明调度与消费都在跑。
+- worker（业务任务进程）：周期探针 core.report_worker_health 由 worker 内的周期投递产生、
+  由 worker 实际执行后写入，同时证明周期投递、数据库与执行容量都正常。
 - chain-runner：常驻扫描进程的 Supervisor 每个 tick 直接写入，证明进程存活、DB 与
   advisory lock 连接可用；没有活跃链时同样成立。链级扫描是否停摆由 /health/scanning 判定。
 """
@@ -12,34 +13,22 @@ import time
 import structlog
 from django.core.cache import cache
 
-from config.periodic_tasks import WORKER_HEALTH_TASK_GROUPS
-
-WORKER_HEALTH_INTERVAL_SECONDS = 30
-# 业务 worker 可能短暂满载；覆盖最长生产任务 290s 加下一轮调度，避免正常执行误报。
+# 业务 worker 可能短暂满载；覆盖看门狗硬上限 300s 加一个探针周期，避免正常执行误报。
 WORKER_HEALTH_MAX_AGE_SECONDS = 360
+WORKER_HEALTH_GROUP = "worker"
 CHAIN_RUNNER_HEALTH_GROUP = "chain-runner"
-HEALTH_GROUPS = tuple(
-    sorted({*WORKER_HEALTH_TASK_GROUPS.values(), CHAIN_RUNNER_HEALTH_GROUP})
-)
-WORKER_HEALTH_PUBLISHED_HEADER = "xcash_health_published_at"
+HEALTH_GROUPS = (CHAIN_RUNNER_HEALTH_GROUP, WORKER_HEALTH_GROUP)
 logger = structlog.get_logger()
-
-
-def stamp_worker_health_probe(sender=None, headers=None, **kwargs):  # noqa: ARG001
-    """每次发布记录真实时刻，重启后消费旧积压不能冒充新的 Beat 调度。"""
-    if sender in WORKER_HEALTH_TASK_GROUPS and headers is not None:
-        headers[WORKER_HEALTH_PUBLISHED_HEADER] = time.time()
 
 
 def worker_health_key(group):
     return f"health:worker:{group}"
 
 
-def record_worker_health(task):
-    group = WORKER_HEALTH_TASK_GROUPS[task.name]
-    published_at = (task.request.headers or {}).get(WORKER_HEALTH_PUBLISHED_HEADER)
+def record_worker_health(*, published_at):
+    """worker 探针执行时写入：published_at 是周期计划时刻，completed_at 是执行时刻。"""
     cache.set(
-        worker_health_key(group),
+        worker_health_key(WORKER_HEALTH_GROUP),
         {"published_at": published_at, "completed_at": time.time()},
         timeout=WORKER_HEALTH_MAX_AGE_SECONDS,
     )
@@ -55,8 +44,12 @@ def record_chain_runner_heartbeat():
     )
 
 
-def stale_worker_groups(*, published_after=0, groups=HEALTH_GROUPS):
-    """缺失、过期、损坏或未来时间都失败关闭；发布与执行均需处于健康窗口内。"""
+def stale_worker_groups(*, completed_after=0, groups=HEALTH_GROUPS):
+    """缺失、过期、损坏或未来时间都失败关闭；发布与执行均需处于健康窗口内。
+
+    completed_after 是发布阶段的就绪下限：执行时刻必须晚于它。只看执行时刻：新 worker
+    可能先执行升级前留在队列里的探针，那条探针的计划时刻早于下限，但执行确实出自新进程。
+    """
     samples = cache.get_many([worker_health_key(group) for group in groups])
     now = time.time()
     stale = []
@@ -74,7 +67,7 @@ def stale_worker_groups(*, published_after=0, groups=HEALTH_GROUPS):
                 and now - WORKER_HEALTH_MAX_AGE_SECONDS <= value <= now
                 for value in timestamps
             )
-            or timestamps[0] < published_after
+            or timestamps[1] < completed_after
         ):
             stale.append(group)
     return stale

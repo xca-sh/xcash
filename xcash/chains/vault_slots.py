@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import structlog
-from celery.exceptions import SoftTimeLimitExceeded
 from django.db import IntegrityError
 from django.db import transaction as db_transaction
 from django.utils import timezone
@@ -16,6 +15,7 @@ from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.registry import VaultSlotBackend
 from chains.registry import get_chain_family
+from common.jobs import defer_once
 
 logger = structlog.get_logger()
 
@@ -50,12 +50,19 @@ def is_chain_native_crypto(*, chain: Chain, crypto) -> bool:
     return getattr(crypto, "symbol", None) == chain.spec.native_coin_symbol
 
 
-def schedule_deploy_after_commit_if_needed(
+def enqueue_deploy_if_needed(
     *,
     slot: VaultSlot,
     chain: Chain,
     crypto,
 ) -> None:
+    """地址暴露前需要预部署时，在当前事务内入队部署调度任务。
+
+    入队而不是在请求线程里同步执行：schedule_deploy 要打链上 RPC（8s 超时）并抢热钱包
+    行锁，节点抖动时抛出的异常会把已落库的下单打成 500——商户看到"下单失败"、库里
+    却有单，重试还会再占一个槽位。任务与地址/账单同事务提交，提交后崩溃也不会漏掉
+    预部署；部署调度失败由任务自身退避重试兜底。同一槽位至多一个待执行的调度任务。
+    """
     if slot.is_deployed:
         return
     if not should_predeploy_on_address_exposure(
@@ -64,15 +71,14 @@ def schedule_deploy_after_commit_if_needed(
     ):
         return
 
-    # 投递给 Celery 而不是在 on_commit 回调里同步执行：回调跑在请求线程内，而
-    # schedule_deploy 要打链上 RPC（8s 超时）并抢热钱包行锁，节点抖动时抛出的异常会
-    # 绕过 DRF 的异常处理直接冒泡成 500——此时地址/账单已经落库，商户看到的是"下单
-    # 失败"、库里却有单，重试还会再占一个槽位。异步化后请求不再内联链上调用，
-    # 部署调度失败也由任务自身退避重试兜底。
+    from chains.tasks import SCHEDULE_VAULT_SLOT_DEPLOY_TASK  # noqa: PLC0415
+    from chains.tasks import job_lock  # noqa: PLC0415
     from chains.tasks import schedule_vault_slot_deploy  # noqa: PLC0415
 
-    db_transaction.on_commit(
-        lambda slot_pk=slot.pk: schedule_vault_slot_deploy.delay(slot_pk)
+    defer_once(
+        schedule_vault_slot_deploy,
+        queueing_lock=job_lock(SCHEDULE_VAULT_SLOT_DEPLOY_TASK, slot.pk),
+        slot_pk=slot.pk,
     )
 
 
@@ -95,7 +101,7 @@ def ensure_deposit_address(
         customer=customer,
     ).first()
     if existing is not None:
-        schedule_deploy_after_commit_if_needed(
+        enqueue_deploy_if_needed(
             slot=existing,
             chain=chain,
             crypto=crypto,
@@ -140,7 +146,7 @@ def ensure_deposit_address(
             raise exc from not_exist_exc
     else:
         if created:
-            schedule_deploy_after_commit_if_needed(
+            enqueue_deploy_if_needed(
                 slot=slot,
                 chain=chain,
                 crypto=crypto,
@@ -165,7 +171,7 @@ def ensure_invoice_address(
         invoice_index=invoice_index,
     ).first()
     if existing is not None:
-        schedule_deploy_after_commit_if_needed(
+        enqueue_deploy_if_needed(
             slot=existing,
             chain=chain,
             crypto=crypto,
@@ -211,7 +217,7 @@ def ensure_invoice_address(
             raise exc from not_exist_exc
     else:
         if created:
-            schedule_deploy_after_commit_if_needed(
+            enqueue_deploy_if_needed(
                 slot=slot,
                 chain=chain,
                 crypto=crypto,
@@ -311,10 +317,6 @@ def reconcile_deployed_native_balance(slot_pk: int) -> bool:
             vault_slot=slot,
             crypto=native_crypto,
         )
-    except SoftTimeLimitExceeded:
-        # 软超时是 Celery 要求任务收尾的控制信号，它继承自 Exception；被逐槽位的容错
-        # except 吞掉会让整批一直跑到硬超时被 SIGKILL，singleton 锁也无法走 finally 释放。
-        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "VaultSlot 部署后发现原生币滞留，但排队归集失败",
@@ -369,9 +371,6 @@ def mark_deployed_if_on_chain_for_task(tx_task: TxTask) -> bool:
     backend = get_backend(slot.chain)
     try:
         deployed = backend.is_deployed_on_chain(chain=slot.chain, address=slot.address)
-    except SoftTimeLimitExceeded:
-        # 同上：软超时必须穿透逐槽位的容错分支。
-        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "VaultSlot 部署失败后链上状态检查失败",
@@ -453,9 +452,6 @@ def can_create_collect_tx_task(*, chain: Chain, slot: VaultSlot) -> bool:
         return True
     try:
         schedule_deploy(slot.pk)
-    except SoftTimeLimitExceeded:
-        # 同上：软超时必须穿透逐槽位的容错分支。
-        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "VaultSlot 归集前部署调度失败,本轮归集延迟",

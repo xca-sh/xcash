@@ -1,6 +1,6 @@
 #!/bin/bash
 # dev-up-pro.sh — 以生产级方式在本地拉起所有服务，适用于压测场景。
-# Django 用 gunicorn，Celery worker 与 chain-runner 不带 watchfiles 热重载。
+# Django 用 gunicorn，worker 与 chain-runner 不带 watchfiles 热重载。
 
 set -o errexit
 set -o nounset
@@ -17,7 +17,7 @@ source "${SCRIPT_DIR}/dev-env.sh"
 
 # ── 并发数配置（可通过环境变量覆盖） ─────────────────────────
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-4}"
-CELERY_BUSINESS_WORKER_CONCURRENCY="${CELERY_BUSINESS_WORKER_CONCURRENCY:-16}"
+WORKER_CONCURRENCY="${WORKER_CONCURRENCY:-16}"
 
 # ── 生命周期管理 ──────────────────────────────────────────────
 cleanup() {
@@ -32,9 +32,6 @@ cleanup() {
     done
     wait "${child_pids[@]}" 2>/dev/null || true
   fi
-
-  # 清理 beat 调度文件
-  rm -f /tmp/xcash-celerybeat-schedule{,-shm,-wal}
 
   exit "${exit_code}"
 }
@@ -53,12 +50,9 @@ wait_for_first_exit() {
 
 trap cleanup EXIT INT TERM
 
-# ── 清理 beat 历史调度状态 ────────────────────────────────────
-rm -f /tmp/xcash-celerybeat-schedule{,-shm,-wal}
-
 echo "=== dev-up-pro: 生产级本地启动 ==="
 echo "  gunicorn workers : ${GUNICORN_WORKERS}"
-echo "  celery business  : ${CELERY_BUSINESS_WORKER_CONCURRENCY} threads"
+echo "  worker           : ${WORKER_CONCURRENCY} threads"
 echo "  chain-runner     : 每条活跃链一个线程"
 echo ""
 
@@ -74,23 +68,12 @@ uv run gunicorn config.wsgi:application \
   --log-level info &
 child_pids+=("$!")
 
-# ── 3. Celery Worker — 业务队列 ──────────────────────────────
-uv run celery -A config.celery worker \
-  -l INFO \
-  --pool=threads \
-  --concurrency="${CELERY_BUSINESS_WORKER_CONCURRENCY}" \
-  -Q celery \
-  -n business@%h &
+# ── 2. worker — 业务任务与周期任务投递 ───────────────────────
+uv run python manage.py run_worker --concurrency "${WORKER_CONCURRENCY}" &
 child_pids+=("$!")
 
-# ── 4. chain-runner — 按链常驻扫描与主动交易 ─────────────────
+# ── 3. chain-runner — 按链常驻扫描与主动交易 ─────────────────
 uv run python manage.py run_chains &
-child_pids+=("$!")
-
-# ── 5. Celery Beat ───────────────────────────────────────────
-uv run celery -A config.celery beat \
-  -l INFO \
-  -s /tmp/xcash-celerybeat-schedule &
 child_pids+=("$!")
 
 echo "=== 所有服务已启动 (PIDs: ${child_pids[*]}) ==="
