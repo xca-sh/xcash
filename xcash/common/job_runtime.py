@@ -32,10 +32,17 @@ from typing import Any
 
 import structlog
 from procrastinate import App
+from procrastinate.exceptions import UniqueViolation
+from procrastinate.jobs import Status
+from procrastinate.manager import QUEUEING_LOCK_CONSTRAINT
+from procrastinate.manager import JobManager
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from procrastinate.connector import BaseAsyncConnector
     from procrastinate.job_context import JobContext
+    from procrastinate.jobs import Job
     from procrastinate.worker import Worker
 
 logger = structlog.get_logger()
@@ -145,6 +152,45 @@ class JobWatchdog(threading.Thread):
         return False
 
 
+class WorkerJobManager(JobManager):
+    """worker 专用 JobManager：重试写回撞上同键的待执行任务时，把旧任务置为失败。
+
+    queueing_lock 的唯一索引只约束 todo。任务 A 执行（doing）期间，别处可以用同一个键
+    再入队一个 todo 的 B（如 reap 补派确认、同一客户重复申请地址触发部署）。A 随后以可
+    重试的异常失败，Procrastinate 把 A 从 doing 写回 todo 时撞上 B，抛 UniqueViolation。
+    这一步在任务中间件之外的状态回写阶段，worker 只留一条没有业务上下文的 asyncio 错误
+    日志就继续运行：A 永远停在 doing，心跳正常所以 retry_stalled_jobs 不会回收它，
+    pending_job 还会把它当成仍在执行，挡住对同一业务对象的补派。
+
+    B 做的正是 A 要重试的同一件事（任务均幂等），所以冲突时把 A 置为失败即可；其余异常
+    照常抛出。retry_stalled_jobs 重排失联任务也经过这里，同一冲突一并收尾。
+    """
+
+    async def retry_job(
+        self,
+        job: Job,
+        retry_at: datetime | None = None,
+        priority: int | None = None,
+        queue: str | None = None,
+        lock: str | None = None,
+    ) -> None:
+        try:
+            await super().retry_job(
+                job, retry_at=retry_at, priority=priority, queue=queue, lock=lock
+            )
+        except UniqueViolation as exc:
+            if exc.constraint_name != QUEUEING_LOCK_CONSTRAINT:
+                raise
+            # 写回失败时整条 UPDATE 已回滚，A 仍是 doing，可以直接收尾为 failed。
+            await self.finish_job(job=job, status=Status.FAILED, delete_job=False)
+            logger.warning(
+                "任务重试时同键已有待执行任务接替，置为失败",
+                job_id=job.id,
+                task=job.task_name,
+                queueing_lock=job.queueing_lock,
+            )
+
+
 class WorkerApp(App):
     """worker 专用 App：任务与周期注册表取自全局 app，不自行登记任何任务。"""
 
@@ -161,6 +207,7 @@ def build_worker_app(source_app: App, connector: BaseAsyncConnector) -> App:
     里放入每个任务前后 close_old_connections 的清理中间件，这里只追加、不覆盖；启动 worker
     时也不能再传 task_middleware / worker_middleware，否则会整体替换掉这些默认值。
     成功的任务完成即删除（表里只留 todo / doing / failed），与此前只保留失败结果一致。
+    任务状态回写走 WorkerJobManager，补上重试撞同键待执行任务时的收尾。
     """
     defaults = dict(source_app.worker_defaults)
     defaults["worker_middleware"] = [watch_job, *defaults.get("worker_middleware", [])]
@@ -171,6 +218,7 @@ def build_worker_app(source_app: App, connector: BaseAsyncConnector) -> App:
         worker_defaults=defaults,
         periodic_defaults=source_app.periodic_defaults,
     )
+    worker_app.job_manager = WorkerJobManager(connector)
     worker_app.tasks = source_app.tasks
     worker_app.periodic_registry = source_app.periodic_registry
     return worker_app

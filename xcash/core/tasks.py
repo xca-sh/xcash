@@ -3,7 +3,6 @@ from datetime import timedelta
 import structlog
 from django.utils import timezone
 from procrastinate.contrib.django import app
-from procrastinate.exceptions import UniqueViolation
 from procrastinate.jobs import Status
 
 from config.worker_health import record_worker_health
@@ -91,7 +90,7 @@ async def retry_stalled_jobs(
     - 事件任务：延迟 STALLED_JOB_RETRY_DELAY_SECONDS 重新排队（at-least-once，任务均幂等）；
       attempts 已达 STALLED_JOB_MAX_ATTEMPTS 的视为毒任务，置为 failed 并告警。
     - 重新排队时同一 queueing_lock 已有新的待执行任务（期间被别处重新入队）：新任务会做
-      同样的事，把旧任务置为 failed 即可。
+      同样的事，由 worker 的 WorkerJobManager.retry_job 把旧任务置为 failed。
 
     本任务只设 queueing_lock、不设 lock：它自己 stalled 时若带 lock，卡在 doing 的那个
     实例会挡住后续全部实例，回收机制自身就死锁了。
@@ -116,19 +115,13 @@ async def retry_stalled_jobs(
                 )
                 log.error("任务反复 stalled，判为毒任务置为失败，需人工排查")
                 continue
-            try:
-                await job_manager.retry_job(
-                    job=job,
-                    retry_at=timezone.now()
-                    + timedelta(seconds=STALLED_JOB_RETRY_DELAY_SECONDS),
-                )
-            except UniqueViolation:
-                await job_manager.finish_job(
-                    job=job, status=Status.FAILED, delete_job=False
-                )
-                log.warning("stalled 任务已有新的待执行任务接替，置为失败")
-                continue
+            # 先记再重排：同键已有待执行任务接替时，retry_job 改为置失败并另记一条。
             log.error("任务所属 worker 已失联，延迟重新排队")
+            await job_manager.retry_job(
+                job=job,
+                retry_at=timezone.now()
+                + timedelta(seconds=STALLED_JOB_RETRY_DELAY_SECONDS),
+            )
         except Exception:
             # 单个任务回收失败（如期间已被别处收口）不影响其余任务，下一轮再看。
             log.exception("回收 stalled 任务失败")
