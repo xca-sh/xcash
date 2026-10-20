@@ -659,6 +659,36 @@ class InvoicePaymentSelectionTests(TestCase):
         invoice.refresh_from_db()
         self.assertEqual(invoice.status, InvoiceStatus.COMPLETED)
 
+    @patch("invoices.service.send_saas_callback")
+    @patch("invoices.service.WebhookService.create_event")
+    @patch("invoices.service.InvoiceService.schedule_collect_for_invoice")
+    def test_stale_drop_cannot_delete_confirmed_invoice_transfer(self, *_mocks):
+        # 同一转账的两个确认任务重叠（每日 reap 补派能制造）：一个凭成功回执确认并完成
+        # 账单，另一个拿着确认前读到的对象、凭 FAILED 回执调用 drop()。reap 的 MISSING
+        # 分支同理。已确认是终态，陈旧结论不能把它删掉、让已完成账单丢失转账关联。
+        self.enable_differ_mode()
+        invoice = self.create_invoice(out_no="stale-drop-confirmed")
+        invoice.select_method(self.crypto, self.chain_a)
+        transfer = self.create_transfer(
+            chain=self.chain_a,
+            pay_amount=invoice.pay_amount,
+            pay_address=invoice.pay_address,
+        )
+        self.assertTrue(InvoiceService.try_match_invoice(transfer))
+        stale_transfer = Transfer.objects.get(pk=transfer.pk)
+
+        Transfer.objects.get(pk=transfer.pk).confirm()
+        stale_transfer.drop()
+
+        self.assertTrue(
+            Transfer.objects.filter(
+                pk=transfer.pk, status=TransferStatus.CONFIRMED
+            ).exists()
+        )
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, InvoiceStatus.COMPLETED)
+        self.assertEqual(invoice.transfer_id, transfer.pk)
+
 
 class InvoiceFinalizeMethodsOrderingTests(TestCase):
     def test_requested_chain_codes_are_sorted_by_chain_sort_order(self):

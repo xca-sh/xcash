@@ -1644,6 +1644,20 @@ class Transfer(models.Model):
         except Transfer.DoesNotExist:
             return
 
+        # 已确认是终态：业务已入账，账单/充值的 Webhook 与回调都已发出。调用方的删除
+        # 结论来自加锁前读到的陈旧状态（典型如同一转账的两个确认任务重叠，另一个已先
+        # 确认，这一个才拿到 FAILED 回执；或 reap 的 MISSING 终验与确认并发），不能据此
+        # 删除已确认记录，否则已完成账单会丢失链上转账关联。与扫描器重组路径对
+        # CONFIRMED 提前返回是同一不变量。
+        if self.status == TransferStatus.CONFIRMED:
+            logger.warning(
+                "转账已确认，忽略基于陈旧状态的删除",
+                chain_id=self.chain_id,
+                transfer_id=self.pk,
+                tx_hash=self.hash,
+            )
+            return
+
         self.delete()
 
     @property
