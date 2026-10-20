@@ -41,6 +41,13 @@ BASE_UNFOLD = {
                 "name_local": "🇺🇸 English",
                 "name_translated": "🇺🇸 English",
             },
+	        {
+                "bidi": False,
+                "code": "ru",
+                "name": "Русский",
+                "name_local": "🇷🇺 Русский",
+                "name_translated": "🇷🇺 Русский",
+            },
             {
                 "bidi": False,
                 "code": "zh-hans",

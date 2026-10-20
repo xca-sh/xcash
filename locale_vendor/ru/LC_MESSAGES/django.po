@@ -1,0 +1,468 @@
+# Пакет русской локализации стороннего интерфейса админ-панели Xcash.
+#
+# Сам django-unfold не поставляет каталог locale. Англоязычные тексты в его шаблонах
+# (подсказки в полях поиска, сообщения при отсутствии данных, кнопки фильтрации
+# и сохранения и т. д.) остаются на английском даже при выбранном языке zh-hans.
+#
+# Причина, по которой этот каталог существует отдельно от locale/:
+# `makemessages` сканирует только исходный код самого проекта.
+# Если добавить сторонние msgid в locale/, при следующем запуске makemessages
+# они будут помечены как устаревшие записи с префиксом `#~` и перестанут работать
+# (такое уже однажды случалось). Поэтому они хранятся в locale_vendor/
+# и поддерживаются вручную — makemessages этот каталог не затрагивает.
+#
+# Если после обновления django-unfold появятся новые англоязычные тексты,
+# добавьте сюда соответствующие записи и повторно запустите compilemessages.
+msgid ""
+msgstr ""
+"Project-Id-Version: xcash-vendor\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-19 00:00+0800\n"
+"PO-Revision-Date: 2026-09-19 00:00+0800\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+# ---------- 列表页 ----------
+msgid "Type to search"
+msgstr "Введите для поиска"
+
+msgid "No results found"
+msgstr "Ничего не найдено"
+
+msgid ""
+"This page yielded into no results. Create a new item or reset your filters."
+msgstr ""
+"На этой странице нет результатов. Создайте новый элемент или сбросьте "
+"фильтры."
+
+msgid "Nothing matched your search"
+msgstr "По вашему запросу ничего не найдено"
+
+msgid "No data"
+msgstr "Нет данных"
+
+msgid "Filters"
+msgstr "Фильтры"
+
+msgid "Apply Filters"
+msgstr "Применить фильтры"
+
+msgid "Reset filters"
+msgstr "Сбросить фильтры"
+
+msgid "Clear all filters"
+msgstr "Очистить все фильтры"
+
+msgid "Toggle filter"
+msgstr "Переключить фильтр"
+
+msgid "Clear"
+msgstr "Очистить"
+
+msgid "Clear selection"
+msgstr "Снять выделение"
+
+msgid "Select"
+msgstr "Выбрать"
+
+msgid "Select value"
+msgstr "Выберите значение"
+
+msgid "Select record"
+msgstr "Выбрать запись"
+
+msgid "Select currency"
+msgstr "Выберите валюту"
+
+msgid "Select action"
+msgstr "Выберите действие"
+
+msgid "Select action to run"
+msgstr "Выберите действие для выполнения"
+
+msgid "Run"
+msgstr "Выполнить"
+
+msgid "Run the selected action"
+msgstr "Выполнить выбранное действие"
+
+msgid "Action"
+msgstr "Действие"
+
+msgid "Objects"
+msgstr "Объекты"
+
+msgid "Summary"
+msgstr "Сводка"
+
+msgid "Show all"
+msgstr "Показать все"
+
+msgid "Show counts"
+msgstr "Показать количество"
+
+msgid "Hide counts"
+msgstr "Скрыть количество"
+
+msgid "Toggle sorting"
+msgstr "Изменить сортировку"
+
+msgid "Remove from sorting"
+msgstr "Убрать из сортировки"
+
+msgid "Sorting priority: {{ priority_number }}"
+msgstr "Приоритет сортировки: {{ priority_number }}"
+
+msgid "By {{ filter_title }}"
+msgstr "По фильтру: {{ filter_title }}"
+
+msgid "Select all objects on this page for an action"
+msgstr "Выбрать все объекты на этой странице для действия"
+
+msgid "Select all {{ total_count }} {{ module_name }}"
+msgstr "Выбрать все {{ total_count }} {{ module_name }}"
+
+msgid "Click here to select the objects across all pages"
+msgstr "Нажмите здесь, чтобы выбрать объекты на всех страницах"
+
+msgid "Click to cancel"
+msgstr "Нажмите для отмены"
+
+msgid "Click to download"
+msgstr "Нажмите для скачивания"
+
+msgid ""
+"Items must be selected in order to perform actions on them. No items have "
+"been changed."
+msgstr ""
+"Необходимо выбрать элементы для выполнения действий с ними. Ни один элемент "
+"не был изменен."
+
+msgid "{{ counter }} result{% plural %}{{ counter }} results"
+msgstr ""
+"{{ counter }} результат{% plural %}{{ counter }} результата{% plural %}{{ "
+"counter }} результатов"
+
+msgid "{{ full_result_count }} total"
+msgstr "всего: {{ full_result_count }}"
+
+msgid ""
+"Found <span class=\"font-medium text-important\">{{ counter }}</span> result"
+" in {{ time }} seconds {% plural %} Found <span class=\"font-medium text-"
+"important\">{{ counter }}</span> results in {{ time }} seconds"
+msgstr ""
+"Найден <span class=\"font-medium text-important\">{{ counter }}</span> "
+"результат за {{ time }} сек. {% plural %} Найдено <span class=\"font-medium "
+"text-important\">{{ counter }}</span> результата за {{ time }} сек. {% "
+"plural %} Найдено <span class=\"font-medium text-important\">{{ counter "
+"}}</span> результатов за {{ time }} сек."
+
+msgid "entry{% plural %}entries"
+msgstr "запись{% plural %}записи{% plural %}записей"
+
+msgid "Previous"
+msgstr "Назад"
+
+msgid "Next"
+msgstr "Вперед"
+
+# ---------- 详情页与表单 ----------
+msgid "Save"
+msgstr "Сохранить"
+
+msgid "Save and add another"
+msgstr "Сохранить и добавить еще"
+
+msgid "Save and continue editing"
+msgstr "Сохранить и продолжить редактирование"
+
+msgid "Save and view"
+msgstr "Сохранить и посмотреть"
+
+msgid "Save as new"
+msgstr "Сохранить как новый"
+
+msgid "Submit"
+msgstr "Отправить"
+
+msgid "Cancel"
+msgstr "Отмена"
+
+msgid "Close"
+msgstr "Закрыть"
+
+msgid "Change"
+msgstr "Изменить"
+
+msgid "Delete"
+msgstr "Удалить"
+
+msgid "View"
+msgstr "Просмотр"
+
+msgid "Add"
+msgstr "Добавить"
+
+msgid "Add row"
+msgstr "Добавить строку"
+
+msgid "Add {{ name }}"
+msgstr "Добавить {{ name }}"
+
+msgid "Add another {{ model }}"
+msgstr "Добавить еще один объект: {{ model }}"
+
+msgid "Change selected {{ model }}"
+msgstr "Изменить выбранный объект: {{ model }}"
+
+msgid "Delete selected {{ model }}"
+msgstr "Удалить выбранный объект: {{ model }}"
+
+msgid "View selected {{ model }}"
+msgstr "Просмотреть выбранный объект: {{ model }}"
+
+msgid "Create new record"
+msgstr "Создать новую запись"
+
+msgid "General"
+msgstr "Основное"
+
+msgid "Go back"
+msgstr "Назад"
+
+msgid "History"
+msgstr "История"
+
+msgid "Home"
+msgstr "Главная"
+
+msgid "Choose file to upload"
+msgstr "Выберите файл для загрузки"
+
+msgid "Image preview"
+msgstr "Предпросмотр изображения"
+
+msgid "Record picture"
+msgstr "Изображение записи"
+
+msgid ""
+"Please correct the error below.{% plural %}Please correct the errors below."
+msgstr ""
+"Пожалуйста, исправьте ошибку ниже.{% plural %}Пожалуйста, исправьте ошибки "
+"ниже."
+
+msgid ""
+"This object doesn’t have a change history. It probably wasn’t added via this"
+" admin site."
+msgstr ""
+"У этого объекта нет истории изменений. Вероятно, он был добавлен не через "
+"этот сайт администрирования."
+
+msgid "You can not create nested object without parent"
+msgstr "Вы не можете создать вложенный объект без родительского"
+
+msgid "Dataset not found. No action performed."
+msgstr "Набор данных не найден. Действие не выполнено."
+
+msgid "Date"
+msgstr "Дата"
+
+msgid "Time"
+msgstr "Время"
+
+msgid "Date/time"
+msgstr "Дата и время"
+
+msgid "True"
+msgstr "Да"
+
+msgid "False"
+msgstr "Нет"
+
+msgid "Unknown"
+msgstr "Неизвестно"
+
+msgid "Unknown content"
+msgstr "Неизвестное содержимое"
+
+msgid "User"
+msgstr "Пользователь"
+
+# ---------- 删除确认 ----------
+msgid "This item will be deleted."
+msgstr "Этот элемент будет удален."
+
+msgid "Yes, I’m sure"
+msgstr "Да, я уверен"
+
+msgid "No, take me back"
+msgstr "Нет, вернуться назад"
+
+msgid ""
+"Are you sure you want to delete the {{ object_name }} \"{{ escaped_object "
+"}}\"? All of the following related items will be deleted:"
+msgstr ""
+"Вы уверены, что хотите удалить {{ object_name }} \"{{ escaped_object }}\"? "
+"Все следующие связанные элементы также будут удалены:"
+
+msgid ""
+"Are you sure you want to delete the selected {{ objects_name }}? All of the "
+"following objects and their related items will be deleted:"
+msgstr ""
+"Вы уверены, что хотите удалить выбранные объекты ({{ objects_name }})? Все "
+"следующие объекты и связанные с ними элементы будут удалены:"
+
+msgid ""
+"Deleting the {{ object_name }} '{{ escaped_object }}' would require deleting"
+" the following protected related objects:"
+msgstr ""
+"Удаление объекта {{ object_name }} \"{{ escaped_object }}\" потребует "
+"удаления следующих защищенных связанных объектов:"
+
+msgid ""
+"Deleting the {{ object_name }} '{{ escaped_object }}' would result in "
+"deleting related objects, but your account doesn't have permission to delete"
+" the following types of objects:"
+msgstr ""
+"Удаление объекта {{ object_name }} \"{{ escaped_object }}\" приведет к "
+"удалению связанных объектов, но у вашей учетной записи нет прав на удаление "
+"объектов следующих типов:"
+
+msgid ""
+"Deleting the selected {{ objects_name }} would require deleting the "
+"following protected related objects:"
+msgstr ""
+"Удаление выбранных объектов ({{ objects_name }}) потребует удаления "
+"следующих защищенных связанных объектов:"
+
+msgid ""
+"Deleting the selected {{ objects_name }} would result in deleting related "
+"objects, but your account doesn't have permission to delete the following "
+"types of objects:"
+msgstr ""
+"Удаление выбранных объектов ({{ objects_name }}) приведет к удалению "
+"связанных объектов, но у вашей учетной записи нет прав на удаление объектов "
+"следующих типов:"
+
+# ---------- 导航与全局 ----------
+msgid "All applications"
+msgstr "Все приложения"
+
+msgid "Models in the {{ name }} application"
+msgstr "Модели в приложении {{ name }}"
+
+msgid "Recent actions"
+msgstr "Последние действия"
+
+msgid "Recent searches"
+msgstr "Недавние поисковые запросы"
+
+msgid "Toggle sidebar"
+msgstr "Переключить боковую панель"
+
+msgid "Toggle dark/light mode"
+msgstr "Переключить темную/светлую тему"
+
+msgid "Dark"
+msgstr "Ночь"
+
+msgid "Light"
+msgstr "День"
+
+msgid "System"
+msgstr "Авто"
+
+msgid "Return to site"
+msgstr "Вернуться на сайт"
+
+msgid "View site"
+msgstr "Просмотреть сайт"
+
+msgid "View on site"
+msgstr "Посмотреть на сайте"
+
+msgid "Open command tool"
+msgstr "Открыть командную строку"
+
+msgid "Search apps and models..."
+msgstr "Поиск приложений и моделей..."
+
+msgid "Open selection"
+msgstr "Открыть выбранное"
+
+msgid "Open selection in new tab"
+msgstr "Открыть выбранное в новой вкладке"
+
+msgid "Open shortcuts list"
+msgstr "Открыть список быстрых клавиш"
+
+msgid "Available shortcuts"
+msgstr "Доступные быстрые клавиши"
+
+msgid "Global shortcuts"
+msgstr "Глобальные быстрые клавиши"
+
+msgid "Changelist shortcuts"
+msgstr "Быстрые клавиши списка изменений"
+
+msgid "Command tool shortcuts"
+msgstr "Быстрые клавиши командной строки"
+
+msgid "Navigate"
+msgstr "Навигация"
+
+# ---------- 登录与账号 ----------
+msgid "Log in"
+msgstr "Войти"
+
+msgid "Log in again"
+msgstr "Войти снова"
+
+msgid "Log out"
+msgstr "Выйти"
+
+msgid "You have been successfully logged out from the administration"
+msgstr "Вы успешно вышли из панели управления"
+
+msgid "Thanks for spending some quality time with the web site today."
+msgstr "Спасибо, что уделили время работе с сайтом."
+
+msgid "Change password"
+msgstr "Изменить пароль"
+
+msgid "Your password was changed."
+msgstr "Ваш пароль был изменен."
+
+msgid "Toggle password visibility"
+msgstr "Переключить видимость пароля"
+
+msgid "Enter a new password for the user <strong>{{ username }}</strong>."
+msgstr ""
+"Введите новый пароль для пользователя <strong>{{ username }}</strong>."
+
+msgid ""
+"Please enter your old password, for security’s sake, and then enter your new"
+" password twice so we can verify you typed it in correctly."
+msgstr ""
+"В целях безопасности введите ваш старый пароль, а затем новый пароль дважды "
+"для подтверждения правильности ввода."
+
+msgid "After you've created a user, you’ll be able to edit more user options."
+msgstr ""
+"После создания пользователя вы сможете настроить дополнительные параметры."
+
+msgid "Forgotten your password or username?"
+msgstr "Забыли пароль или имя пользователя?"
+
+msgid "You don’t have permission to view or edit anything."
+msgstr "У вас нет прав на просмотр или редактирование каких-либо данных."
+
+msgid ""
+"You are authenticated as {{ username }}, but are not authorized to access "
+"this page. Would you like to login to a different account?"
+msgstr ""
+"Вы вошли как {{ username }}, но у вас нет доступа к этой странице. Хотите "
+"войти под другой учетной записью?"
