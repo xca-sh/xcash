@@ -40,7 +40,8 @@
 
 ## 多语言要求
 
-- 标准支持语言按顺序为：**中文、英语、俄语**。所有语言列表（`LANGUAGES`、unfold 语言切换、支付页语言下拉框）、README 顶部语言切换链接都按此顺序排列；默认语言 `LANGUAGE_CODE` 保持 `zh-hans`。
+- 标准支持语言按顺序为：**中文、英语、俄语**。所有语言列表（`LANGUAGES`、unfold 语言切换、支付页语言下拉框）、README 顶部语言切换链接都按此顺序排列。
+- 语言选择优先级（后台与支付页一致）：手动选择 → 浏览器语言（按偏好顺序取第一个支持的）→ 都不支持时回退英文。后台由 `common.middlewares.XcashLocaleMiddleware` 实现；完全不带 `Accept-Language` 的请求（如商户服务端调 API）回退 `LANGUAGE_CODE`，保持 `zh-hans`。
 - 新增或修改用户可见文案时，三种语言必须同步补齐，不允许只改中文或只改中英：
   - 后台：源码用中文 `gettext`，改完运行 `makemessages -l zh_Hans -l en -l ru --no-obsolete`，三个 `locale/*/LC_MESSAGES/django.po` 不得残留空译文或 `fuzzy`（fuzzy 不会被 compilemessages 编译，等于未翻译）；可用 `msgfmt --statistics` 检查。
   - 第三方后台文案（django-unfold）：`locale_vendor/` 下的 zh_Hans 与 ru 两份手工维护，新增条目两份同步。

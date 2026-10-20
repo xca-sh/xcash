@@ -102,7 +102,7 @@ function LanguageDropdown({ locale, setLocale }) {
                   : "text-white/70"
               )}
             >
-              <span className="text-xs font-bold leading-none w-5 opacity-70">{l.flag}</span>
+              <span className="text-base leading-none w-5">{l.flag}</span>
               <span>{l.label}</span>
             </button>
           ))}

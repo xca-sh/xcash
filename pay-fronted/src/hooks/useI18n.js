@@ -15,9 +15,9 @@ const CHANGE_EVENT = "xcash-locale-change"
 
 // 语言下拉框的展示顺序即标准支持语言顺序：中文、英语、俄语。
 export const SUPPORTED_LOCALES = [
-  { code: "zh", label: "中文", flag: "CN" },
-  { code: "en", label: "English", flag: "GB" },
-  { code: "ru", label: "Русский", flag: "RU" },
+  { code: "zh", label: "中文", flag: "🇨🇳" },
+  { code: "en", label: "English", flag: "🇬🇧" },
+  { code: "ru", label: "Русский", flag: "🇷🇺" },
 ]
 
 // 按浏览器语言偏好列表依次匹配，取第一个标准支持的语言（如 "uk, ru" 取 ru）；都不支持时回退英文。

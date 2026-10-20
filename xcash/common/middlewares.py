@@ -5,9 +5,12 @@ from dataclasses import dataclass
 
 from django.conf import settings
 from django.http import HttpRequest
+from django.middleware.locale import LocaleMiddleware
 from django.urls import Resolver404
 from django.urls import resolve
 from django.utils import timezone
+from django.utils import translation
+from django.utils.translation.trans_real import parse_accept_lang_header
 from django_redis import get_redis_connection
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,48 @@ class AdminSessionTimeoutMiddleware:
             "operational-inspection",
             "admin-path-redirect",
         }
+
+
+class XcashLocaleMiddleware(LocaleMiddleware):
+    """
+    按「手动选择 → 浏览器语言 → 兜底」决定界面语言。
+
+    与 Django 原生 LocaleMiddleware 的唯一区别在兜底：原生实现对「浏览器带了
+    Accept-Language 但都不在 LANGUAGES 内」（如德语浏览器）也回退 LANGUAGE_CODE（中文），
+    这里改为回退英文，与支付页一致。完全没带 Accept-Language 的请求（商户服务端调 API 的
+    常见情形）仍回退 LANGUAGE_CODE，保持 API 错误文案的既有行为。
+    项目不使用 i18n_patterns，因此不处理 URL 前缀语言。
+    """
+
+    UNSUPPORTED_BROWSER_FALLBACK = "en"
+
+    def process_request(self, request):
+        translation.activate(self.resolve_language(request))
+        request.LANGUAGE_CODE = translation.get_language()
+
+    def resolve_language(self, request: HttpRequest) -> str:
+        # 1. 手动切换过（set_language 写入的 cookie）以手动选择为准
+        cookie_language = request.COOKIES.get(settings.LANGUAGE_COOKIE_NAME)
+        if cookie_language:
+            try:
+                return translation.get_supported_language_variant(cookie_language)
+            except LookupError:
+                pass
+
+        # 2. 没有 Accept-Language：不是浏览器访问，沿用默认语言
+        accept_language = request.META.get("HTTP_ACCEPT_LANGUAGE", "")
+        if not accept_language:
+            return settings.LANGUAGE_CODE
+
+        # 3. 按浏览器偏好顺序取第一个支持的语言（zh-CN → zh-hans、ru-RU → ru 由 Django 映射）
+        for language, _quality in parse_accept_lang_header(accept_language):
+            try:
+                return translation.get_supported_language_variant(language)
+            except LookupError:
+                continue
+
+        # 4. 浏览器语言都不支持
+        return self.UNSUPPORTED_BROWSER_FALLBACK
 
 
 @dataclass
