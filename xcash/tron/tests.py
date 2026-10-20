@@ -3932,6 +3932,14 @@ class TronCollectScheduleExecuteTests(TestCase):
             due_at=timezone.now() - timedelta(seconds=1),
         )
 
+    @staticmethod
+    def patch_collectable_balance():
+        # 余额与粉尘阈值先于部署闸门判定：放行一笔达标余额，才会走到部署流。
+        return patch(
+            "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+            return_value=SimpleNamespace(value=1, amount=Decimal("10")),
+        )
+
     @patch("tron.vault_slots.TronAdapter.is_contract", return_value=False)
     def test_execute_due_defers_and_schedules_deploy_for_undeployed_slot(
         self, is_contract
@@ -3940,7 +3948,10 @@ class TronCollectScheduleExecuteTests(TestCase):
         # 而是创建部署任务并把归集计划退避到部署确认之后。
         schedule = self.make_pending_schedule()
 
-        with patch("tron.vault_slots.SystemWallet.get_current") as get_current:
+        with (
+            patch("tron.vault_slots.SystemWallet.get_current") as get_current,
+            self.patch_collectable_balance(),
+        ):
             get_current.return_value.wallet.get_address.return_value = self.sender
             created = VaultSlotCollectSchedule.execute_due()
 
@@ -4012,7 +4023,10 @@ class TronCollectScheduleExecuteTests(TestCase):
             due_at=timezone.now() - timedelta(seconds=1),
         )
 
-        with patch("tron.vault_slots.SystemWallet.get_current") as get_current:
+        with (
+            patch("tron.vault_slots.SystemWallet.get_current") as get_current,
+            self.patch_collectable_balance(),
+        ):
             get_current.return_value.wallet.get_address.return_value = self.sender
             created = VaultSlotCollectSchedule.execute_due()
 

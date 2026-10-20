@@ -1704,7 +1704,17 @@ class VaultSlotAddressSchedulingTests(TestCase):
         schedule.due_at = timezone.now() - timedelta(seconds=1)
         schedule.save(update_fields=["due_at", "updated_at"])
 
-        with address_patch:
+        with (
+            address_patch,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1, amount=Decimal("10")),
+            ),
+            patch(
+                "core.runtime_settings.get_vault_slot_collect_min_worth_usd",
+                return_value=Decimal("0"),
+            ),
+        ):
             created_count = VaultSlotCollectSchedule.execute_due()
 
         self.assertEqual(created_count, 0)
@@ -1723,6 +1733,44 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 f"0x{_selector('deployVaultSlot(address,bytes32)')}"
             )
         )
+
+    def test_due_collect_schedule_below_threshold_skips_deploy_for_undeployed_slot(
+        self,
+    ):
+        # 粉尘先于部署判定：未部署槽位余额低于最小归集价值时直接放弃计划，
+        # 不发部署交易，避免为小额账单白烧部署 gas。
+        Crypto.objects.filter(pk=self.token.pk).update(prices={"USD": "1"})
+        slot = self._create_vault_slot()
+        deposit = self._create_deposit(slot=slot)
+        address_patch = self.patch_address_derivation()
+
+        with address_patch:
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
+        schedule.due_at = timezone.now() - timedelta(seconds=1)
+        schedule.save(update_fields=["due_at", "updated_at"])
+
+        with (
+            address_patch,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1, amount=Decimal("0.02")),
+            ),
+            patch(
+                "core.runtime_settings.get_vault_slot_collect_min_worth_usd",
+                return_value=Decimal("1"),
+            ),
+            patch("chains.vault_slots.schedule_deploy") as schedule_deploy_mock,
+        ):
+            created_count = VaultSlotCollectSchedule.execute_due()
+
+        self.assertEqual(created_count, 0)
+        schedule_deploy_mock.assert_not_called()
+        self.assertFalse(
+            VaultSlotCollectSchedule.objects.filter(pk=schedule.pk).exists()
+        )
+        slot.refresh_from_db()
+        self.assertIsNone(slot.deploy_tx_task)
+        self.assertFalse(slot.is_deployed)
 
     def test_deploy_confirmation_expedites_deferred_collect_schedule(self):
         # 部署确认翻转 is_deployed 时,把被退避的 pending 归集计划拨回当前时间,

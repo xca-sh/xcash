@@ -1297,16 +1297,10 @@ class VaultSlotCollectSchedule(models.Model):
         # 饿死所有链的归集。成功绑定任务后 due_at 不再有意义，零余额/粉尘按原逻辑删除
         # 计划，其余提前返回都已处在退避窗口内，无需再逐个分支退避。
         schedule.defer_retry()
-        was_deployed = schedule.vault_slot.is_deployed
-        if not can_create_collect_tx_task(
-            chain=schedule.chain,
-            slot=schedule.vault_slot,
-        ):
-            return 0
-        if not was_deployed:
-            # 部署闸门当场确认部署时会经 expedite_pending_collects 把本计划 due_at
-            # 拨回当前，其后还有余额刷新与 gas 估算两次 RPC，需续租。
-            schedule.defer_retry()
+        # 余额与粉尘阈值必须先于部署闸门判定：未部署槽位过闸门就会发部署交易，
+        # 若先部署再判粉尘，0.02U 这类小额账单会白烧一笔部署 gas 却不归集。
+        # 余额读的是预测地址上的链上真值（ERC20/TRC20 balanceOf、原生币 getBalance），
+        # 与合约是否已部署无关，故可放在部署之前。
         balance = refresh_vault_slot_balance_safely(
             slot=schedule.vault_slot,
             crypto=schedule.crypto,
@@ -1323,6 +1317,16 @@ class VaultSlotCollectSchedule(models.Model):
             balance=balance,
         ):
             return 0
+        was_deployed = schedule.vault_slot.is_deployed
+        if not can_create_collect_tx_task(
+            chain=schedule.chain,
+            slot=schedule.vault_slot,
+        ):
+            return 0
+        if not was_deployed:
+            # 部署闸门当场确认部署时会经 expedite_pending_collects 把本计划 due_at
+            # 拨回当前，其后还有 gas 估算 RPC，需续租。
+            schedule.defer_retry()
         # gas 估算必须在锁外的 RPC 前置区完成：estimate_gas 是链上调用，绝不能放进
         # 下面持有计划行锁的短事务，也不能进入 schedule 内部的热钱包 nonce 锁。
         # 估算失败返回 None，建任务时回退静态默认，不阻断归集。
