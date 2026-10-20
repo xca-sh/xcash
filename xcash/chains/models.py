@@ -34,6 +34,7 @@ from chains.registry import get_chain_family
 from chains.registry import require_transfer_handler
 from chains.registry import require_transfer_handler_for_vault_slot_usage
 from chains.registry import transfer_handlers_in_match_order
+from chains.scanning import deadline_passed
 from common.fields import AddressField
 from common.fields import HashField
 from common.models import UndeletableModel
@@ -1227,7 +1228,7 @@ class VaultSlotCollectSchedule(models.Model):
         )
 
     @classmethod
-    def execute_due(cls, *, limit: int = 32) -> int:
+    def execute_due(cls, *, limit: int = 32, deadline: float | None = None) -> int:
         """执行到期的归集计划，返回成功建任务的条数。
 
         部署判活与余额刷新都要等链上 RPC，绝不能放在持有行锁的批量事务里：
@@ -1235,6 +1236,10 @@ class VaultSlotCollectSchedule(models.Model):
         EvmTxTask.schedule 内加锁）持续整批 RPC 时长，阻塞全部交易创建。
         故先无锁选出到期计划，逐条在事务外完成 RPC 前置检查，仅"建任务 +
         绑定"一步进短事务重新加锁并复核计划仍然 pending。
+
+        deadline 是协作式时间预算（monotonic 时刻，None 不限时）：只在两条计划之间
+        检查，第一条之前不检查，保证每轮至少推进一条；撞线时剩余计划仍处于到期状态，
+        下一轮按 due_at 顺序接着做，不算错误。
         """
         now = timezone.now()
         due_pks = list(
@@ -1243,7 +1248,14 @@ class VaultSlotCollectSchedule(models.Model):
             .values_list("pk", flat=True)[:limit]
         )
         created_count = 0
-        for pk in due_pks:
+        for index, pk in enumerate(due_pks):
+            if index > 0 and deadline_passed(deadline):
+                logger.info(
+                    "VaultSlot 到期归集计划本轮预算用尽，剩余留待下一轮",
+                    processed=index,
+                    remaining=len(due_pks) - index,
+                )
+                break
             try:
                 created_count += cls.execute_one_due(pk)
             except SoftTimeLimitExceeded:

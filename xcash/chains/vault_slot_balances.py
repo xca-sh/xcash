@@ -17,6 +17,7 @@ from chains.models import TxTaskStatus
 from chains.models import VaultSlot
 from chains.models import VaultSlotBalance
 from chains.models import VaultSlotCollectSchedule
+from chains.scanning import deadline_passed
 
 logger = structlog.get_logger()
 
@@ -241,17 +242,33 @@ def vault_slot_collect_balance_gaps():
     )
 
 
-def reconcile_vault_slot_collect_balance_gaps(*, limit: int = 32) -> dict:
+def reconcile_vault_slot_collect_balance_gaps(
+    *,
+    limit: int = 32,
+    deadline: float | None = None,
+) -> dict:
     """对账余额快照，补齐遗漏的归集计划并暴露失败归集的人工恢复入口。
 
     已存在 FAILED 归集任务时不自动重试，避免黑名单 / 永久 revert 场景被周期任务
     反复烧 gas；这类余额只输出告警，由后台 action 人工确认后重新排队。
+
+    deadline 是协作式时间预算（monotonic 时刻，None 不限时）：只在两行余额之间检查，
+    第一行之前不检查，保证每轮至少推进一行；撞线时未处理的余额 updated_at 不变，
+    下一轮仍排在批次头部，不算错误。
     """
     created_count = 0
     dust_skipped = 0
     failed_blocked = []
     errors = []
-    for balance in vault_slot_collect_balance_gaps()[:limit]:
+    balances = list(vault_slot_collect_balance_gaps()[:limit])
+    for index, balance in enumerate(balances):
+        if index > 0 and deadline_passed(deadline):
+            logger.info(
+                "VaultSlot 余额对账本轮预算用尽，剩余留待下一轮",
+                processed=index,
+                remaining=len(balances) - index,
+            )
+            break
         try:
             if balance.has_failed_collect_schedule:
                 failed_blocked.append(balance)

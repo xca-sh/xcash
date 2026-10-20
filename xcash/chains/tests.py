@@ -1296,6 +1296,44 @@ class VaultSlotReceivedFlagTests(TestCase):
         )
         self.assertLessEqual(schedule.due_at, timezone.now())
 
+    def test_reconcile_stops_after_deadline_and_leaves_rest_for_next_round(self):
+        # 协作式预算：截止时刻已过也至少推进一行；未处理的缺口留在批次头部，下一轮接着补。
+        import time
+
+        from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
+
+        other_slot = VaultSlot.objects.create(
+            chain=self.chain,
+            usage=VaultSlotUsage.INVOICE,
+            project=self.project,
+            invoice_index=2,
+            address=Web3.to_checksum_address("0x" + "bb" * 20),
+            salt=b"s" * 32,
+        )
+        for slot in (self.slot, other_slot):
+            VaultSlotBalance.objects.create(
+                chain=self.chain,
+                vault_slot=slot,
+                crypto=self.crypto,
+                value=Decimal("1234567"),
+                amount=Decimal("1.234567"),
+                worth=Decimal("0"),
+                synced_at=timezone.now(),
+            )
+
+        first = reconcile_vault_slot_collect_balance_gaps(deadline=time.monotonic() - 1)
+        self.assertEqual(first["created_count"], 1)
+        self.assertEqual(
+            VaultSlotCollectSchedule.objects.filter(chain=self.chain).count(), 1
+        )
+
+        second = reconcile_vault_slot_collect_balance_gaps()
+
+        self.assertEqual(second["created_count"], 1)
+        self.assertEqual(
+            VaultSlotCollectSchedule.objects.filter(chain=self.chain).count(), 2
+        )
+
     def test_reconcile_skips_sub_threshold_dust_balance_gap(self):
         # 粉尘余额（实时价 < 最小归集阈值）不应被安全网补建计划，否则会与
         # execute_one_due 的粉尘删除逻辑反复拉锯（建→删）永不收敛。worth 快照留 0
@@ -2069,6 +2107,28 @@ class ReapStaleConfirmingTransfersTests(TestCase):
         self.assertTrue(Transfer.objects.filter(pk=transfer.pk).exists())
         confirm_delay.assert_not_called()
         process_delay.assert_called_once_with(transfer.pk)
+
+    def test_stops_after_budget_and_leaves_rest_for_next_round(self):
+        # 协作式预算：预算为 0 时也至少终验一条；剩余超龄转账按 created_at 顺序下一轮继续。
+        older = self.make_confirming_transfer(suffix="8a")
+        newer = self.make_confirming_transfer(
+            suffix="8b",
+            created_at=self.stale_created_at + timedelta(minutes=1),
+        )
+
+        with patch("chains.tasks.REAP_STALE_CONFIRMING_BUDGET_SECONDS", 0):
+            reaped = self.reap_with_tx_result(
+                TxCheckResult(status=TxCheckStatus.MISSING)
+            )
+
+        self.assertEqual(reaped, 1)
+        self.assertFalse(Transfer.objects.filter(pk=older.pk).exists())
+        self.assertTrue(Transfer.objects.filter(pk=newer.pk).exists())
+
+        reaped = self.reap_with_tx_result(TxCheckResult(status=TxCheckStatus.MISSING))
+
+        self.assertEqual(reaped, 1)
+        self.assertFalse(Transfer.objects.filter(pk=newer.pk).exists())
 
     def test_keeps_stale_transfer_when_chain_query_fails(self):
         transfer = self.make_confirming_transfer(suffix="3a")

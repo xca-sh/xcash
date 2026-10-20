@@ -1931,6 +1931,49 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertIsNone(stuck.tx_task_id)
         self.assertIsNotNone(healthy.tx_task_id)
 
+    def test_execute_due_stops_after_deadline_and_leaves_rest_for_next_round(self):
+        # 协作式预算：截止时刻已过也至少推进一条计划；剩余计划保持到期，下一轮接着做。
+        slot = self._create_vault_slot()
+        self._mark_vault_slot_deployed(slot)
+        self._ensure_native_crypto_mapping()
+        now = timezone.now()
+        first = VaultSlotCollectSchedule.objects.create(
+            chain=self.chain,
+            vault_slot=slot,
+            crypto=self.token,
+            due_at=now - timedelta(seconds=2),
+        )
+        second = VaultSlotCollectSchedule.objects.create(
+            chain=self.chain,
+            vault_slot=slot,
+            crypto=self.chain.native_coin,
+            due_at=now - timedelta(seconds=1),
+        )
+        address_patch = self.patch_address_derivation()
+
+        with (
+            address_patch,
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely",
+                return_value=SimpleNamespace(value=1),
+            ),
+        ):
+            created_count = VaultSlotCollectSchedule.execute_due(
+                deadline=time.monotonic() - 1
+            )
+            first.refresh_from_db()
+            second.refresh_from_db()
+            self.assertEqual(created_count, 1)
+            self.assertIsNotNone(first.tx_task_id)
+            self.assertIsNone(second.tx_task_id)
+            self.assertLessEqual(second.due_at, timezone.now())
+
+            created_count = VaultSlotCollectSchedule.execute_due()
+
+        self.assertEqual(created_count, 1)
+        second.refresh_from_db()
+        self.assertIsNotNone(second.tx_task_id)
+
     def test_chain_rpc_does_not_retry_internally_on_timeout(self):
         # web3 内置重试会把单次挂起调用放大到约 42s，足以单条耗尽归集任务软超时；
         # 链连接必须一次失败即返回，由调用方决定是否重试。

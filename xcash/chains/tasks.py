@@ -10,6 +10,8 @@ from chains.models import ConfirmMode
 from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import VaultSlotCollectSchedule
+from chains.scanning import deadline_passed
+from chains.scanning import step_deadline
 from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
 from common.decorators import singleton_task
 from common.time import ago
@@ -58,6 +60,14 @@ def fallback_process_transfer():
 # 只剩两种可能：链上事实已消失（reorg 丢弃/同 nonce 替换），或确认管线自身故障。
 STALE_CONFIRMING_TRANSFER_MAX_AGE_HOURS = 24
 
+# 批处理任务的协作式时间预算（秒）：只在两个处理单元之间检查（见 chains.scanning），
+# 撞线即把剩余单元留给下一轮，不依赖异步注入的超时异常收尾。撞线后仍要等当前单元做完，
+# 单次占用最坏为「预算 + 一个单元」：归集单元含部署判活、余额刷新、gas 估算多次 RPC，
+# 最坏约 60s；reap 单元是一次链上终验，Tron 最坏约 50s。
+COLLECT_SCHEDULE_BUDGET_SECONDS = 40
+COLLECT_BALANCE_RECONCILE_BUDGET_SECONDS = 90
+REAP_STALE_CONFIRMING_BUDGET_SECONDS = 200
+
 
 # 每条超龄转账都要打一次链上终验 RPC，limit=200 时单轮可达数分钟，必须显式声明
 # 时间预算：用 Celery 默认的 30s 软超时会让每天一轮只清理十几条，而这个任务正是
@@ -76,7 +86,8 @@ def reap_stale_confirming_transfers(limit: int = 200) -> int:
     - SUCCEEDED：只是确认管线出过故障，重新派发确认任务恢复推进。
     - FAILED / 查询异常：保留并告警，本轮跳过，等下一轮观测或人工介入。
     """
-    stale_transfers = (
+    deadline = step_deadline(budget_seconds=REAP_STALE_CONFIRMING_BUDGET_SECONDS)
+    stale_transfers = list(
         Transfer.objects.select_related("chain")
         .filter(
             status=TransferStatus.CONFIRMING,
@@ -85,7 +96,15 @@ def reap_stale_confirming_transfers(limit: int = 200) -> int:
         .order_by("created_at")[:limit]
     )
     reaped_count = 0
-    for transfer in stale_transfers:
+    for index, transfer in enumerate(stale_transfers):
+        # 每天一轮；节点劣化时当天可能清不完，剩余的按 created_at 顺序次日继续。
+        if index > 0 and deadline_passed(deadline):
+            logger.info(
+                "超龄 CONFIRMING 转账清理本轮预算用尽，剩余留待下一轮",
+                processed=index,
+                remaining=len(stale_transfers) - index,
+            )
+            break
         adapter = AdapterFactory.get_adapter(transfer.chain.type)
         raw_result = adapter.tx_result(chain=transfer.chain, tx_hash=transfer.hash)
         if isinstance(raw_result, Exception):
@@ -166,7 +185,9 @@ def schedule_vault_slot_deploy(self, slot_pk: int) -> None:
 @shared_task(ignore_result=True, soft_time_limit=45, time_limit=55)
 @singleton_task(timeout=58)
 def execute_due_vault_slot_collect_schedules() -> None:
-    created_count = VaultSlotCollectSchedule.execute_due()
+    created_count = VaultSlotCollectSchedule.execute_due(
+        deadline=step_deadline(budget_seconds=COLLECT_SCHEDULE_BUDGET_SECONDS)
+    )
     if created_count:
         logger.info(
             "VaultSlot 到期归集计划已创建链上任务",
@@ -177,7 +198,9 @@ def execute_due_vault_slot_collect_schedules() -> None:
 @shared_task(ignore_result=True, soft_time_limit=100, time_limit=110)
 @singleton_task(timeout=115)
 def reconcile_vault_slot_collect_balance_gaps_task() -> None:
-    summary = reconcile_vault_slot_collect_balance_gaps()
+    summary = reconcile_vault_slot_collect_balance_gaps(
+        deadline=step_deadline(budget_seconds=COLLECT_BALANCE_RECONCILE_BUDGET_SECONDS)
+    )
     if summary["created_count"]:
         logger.info(
             "VaultSlot 余额对账已补建遗漏归集计划",
