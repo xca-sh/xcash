@@ -121,6 +121,7 @@ cleanup() {
         printf '[upgrade] Redis 里的 Celery 在途消息未迁移，原样保留；新进程不读 Redis，可先恢复服务。\n' >&2
         printf '[upgrade] 看上方 replay 的 celery-messages.log 定位原因，处理后手工执行：\n' >&2
         printf '[upgrade]   docker compose run --rm django python manage.py migrate_celery_messages\n' >&2
+        printf '[upgrade] 若失败发生在已写入 PG 之后，恢复服务期间已执行或执行中的迁移任务，重跑时会再迁移、再执行一次；这四类任务都幂等，按 at-least-once 接受。\n' >&2
       fi
       run_cleanup_command "start services on migrated schema" \
         recover_application_services

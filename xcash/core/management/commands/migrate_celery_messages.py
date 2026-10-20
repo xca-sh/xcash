@@ -13,7 +13,12 @@ Redis 不再有新消息写入）。Redis 空时是空操作，开源部署跨�
 步骤：WATCH 全部相关键后读快照 → 解析并按消息 id 去重（队列与 unacked 里可能各有一份）→
 逐条打印审计行 → 一个 PG 事务内入队全部 MIGRATE（queueing_lock 取 "celery:<消息 id>"）→
 MULTI/EXEC 删除这些键。EXEC 因 WATCH 失败（期间有写入）则整轮重来，已入队的会因
-queueing_lock 冲突被跳过；PG 提交后、删除前崩溃，重跑同样全部跳过再删除。
+queueing_lock 冲突被跳过。PG 提交后、删除前失败时，只要新消费者还没启动，重跑同样全部
+跳过再删除。但 upgrade.sh 遇到这种失败会先恢复服务、再提示手工重跑：恢复期间新 worker
+已执行完（成功即删除）或正在执行（doing，不受只约束 todo 的 queueing_lock 限制）的迁移
+任务，重跑时会再迁移一份、再执行一次。四类 MIGRATE 任务都幂等（SaaS 回调与 gas 计费由
+SaaS 按 sys_no 去重，部署有 Slot 行锁与 deploy_tx_task 判重，AML 至多多一次外部查询、
+评估 upsert、计费按 sys_no 去重），按 at-least-once 接受，不为此让全站停机等待人工处理。
 
 消息格式不依赖 kombu（新版本已不安装）：kombu Redis transport 把消息信封 JSON 存在 LIST
 里，优先级分桶的键名为「队列名 + \\x06\\x16 + 3/6/9」；unacked 存在 HASH，值为
