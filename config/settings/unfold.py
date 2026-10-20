@@ -36,24 +36,24 @@ BASE_UNFOLD = {
         "navigation": [
             {
                 "bidi": False,
+                "code": "zh-hans",
+                "name": "简体中文",
+                "name_local": "🇨🇳 简体中文",
+                "name_translated": "🇨🇳 简体中文",
+            },
+            {
+                "bidi": False,
                 "code": "en",
                 "name": "English",
                 "name_local": "🇺🇸 English",
                 "name_translated": "🇺🇸 English",
             },
-	        {
+            {
                 "bidi": False,
                 "code": "ru",
                 "name": "Русский",
                 "name_local": "🇷🇺 Русский",
                 "name_translated": "🇷🇺 Русский",
-            },
-            {
-                "bidi": False,
-                "code": "zh-hans",
-                "name": "简体中文",
-                "name_local": "🇨🇳 简体中文",
-                "name_translated": "🇨🇳 简体中文",
             },
         ],
     },

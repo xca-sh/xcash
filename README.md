@@ -1,6 +1,6 @@
 <div align="center">
 
-[English](README.ут.md) · [Русский](README.ru.md) · **简体中文**
+**简体中文** · [English](README.en.md) · [Русский](README.ru.md)
 
 # Xcash
 

@@ -124,13 +124,14 @@ DEBUG = env.bool("DJANGO_DEBUG", False)
 # In Windows, this must be set to your system time zone.
 TIME_ZONE = "UTC"
 # https://docs.djangoproject.com/en/dev/ref/settings/#language-code
-LANGUAGE_CODE = "ru"
+LANGUAGE_CODE = "zh-hans"
 # https://docs.djangoproject.com/en/dev/ref/settings/#languages
 # from django.utils.translation import gettext_lazy as _
+# 标准支持语言，顺序固定：中文、英语、俄语（见 CLAUDE.md「多语言要求」）。
 LANGUAGES = [
-    ("en", "🇺🇸 English"),
-    ("ru", "ru Russian"),
     ("zh-hans", "🇨🇳 简体中文"),
+    ("en", "🇺🇸 English"),
+    ("ru", "🇷🇺 Русский"),
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#use-i18n
 USE_I18N = True
@@ -139,7 +140,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/dev/ref/settings/#locale-paths
 LOCALE_PATHS = [
     str(BASE_DIR / "locale"),
-    # 第三方后台组件（django-unfold）自身不带 locale，其界面文案的中文包由项目维护。
+    # 第三方后台组件（django-unfold）自身不带 locale，其界面文案的语言包由项目维护。
     # 单独放一个目录：makemessages 只写 locale/，写进去会在下次生成时被标记废弃。
     str(BASE_DIR / "locale_vendor"),
 ]

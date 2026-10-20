@@ -2,39 +2,32 @@ import { useState, useEffect } from "react"
 import en from "@/locales/en.json"
 import zh from "@/locales/zh.json"
 import ru from "@/locales/ru.json"
-import uk from "@/locales/uk.json"
-import bg from "@/locales/bg.json"
 
 const translations = {
   en,
   zh,
   ru,
-  uk,
-  bg,
   "zh-CN": zh,
   "zh-TW": zh,
   "zh-HK": zh,
 }
 
-const SUPPORTED = ["en", "zh", "ru", "uk", "bg"]
+const SUPPORTED = ["zh", "en", "ru"]
 const STORAGE_KEY = "xcash-locale"
 const CHANGE_EVENT = "xcash-locale-change"
 
-/** Metadata for each supported locale — used by the language selector dropdown. */
+// 语言下拉框的展示顺序即标准支持语言顺序：中文、英语、俄语。
 export const SUPPORTED_LOCALES = [
+  { code: "zh", label: "中文", flag: "CN" },
   { code: "en", label: "English", flag: "GB" },
-  { code: "zh", label: "中文",    flag: "CN" },
   { code: "ru", label: "Русский", flag: "RU" },
-  { code: "uk", label: "Українська", flag: "UA" },
-  { code: "bg", label: "Български", flag: "BG" },
 ]
 
 function normalize(lang) {
   if (!lang) return "en"
   const code = lang.split("-")[0].toLowerCase()
-  if (SUPPORTED.includes(code)) return code
-  // fallback: en
-  return "en"
+  // 不在标准支持列表内的浏览器语言一律回退英文
+  return SUPPORTED.includes(code) ? code : "en"
 }
 
 function detectInitialLocale() {
