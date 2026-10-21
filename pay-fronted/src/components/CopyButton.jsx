@@ -4,7 +4,8 @@ import { useI18n } from "@/hooks/useI18n"
 import { cn } from "@/lib/utils"
 
 // 带文字的轻量复制按钮：复制成功后 2 秒内显示「已复制」，自管状态，各字段互不干扰。
-function CopyButton({ value, className }) {
+// iconOnly 用于行内紧凑场景，只显示图标，文案改作无障碍标签。
+function CopyButton({ value, iconOnly = false, className }) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const timerRef = useRef(null)
@@ -30,12 +31,15 @@ function CopyButton({ value, className }) {
       onClick={handleCopy}
       className={cn(
         "-mr-2 inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+        iconOnly && "mr-0 size-6 justify-center px-0",
         copied && "text-primary-ink hover:text-primary-ink",
         className
       )}
+      aria-label={iconOnly ? (copied ? t("common.copied") : t("common.copy")) : undefined}
+      title={iconOnly ? (copied ? t("common.copied") : t("common.copy")) : undefined}
     >
       {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-      {copied ? t("common.copied") : t("common.copy")}
+      {!iconOnly && (copied ? t("common.copied") : t("common.copy"))}
     </button>
   )
 }

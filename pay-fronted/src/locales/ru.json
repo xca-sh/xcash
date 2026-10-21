@@ -57,7 +57,6 @@
     "paidAmount": "Оплачено",
     "orderAmount": "Сумма заказа",
     "sendCrypto": "Отправьте {{crypto}}",
-    "onlyNetwork": "Только эта сеть",
     "exactAmountTitle": "Отправьте точно указанную выше сумму",
     "warnAmountMismatch": "Переплата или недоплата не зачисляются",
     "warnAmountExchange": "С биржи после комиссии должно поступить {{amount}}",

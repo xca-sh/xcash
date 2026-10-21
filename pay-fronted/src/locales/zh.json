@@ -57,7 +57,6 @@
     "paidAmount": "实付金额",
     "orderAmount": "订单金额",
     "sendCrypto": "发送 {{crypto}}",
-    "onlyNetwork": "仅限此网络",
     "exactAmountTitle": "转账金额必须与上方完全一致",
     "warnAmountMismatch": "多付或少付都无法自动到账",
     "warnAmountExchange": "交易所提币须扣费后到账 {{amount}}",
