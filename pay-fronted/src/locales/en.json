@@ -59,8 +59,10 @@
     "sendCrypto": "Send {{crypto}}",
     "onlyNetwork": "This network only",
     "exactAmountTitle": "Send the exact amount shown above",
-    "exactAmountDesc": "Over- or underpayment will not be credited automatically. When withdrawing from an exchange, make sure {{amount}} arrives after fees",
-    "wrongNetworkDesc": "Only {{crypto}} on {{chain}} is accepted. Funds sent on another network or token may be lost",
+    "warnAmountMismatch": "Over- or underpayment won't be credited",
+    "warnAmountExchange": "From an exchange, {{amount}} must arrive after fees",
+    "warnNetworkOnly": "Only {{crypto}} on {{chain}} is accepted",
+    "warnNetworkLoss": "Wrong network or token may be lost",
     "timeLeft": "Time left to pay",
     "warnAmountLabel": "Amount",
     "warnNetworkLabel": "Network"

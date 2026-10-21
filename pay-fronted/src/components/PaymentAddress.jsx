@@ -229,18 +229,20 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
       ) : (
         // 待支付：二维码 + 金额 / 地址，下方紧跟转账警示
         <div className="px-5 py-6 sm:px-6">
-          <div className="grid gap-6 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center sm:gap-7">
-            <div className="justify-self-center rounded-lg bg-white p-2.5 ring-1 ring-black/[0.06]">
+          {/* 二维码与右侧「金额 / 地址」等高：右栏上下撑满并两端对齐，
+              首个标签顶边、地址框底边分别对齐二维码的上下边 */}
+          <div className="grid gap-6 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-stretch sm:gap-7">
+            <div className="self-center justify-self-center rounded-lg bg-white p-2.5 ring-1 ring-black/[0.06]">
               {qrCodeUrl ? (
-                <img src={qrCodeUrl} alt={t("payment.scanQRCode")} className="size-40" />
+                <img src={qrCodeUrl} alt={t("payment.scanQRCode")} className="size-48" />
               ) : (
-                <div className="flex size-40 items-center justify-center">
+                <div className="flex size-48 items-center justify-center">
                   <Loader2 className="size-5 animate-spin text-neutral-400" />
                 </div>
               )}
             </div>
 
-            <dl className="min-w-0 divide-y">
+            <dl className="flex min-w-0 flex-col justify-between divide-y">
               {amountField}
               <Field
                 label={t("payment.paymentAddress")}
@@ -255,7 +257,7 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
           </div>
 
           {/* 转账警示：标题一句话点明「金额必须完全一致」（系统按金额匹配账单），
-              下方按「金额 / 网络」两项对齐列出细则，关键值高亮 */}
+              下方按「金额 / 网络」两项对齐列出细则（每项拆成两条短句避免折行），关键值高亮 */}
           <div role="note" className="mt-6 overflow-hidden rounded-lg border border-warning-border bg-warning-soft">
             <p className="flex items-center gap-2 px-4 py-2.5 text-[13px] font-semibold text-warning">
               <TriangleAlert className="size-4 shrink-0" />
@@ -264,17 +266,23 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
             <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-warning-border px-4 py-3 text-[13px] leading-5">
               <dt className="font-medium text-warning">{t("payment.warnAmountLabel")}</dt>
               <dd className="text-muted-foreground">
-                <RichText
-                  template={t("payment.exactAmountDesc")}
-                  values={{ amount: `${invoice.pay_amount} ${invoice.crypto}` }}
-                />
+                <p>{t("payment.warnAmountMismatch")}</p>
+                <p>
+                  <RichText
+                    template={t("payment.warnAmountExchange")}
+                    values={{ amount: `${invoice.pay_amount} ${invoice.crypto}` }}
+                  />
+                </p>
               </dd>
               <dt className="font-medium text-warning">{t("payment.warnNetworkLabel")}</dt>
               <dd className="text-muted-foreground">
-                <RichText
-                  template={t("payment.wrongNetworkDesc")}
-                  values={{ chain: chainMeta.name, crypto: invoice.crypto }}
-                />
+                <p>
+                  <RichText
+                    template={t("payment.warnNetworkOnly")}
+                    values={{ chain: chainMeta.name, crypto: invoice.crypto }}
+                  />
+                </p>
+                <p>{t("payment.warnNetworkLoss")}</p>
               </dd>
             </dl>
           </div>
