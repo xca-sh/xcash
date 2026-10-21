@@ -276,6 +276,17 @@ class AmlShouldScreenTests(AmlTestMixin, TestCase):
         )
         self.transfer.from_address = "0x1111111111111111111111111111111111111111"
 
+        # SaaS 下发 aml_supported=False（AML 单价为 0）：已开启的项目也跳过
+        with patch(
+            "aml.service.get_saas_aml_supported", return_value=False
+        ) as supported:
+            self.assertFalse(
+                AmlScreeningService.should_screen(
+                    project=self.project, worth=Decimal("500"), transfer=self.transfer
+                )
+            )
+        supported.assert_called_once_with(appid=self.project.appid)
+
         self.system_settings.quicknode_misttrack_endpoint_url = ""
         # 系统参数缓存在事务提交后失效
         with self.captureOnCommitCallbacks(execute=True):

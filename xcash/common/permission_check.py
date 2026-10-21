@@ -163,6 +163,18 @@ def get_saas_deposit_customer_limit(*, appid: str) -> int | None:
     return limit if limit >= 0 else None
 
 
+def get_saas_aml_supported(*, appid: str) -> bool:
+    """读取 SaaS 是否支持 AML 查询（SaaS 侧 AML 单价为 0 即暂不支持）。
+
+    缺省按支持处理：自托管、冷缓存、老缓存缺 key 都返回 True，避免 SaaS 升级前后
+    已开启 AML 的项目被静默关掉筛查；只有 SaaS 明确下发 False 才跳过。
+    """
+    perm = _read_saas_perm(appid)
+    if perm is None:
+        return True
+    return perm.get("aml_supported", True) is not False
+
+
 def get_saas_invoice_vault_slot_limit(*, appid: str) -> int | None:
     """读取 SaaS 下发的账单 VaultSlot 单项目单链上限。
 

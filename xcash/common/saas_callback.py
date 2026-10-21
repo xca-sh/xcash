@@ -28,7 +28,7 @@ SAAS_CALLBACK_RETRY_DELAYS = (8, 60, 300, 600, 1800) + (3600,) * 15
 class CallbackEvent(models.TextChoices):
     """xcash → SaaS 回调的事件枚举，限定 event 可选值。
 
-    命名空间即业务大类（invoice.* / deposit.* / gas_fee.* / aml.*），SaaS 据此路由。
+    命名空间即业务大类（invoice.* / deposit.* / gas_fee.* / aml.* / vault_slot.*），SaaS 据此路由。
     """
 
     INVOICE_CONFIRMED = "invoice.confirmed", "Invoice 确认"
@@ -43,17 +43,21 @@ class CallbackEvent(models.TextChoices):
     )
     # 一次成功的外部 AML 查询；引擎只报次数，单次价格由 SaaS 按套餐核算
     AML_SCREENED = "aml.screened", "AML 查询成功"
+    # 项目新增一个收款合约地址；引擎只报地址，占用费单价由 SaaS 决定
+    VAULT_SLOT_CREATED = "vault_slot.created", "收款合约地址开通"
 
 
 @dataclass(frozen=True, kw_only=True)
 class SaasCallback:
     """xcash → SaaS 回调的统一数据结构（契约的单一定义处）。
 
-    业务大类由 event 命名空间表达（invoice.* / deposit.* / gas_fee.* / aml.*），SaaS 按 event 路由。
-    金额字段按 event 大类严格匹配（由 __post_init__ 强约束，杜绝缺失、多给或与 event 不匹配）：
+    业务大类由 event 命名空间表达（invoice.* / deposit.* / gas_fee.* / aml.* / vault_slot.*），
+    SaaS 按 event 路由。金额字段按 event 大类严格匹配（由 __post_init__ 强约束，杜绝缺失、多给或与
+    event 不匹配）：
     - invoice/deposit → 只带 worth（成交/充值等值金额）；
     - gas_fee → 只带 tx_detail（链上成本明细，含 gas_cost）；
-    - aml → 两者都不带：只报一次查询，单价由 SaaS 按套餐决定。
+    - aml → 都不带：只报一次查询，单价由 SaaS 全局配置决定；
+    - vault_slot → 只带 detail（地址 / 链 / 用途），占用费单价由 SaaS 全局配置决定。
     sys_no 是 SaaS 侧扣费的幂等键。uid 仅在 VaultSlot 能关联 Customer 时携带，
     供 SaaS 共享充值项目定位实际用户。
     """
@@ -64,11 +68,22 @@ class SaasCallback:
     currency: str = ""
     worth: str | None = None
     tx_detail: dict | None = None
+    detail: dict | None = None
     uid: str | None = None
 
     def __post_init__(self) -> None:
         CallbackEvent(self.event)  # 限定 event 取值，非法值抛 ValueError
         family = str(self.event).split(".", 1)[0]
+        if family == "vault_slot":
+            if (
+                self.detail is None
+                or self.worth is not None
+                or self.tx_detail is not None
+            ):
+                raise ValueError("vault_slot 回调必须且只能带 detail")
+            return
+        if self.detail is not None:
+            raise ValueError(f"{self.event} 回调不带 detail")
         if family == "gas_fee":
             if self.tx_detail is None or self.worth is not None:
                 raise ValueError("gas_fee 回调必须且只能带 tx_detail")
@@ -92,6 +107,8 @@ class SaasCallback:
             payload["worth"] = self.worth
         if self.tx_detail is not None:
             payload["tx_detail"] = self.tx_detail
+        if self.detail is not None:
+            payload["detail"] = self.detail
         if self.uid is not None:
             payload["uid"] = self.uid
         return payload

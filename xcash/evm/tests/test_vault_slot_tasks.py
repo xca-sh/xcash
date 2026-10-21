@@ -319,6 +319,85 @@ class VaultSlotAddressSchedulingTests(TestCase):
             schedule_vault_slot_deploy(slot_pk=slot_pk)
         return slot_pks
 
+    @staticmethod
+    def vault_slot_open_callbacks() -> list[dict]:
+        return [
+            args["payload"]
+            for args in queued_args("common.deliver_saas_callback")
+            if args["payload"]["event"] == "vault_slot.created"
+        ]
+
+    def test_new_deposit_address_reports_vault_slot_open_fee(self):
+        with self.patch_address_derivation(), patch.object(EvmTxTask, "schedule"):
+            address = ensure_deposit_address(
+                chain=self.chain,
+                customer=self.customer,
+                crypto=self.token,
+            )
+            # 再次取同一地址不新建行，不重复上报
+            ensure_deposit_address(
+                chain=self.chain,
+                customer=self.customer,
+                crypto=self.token,
+            )
+
+        [payload] = self.vault_slot_open_callbacks()
+        self.assertEqual(payload["appid"], self.project.appid)
+        self.assertEqual(payload["sys_no"], f"vault-slot-open:{address}")
+        self.assertEqual(
+            payload["detail"],
+            {"address": address, "chain": self.chain.code, "usage": "deposit"},
+        )
+
+    def test_same_address_on_second_evm_chain_is_not_reported_again(self):
+        second_chain = make_evm_chain(
+            code=ChainCode.BSC, rpc="http://vault-slot-fee.local"
+        )
+        with self.patch_address_derivation(), patch.object(EvmTxTask, "schedule"):
+            ensure_deposit_address(
+                chain=self.chain, customer=self.customer, crypto=self.token
+            )
+            ensure_deposit_address(
+                chain=second_chain, customer=self.customer, crypto=self.token
+            )
+
+        # 收的是地址占用费：同一 CREATE2 地址在多条 EVM 链各一行，只报一次
+        self.assertEqual(VaultSlot.objects.filter(customer=self.customer).count(), 2)
+        self.assertEqual(len(self.vault_slot_open_callbacks()), 1)
+
+    def test_new_invoice_address_reports_vault_slot_open_fee(self):
+        from chains.vault_slots import ensure_invoice_address
+
+        with self.patch_address_derivation(), patch.object(EvmTxTask, "schedule"):
+            address = ensure_invoice_address(
+                project=self.project,
+                chain=self.chain,
+                invoice_index=0,
+                crypto=self.token,
+            )
+
+        [payload] = self.vault_slot_open_callbacks()
+        self.assertEqual(payload["sys_no"], f"vault-slot-open:{address}")
+        self.assertEqual(payload["detail"]["usage"], "invoice")
+
+    def test_vault_slot_open_report_rolls_back_with_creation(self):
+        class AbortError(Exception):
+            pass
+
+        with (
+            self.patch_address_derivation(),
+            patch.object(EvmTxTask, "schedule"),
+            self.assertRaises(AbortError),
+            db_transaction.atomic(),
+        ):
+            ensure_deposit_address(
+                chain=self.chain, customer=self.customer, crypto=self.token
+            )
+            raise AbortError
+
+        self.assertFalse(VaultSlot.objects.filter(customer=self.customer).exists())
+        self.assertEqual(self.vault_slot_open_callbacks(), [])
+
     def test_first_ensure_deposit_address_delays_deploy_for_token(self):
         self.project.evm_vault = Web3.to_checksum_address(
             "0x0000000000000000000000000000000000000f01"

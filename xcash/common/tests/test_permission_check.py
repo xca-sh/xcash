@@ -13,6 +13,7 @@ from django.test import override_settings
 from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from common.permission_check import check_saas_permission
+from common.permission_check import get_saas_aml_supported
 from common.permission_check import get_saas_deposit_customer_limit
 from common.permission_check import get_saas_invoice_vault_slot_limit
 from common.permission_check import refresh_saas_permission
@@ -200,6 +201,26 @@ class CheckSaasPermissionTest(TestCase):
             get_saas_invoice_vault_slot_limit(appid="XC-invoice-slot-limit"),
             12,
         )
+
+    @patch("common.permission_check.refresh_executor")
+    def test_aml_supported_reads_cache_and_defaults_to_true(self, mock_executor):
+        cases = (
+            ({"aml_supported": False}, False),
+            ({"aml_supported": True}, True),
+            # 老缓存缺 key（SaaS 升级前写入）按支持处理，不静默关掉已开启的筛查
+            ({}, True),
+        )
+        for index, (payload, expected) in enumerate(cases):
+            appid = f"XC-aml-supported-{index}"
+            cache.set(
+                f"saas:permission:{appid}",
+                {"frozen": False, "_fetched_at": time.time(), **payload},
+                None,
+            )
+            self.assertIs(get_saas_aml_supported(appid=appid), expected)
+
+        # 冷缓存也按支持处理
+        self.assertIs(get_saas_aml_supported(appid="XC-aml-cold"), True)
 
     def test_invoice_vault_slot_limit_missing_or_invalid_means_fallback(self):
         cases = (

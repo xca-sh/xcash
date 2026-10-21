@@ -15,6 +15,7 @@ from chains.constants import ChainCode
 from chains.models import Transfer
 from chains.models import TransferStatus
 from chains.models import TransferType
+from common.permission_check import get_saas_aml_supported
 from common.saas_callback import CallbackEvent
 from common.saas_callback import SaasCallback
 from common.saas_callback import send_saas_callback
@@ -58,7 +59,8 @@ class AmlScreeningService:
         """匹配时判定这笔收款是否需要 AML 查询（走快速确认的账单由调用方先行排除）。
 
         以下情况不查询、不写记录：项目未开启、价值不超过项目阈值（小额收款占绝大多数）、
-        链不在 MistTrack 覆盖范围（测试网等）、付款地址未知、未配置查询 endpoint。
+        链不在 MistTrack 覆盖范围（测试网等）、付款地址未知、未配置查询 endpoint、
+        SaaS 暂不支持 AML（单价为 0）。
         """
         return (
             project.aml_screening_enabled
@@ -66,6 +68,7 @@ class AmlScreeningService:
             and transfer.chain.code in QUICKNODE_MISTTRACK_CHAIN
             and not transfer.has_unknown_source_address()
             and bool(get_quicknode_misttrack_endpoint_url())
+            and get_saas_aml_supported(appid=project.appid)
         )
 
     @classmethod

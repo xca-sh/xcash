@@ -389,6 +389,30 @@ class CrossChainDepositSlotTests(TestCase):
         # ERC20 充值不预部署：补建只落行，部署留给归集前置闸门按需触发。
         self.assertFalse(slot.is_deployed)
 
+    def test_materialized_slot_does_not_report_vault_slot_fee_again(self):
+        from common.tests.job_helpers import queued_args
+
+        def open_callbacks():
+            return [
+                args["payload"]
+                for args in queued_args("common.deliver_saas_callback")
+                if args["payload"]["event"] == "vault_slot.created"
+            ]
+
+        # setUp 建 ETH 行时已报过一次占用费
+        self.assertEqual(len(open_callbacks()), 1)
+
+        load_owned_addresses_for_candidates(
+            chain=self.bsc,
+            addresses={self.deposit_address},
+        )
+
+        # 跨链补建的 BSC 行与 ETH 行同地址，不再上报
+        self.assertTrue(
+            VaultSlot.objects.filter(chain=self.bsc, customer=self.customer).exists()
+        )
+        self.assertEqual(len(open_callbacks()), 1)
+
     def test_materialize_is_idempotent_across_repeated_windows(self):
         load_owned_addresses_for_candidates(
             chain=self.bsc,

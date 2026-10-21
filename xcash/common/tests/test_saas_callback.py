@@ -130,6 +130,18 @@ class SaasCallbackTest(TestCase):
         assert aml_payload["sys_no"] == "aml-screening:INV-001"
         assert not {"worth", "tx_detail", "currency"} & aml_payload.keys()
 
+        # vault_slot：只带 detail（地址 / 链 / 用途），不带金额
+        slot_payload = SaasCallback(
+            event=CallbackEvent.VAULT_SLOT_CREATED,
+            appid="XC-test",
+            sys_no="vault-slot-open:0xabc",
+            detail={"address": "0xabc", "chain": "ethereum", "usage": "deposit"},
+        ).to_payload()
+        assert slot_payload["event"] == "vault_slot.created"
+        assert slot_payload["detail"]["usage"] == "deposit"
+        assert not {"worth", "tx_detail"} & slot_payload.keys()
+        assert "detail" not in aml_payload
+
     def test_invalid_event_value_is_rejected(self):
         import pytest
 
@@ -174,6 +186,34 @@ class SaasCallbackTest(TestCase):
                 appid="XC-test",
                 sys_no="aml-screening:INV-001",
                 worth="1",
+            )
+
+    def test_detail_only_allowed_for_vault_slot_family(self):
+        import pytest
+
+        from common.saas_callback import CallbackEvent
+        from common.saas_callback import SaasCallback
+
+        with pytest.raises(ValueError, match="vault_slot 回调必须且只能带 detail"):
+            SaasCallback(
+                event=CallbackEvent.VAULT_SLOT_CREATED,
+                appid="XC-test",
+                sys_no="vault-slot-open:0xabc",
+            )
+        with pytest.raises(ValueError, match="vault_slot 回调必须且只能带 detail"):
+            SaasCallback(
+                event=CallbackEvent.VAULT_SLOT_CREATED,
+                appid="XC-test",
+                sys_no="vault-slot-open:0xabc",
+                detail={"address": "0xabc"},
+                worth="0.01",
+            )
+        with pytest.raises(ValueError, match="不带 detail"):
+            SaasCallback(
+                event=CallbackEvent.AML_SCREENED,
+                appid="XC-test",
+                sys_no="aml-screening:INV-001",
+                detail={"address": "0xabc"},
             )
 
     def test_http_errors_are_retried_by_table_until_exhausted(self):
