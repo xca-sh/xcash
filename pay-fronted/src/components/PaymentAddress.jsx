@@ -259,15 +259,15 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
             </dl>
           </div>
 
-          {/* 转账警示：标题一句话点明「金额必须完全一致」（系统按金额匹配账单），
+          {/* 转账警示（弱化为辅助信息：小字号、低饱和底色，仅标题保留琥珀色）：标题一句话点明「金额必须完全一致」（系统按金额匹配账单），
               下方按「金额 / 网络 / 合约」对齐列出细则（每项拆成两条短句避免折行），关键值高亮 */}
-          <div role="note" className="mt-6 overflow-hidden rounded-lg border border-warning-border bg-warning-soft">
-            <p className="flex items-center gap-2 px-4 py-2.5 text-[13px] font-semibold text-warning">
-              <TriangleAlert className="size-4 shrink-0" />
+          <div role="note" className="mt-6 overflow-hidden rounded-lg border border-warning-border/60 bg-warning-soft/50">
+            <p className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-warning">
+              <TriangleAlert className="size-3.5 shrink-0" />
               {t("payment.exactAmountTitle")}
             </p>
-            <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-warning-border px-4 py-3 text-[13px] leading-5">
-              <dt className="font-medium text-warning">{t("payment.warnAmountLabel")}</dt>
+            <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 border-t border-warning-border/60 px-3.5 py-2.5 text-xs leading-5">
+              <dt className="text-muted-foreground/80">{t("payment.warnAmountLabel")}</dt>
               <dd className="text-muted-foreground">
                 <p>{t("payment.warnAmountMismatch")}</p>
                 <p>
@@ -277,7 +277,7 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
                   />
                 </p>
               </dd>
-              <dt className="font-medium text-warning">{t("payment.warnNetworkLabel")}</dt>
+              <dt className="text-muted-foreground/80">{t("payment.warnNetworkLabel")}</dt>
               <dd className="text-muted-foreground">
                 <p>
                   <RichText
@@ -289,10 +289,10 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
               </dd>
               {invoice.crypto_address && (
                 <>
-                  <dt className="font-medium text-warning">{t("payment.warnContractLabel")}</dt>
+                  <dt className="text-muted-foreground/80">{t("payment.warnContractLabel")}</dt>
                   <dd className="text-muted-foreground">
                     <p className="flex items-start gap-1">
-                      <code className="min-w-0 break-all font-mono text-foreground">{invoice.crypto_address}</code>
+                      <code className="min-w-0 break-all font-mono text-foreground/80">{invoice.crypto_address}</code>
                       <CopyButton value={invoice.crypto_address} iconOnly className="-my-0.5 -mr-1" />
                     </p>
                     <p>{t("payment.warnContractHint")}</p>
