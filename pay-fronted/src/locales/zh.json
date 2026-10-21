@@ -47,7 +47,7 @@
     "paymentFinalizing": "最终化中",
     "paymentAmount": "支付金额",
     "network": "网络",
-    "paymentAddress": "转账地址",
+    "paymentAddress": "支付地址",
     "contractAddress": "合约地址",
     "transactionHash": "交易哈希",
     "scanQRCode": "使用钱包扫码完成支付",

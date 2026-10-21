@@ -47,7 +47,7 @@
     "paymentFinalizing": "Finalizing",
     "paymentAmount": "Payment Amount",
     "network": "Network",
-    "paymentAddress": "Transfer Address",
+    "paymentAddress": "Payment Address",
     "contractAddress": "Contract Address",
     "transactionHash": "Transaction Hash",
     "scanQRCode": "Scan QR code with wallet",

@@ -47,7 +47,7 @@
     "paymentFinalizing": "Завершение транзакции",
     "paymentAmount": "Сумма платежа",
     "network": "Сеть",
-    "paymentAddress": "Адрес получателя",
+    "paymentAddress": "Адрес для оплаты",
     "contractAddress": "Адрес контракта",
     "transactionHash": "Хэш транзакции (TxID)",
     "scanQRCode": "Отсканируйте QR-код кошельком",

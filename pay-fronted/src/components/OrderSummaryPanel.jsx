@@ -1,7 +1,7 @@
 // src/components/OrderSummaryPanel.jsx
 // 订单摘要面板：移动端是顶部品牌横幅，桌面端是左侧固定的深色品牌侧栏。
 import { useEffect, useState } from "react"
-import { Clock, Moon, Sun, ShieldCheck, Globe, ChevronDown } from "lucide-react"
+import { Clock, Moon, Sun, ShieldCheck, ChevronDown } from "lucide-react"
 import LogoMark from "@/components/LogoMark"
 import { useI18n, SUPPORTED_LOCALES } from "@/hooks/useI18n"
 import { getInvoiceDisplayStatus } from "@/lib/invoiceStatus"
@@ -81,7 +81,7 @@ function LanguageDropdown({ locale, setLocale }) {
         aria-label="Select language"
         className="flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/80 transition-colors hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
       >
-        <Globe className="size-3.5" />
+        <span className="text-sm leading-none" aria-hidden="true">{current.flag}</span>
         <span>{current.label}</span>
         <ChevronDown className={cn("size-3 transition-transform", open && "rotate-180")} />
       </button>

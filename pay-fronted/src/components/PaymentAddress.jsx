@@ -22,9 +22,9 @@ function HighlightedAddress({ address }) {
   }
   return (
     <>
-      <span className="text-foreground">{address.slice(0, ADDRESS_EDGE)}</span>
-      <span className="text-muted-foreground">{address.slice(ADDRESS_EDGE, -ADDRESS_EDGE)}</span>
-      <span className="text-foreground">{address.slice(-ADDRESS_EDGE)}</span>
+      <span className="font-bold text-primary-ink">{address.slice(0, ADDRESS_EDGE)}</span>
+      <span className="text-foreground">{address.slice(ADDRESS_EDGE, -ADDRESS_EDGE)}</span>
+      <span className="font-bold text-primary-ink">{address.slice(-ADDRESS_EDGE)}</span>
     </>
   )
 }
@@ -34,7 +34,7 @@ function Field({ label, action, children }) {
   return (
     <div className="py-4 first:pt-0 last:pb-0">
       <div className="flex h-7 items-center justify-between gap-3">
-        <dt className="text-xs text-muted-foreground">{label}</dt>
+        <dt className="text-sm font-medium text-muted-foreground">{label}</dt>
         {action}
       </div>
       <dd className="mt-1">{children}</dd>
@@ -160,11 +160,12 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
       label={t("payment.paymentAmount")}
       action={!hasPayment && <CopyButton value={invoice.pay_amount} />}
     >
+      {/* 金额是用户最需要逐位核对的值：放大加粗并用品牌色突出 */}
       <div className="flex min-w-0 items-baseline gap-2">
-        <span className="truncate text-[1.75rem] font-semibold leading-tight tracking-tight tabular-nums">
+        <span className="truncate text-4xl font-bold leading-tight tracking-tight text-primary-ink tabular-nums">
           {invoice.pay_amount}
         </span>
-        <span className="shrink-0 text-sm font-medium text-muted-foreground">{invoice.crypto}</span>
+        <span className="shrink-0 text-lg font-semibold text-foreground">{invoice.crypto}</span>
       </div>
     </Field>
   )
@@ -245,7 +246,8 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
                 label={t("payment.paymentAddress")}
                 action={<CopyButton value={invoice.pay_address} />}
               >
-                <code className="block break-all font-mono text-[13px] leading-5">
+                {/* 地址放进底色框内并加大字号，与金额同为卡片视觉焦点 */}
+                <code className="block break-all rounded-lg border bg-muted px-3 py-2.5 font-mono text-[15px] font-medium leading-6">
                   <HighlightedAddress address={invoice.pay_address} />
                 </code>
               </Field>
