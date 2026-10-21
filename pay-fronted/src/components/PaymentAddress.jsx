@@ -172,33 +172,43 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
 
   return (
     <section className="overflow-hidden rounded-xl border bg-card shadow-xs">
-      {/* 头部：币种图标（右下角叠网络角标）+「发送 USDT」+ 网络标识 + 剩余时间。
-          币种与网络是转错最常见的两项，放在卡片最显眼的位置 */}
-      <header className="flex items-start gap-3.5 px-5 pt-5 sm:px-6 sm:pt-6">
-        <span className="relative mt-0.5 shrink-0">
-          <TokenIcon src={cryptoMeta.icon} className="size-10" />
-          <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full bg-card">
-            <TokenIcon src={chainMeta.icon} className="size-4" />
-          </span>
-        </span>
+      {/* 头部：币种图标 +「发送 USDT」+ 剩余时间；下方以「标签 / 值」两列列出网络与代币合约。
+          币种、网络、合约是转错最常见的三项，集中放在卡片最显眼的位置 */}
+      <header className="flex items-start justify-between gap-4 px-5 pt-5 sm:px-6 sm:pt-6">
         <div className="min-w-0 flex-1">
-          <h2 className="text-lg font-semibold leading-6 tracking-tight">{headerTitle}</h2>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md border bg-muted px-2 py-0.5 text-[13px] font-medium",
-                chainMeta.isTestnet && "border-warning-border bg-warning-soft text-warning"
-              )}
-            >
-              <TokenIcon src={chainMeta.icon} className="size-3.5" />
-              {chainMeta.name}
-              {chainMeta.isTestnet && ` · ${t("selector.testNetwork")}`}
-            </span>
-            {!hasPayment && <span className="text-xs text-muted-foreground">{t("payment.onlyNetwork")}</span>}
+          <div className="flex items-center gap-3">
+            <TokenIcon src={cryptoMeta.icon} className="size-9" />
+            <h2 className="truncate text-lg font-semibold leading-6 tracking-tight">{headerTitle}</h2>
           </div>
           {headerDescription && (
             <p className="mt-2 text-[13px] leading-5 text-muted-foreground">{headerDescription}</p>
           )}
+          <dl className="mt-4 grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-4 gap-y-2.5 text-[13px] leading-5">
+            <dt className="text-muted-foreground">{t("payment.warnNetworkLabel")}</dt>
+            <dd className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md border bg-muted px-2 py-0.5 font-medium",
+                  chainMeta.isTestnet && "border-warning-border bg-warning-soft text-warning"
+                )}
+              >
+                <TokenIcon src={chainMeta.icon} className="size-3.5" />
+                {chainMeta.name}
+                {chainMeta.isTestnet && ` · ${t("selector.testNetwork")}`}
+              </span>
+              {!hasPayment && <span className="text-xs text-muted-foreground">{t("payment.onlyNetwork")}</span>}
+            </dd>
+            {invoice.crypto_address && (
+              <>
+                <dt className="text-muted-foreground">{t("payment.tokenContract")}</dt>
+                <dd className="min-w-0">
+                  <code className="font-mono" title={invoice.crypto_address}>
+                    {invoice.crypto_address.slice(0, 6)}…{invoice.crypto_address.slice(-8)}
+                  </code>
+                </dd>
+              </>
+            )}
+          </dl>
         </div>
         {showCountdown && <CardCountdown expiresAt={invoice.expires_at} />}
       </header>
@@ -286,15 +296,6 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
               </dd>
             </dl>
           </div>
-
-          {invoice.crypto_address && (
-            <div className="mt-4 flex items-center justify-between gap-4 px-1 text-xs text-muted-foreground">
-              <span>{t("payment.tokenContract")}</span>
-              <code className="select-none font-mono">
-                {invoice.crypto_address.slice(0, 6)}…{invoice.crypto_address.slice(-8)}
-              </code>
-            </div>
-          )}
         </div>
       )}
 
