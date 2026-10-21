@@ -56,6 +56,7 @@
     "paidAmount": "Amount paid",
     "orderAmount": "Order amount",
     "sendCrypto": "Send {{crypto}}",
+    "onlyNetwork": "This network only",
     "exactAmountTitle": "Send the exact amount shown above",
     "warnAmountMismatch": "Over- or underpayment won't be credited",
     "warnAmountExchange": "From an exchange, {{amount}} must arrive after fees",

@@ -183,22 +183,24 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
   return (
     <section className="overflow-hidden rounded-xl border bg-card shadow-xs">
       {/* 头部：左侧币种图标 +「发送 USDT / 网络」两行，右侧倒计时，三者垂直居中。
-          标题是用户要做的事，网络作为次级信息紧随其下；合约与「仅限此网络」交由下方警示框 */}
+          标题是用户要做的事，网络作为次级信息紧随其下；合约交由下方警示框 */}
       <header className="flex items-center gap-3.5 px-5 pt-5 sm:px-6 sm:pt-6">
         <TokenIcon src={cryptoMeta.icon} name={invoice.crypto} className="size-11 text-lg" />
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-lg font-semibold leading-6 tracking-tight">{headerTitle}</h2>
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 text-[13px] leading-5">
-            <span className="inline-flex items-center gap-1.5 font-medium">
-              <TokenIcon src={chainMeta.icon} name={chainMeta.name} className="size-4" />
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border bg-muted px-2 py-0.5 text-[13px] font-medium",
+                chainMeta.isTestnet && "border-warning-border bg-warning-soft text-warning"
+              )}
+            >
+              <TokenIcon src={chainMeta.icon} name={chainMeta.name} className="size-3.5" />
               {chainMeta.name}
+              {chainMeta.isTestnet && ` · ${t("selector.testNetwork")}`}
             </span>
-            {chainMeta.isTestnet && (
-              <span className="whitespace-nowrap rounded border border-warning-border bg-warning-soft px-1.5 text-[11px] font-medium leading-4 text-warning">
-                {t("selector.testNetwork")}
-              </span>
-            )}
-          </p>
+            {!hasPayment && <span className="text-xs text-muted-foreground">{t("payment.onlyNetwork")}</span>}
+          </div>
         </div>
         {showCountdown && <CardCountdown expiresAt={invoice.expires_at} />}
       </header>
