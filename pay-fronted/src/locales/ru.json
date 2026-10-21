@@ -53,7 +53,6 @@
     "scanQRCode": "Отсканируйте QR-код кошельком",
     "reselectMethod": "Выбрать другой способ",
     "returnToMerchant": "Вернуться в магазин",
-    "tokenContract": "Контракт токена",
     "paidAmount": "Оплачено",
     "orderAmount": "Сумма заказа",
     "sendCrypto": "Отправьте {{crypto}}",
@@ -64,7 +63,9 @@
     "warnNetworkLoss": "Другая сеть или токен — средства потеряются",
     "timeLeft": "Осталось времени на оплату",
     "warnAmountLabel": "Сумма",
-    "warnNetworkLabel": "Сеть"
+    "warnNetworkLabel": "Сеть",
+    "warnContractLabel": "Контракт",
+    "warnContractHint": "Сверьте контракт, остерегайтесь подделок"
   },
   "wallet": {
     "payWithWallet": "Оплатить через кошелёк",

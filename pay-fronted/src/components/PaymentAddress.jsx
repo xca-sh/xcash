@@ -182,18 +182,14 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
 
   return (
     <section className="overflow-hidden rounded-xl border bg-card shadow-xs">
-      {/* 头部：两行身份信息 + 右侧倒计时。
-          标题「发送 USDT」是用户要做的事；其下两行小号次级文字是这笔转账的技术约束（网络 / 合约），
-          不与标题争抢注意力。「仅限此网络」由下方警示框负责，这里不重复 */}
-      {/* 三列网格：第一行「图标 / 标题 / 倒计时」垂直居中；元信息从标题列起跨到最右，
-          窄屏时不被倒计时挤压 */}
-      <header className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3.5 px-5 pt-5 sm:px-6 sm:pt-6">
+      {/* 头部：左侧币种图标 +「发送 USDT / 网络」两行，右侧倒计时，三者垂直居中。
+          标题是用户要做的事，网络作为次级信息紧随其下；合约与「仅限此网络」交由下方警示框 */}
+      <header className="flex items-center gap-3.5 px-5 pt-5 sm:px-6 sm:pt-6">
         <TokenIcon src={cryptoMeta.icon} name={invoice.crypto} className="size-11 text-lg" />
-        <h2 className="truncate text-lg font-semibold leading-6 tracking-tight">{headerTitle}</h2>
-        {showCountdown ? <CardCountdown expiresAt={invoice.expires_at} /> : <span />}
-        <div className="col-span-2 col-start-2 mt-1 flex flex-col gap-1 text-[13px] leading-6 text-muted-foreground">
-          <p className="flex flex-wrap items-center gap-x-2">
-            <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-lg font-semibold leading-6 tracking-tight">{headerTitle}</h2>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 text-[13px] leading-5">
+            <span className="inline-flex items-center gap-1.5 font-medium">
               <TokenIcon src={chainMeta.icon} name={chainMeta.name} className="size-4" />
               {chainMeta.name}
             </span>
@@ -203,18 +199,12 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
               </span>
             )}
           </p>
-          {invoice.crypto_address && (
-            <p className="flex items-center gap-1.5 whitespace-nowrap">
-              {t("payment.tokenContract")}
-              <code className="font-mono text-foreground/80" title={invoice.crypto_address}>
-                {invoice.crypto_address.slice(0, 6)}…{invoice.crypto_address.slice(-6)}
-              </code>
-              <CopyButton value={invoice.crypto_address} iconOnly className="-my-1" />
-            </p>
-          )}
-          {headerDescription && <p className="mt-1 leading-5">{headerDescription}</p>}
         </div>
+        {showCountdown && <CardCountdown expiresAt={invoice.expires_at} />}
       </header>
+      {headerDescription && (
+        <p className="px-5 pt-3 text-[13px] leading-5 text-muted-foreground sm:px-6">{headerDescription}</p>
+      )}
 
       {hasPayment ? (
         // 已观测到链上付款：确认进度 + 金额 + 交易哈希
@@ -270,7 +260,7 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
           </div>
 
           {/* 转账警示：标题一句话点明「金额必须完全一致」（系统按金额匹配账单），
-              下方按「金额 / 网络」两项对齐列出细则（每项拆成两条短句避免折行），关键值高亮 */}
+              下方按「金额 / 网络 / 合约」对齐列出细则（每项拆成两条短句避免折行），关键值高亮 */}
           <div role="note" className="mt-6 overflow-hidden rounded-lg border border-warning-border bg-warning-soft">
             <p className="flex items-center gap-2 px-4 py-2.5 text-[13px] font-semibold text-warning">
               <TriangleAlert className="size-4 shrink-0" />
@@ -297,6 +287,18 @@ function PaymentAddress({ invoice, onReset, onBroadcast }) {
                 </p>
                 <p>{t("payment.warnNetworkLoss")}</p>
               </dd>
+              {invoice.crypto_address && (
+                <>
+                  <dt className="font-medium text-warning">{t("payment.warnContractLabel")}</dt>
+                  <dd className="text-muted-foreground">
+                    <p className="flex items-start gap-1">
+                      <code className="min-w-0 break-all font-mono text-foreground">{invoice.crypto_address}</code>
+                      <CopyButton value={invoice.crypto_address} iconOnly className="-my-0.5 -mr-1" />
+                    </p>
+                    <p>{t("payment.warnContractHint")}</p>
+                  </dd>
+                </>
+              )}
             </dl>
           </div>
         </div>

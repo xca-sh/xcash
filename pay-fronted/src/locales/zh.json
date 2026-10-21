@@ -53,7 +53,6 @@
     "scanQRCode": "使用钱包扫码完成支付",
     "reselectMethod": "重新选择支付方式",
     "returnToMerchant": "返回商户",
-    "tokenContract": "代币合约",
     "paidAmount": "实付金额",
     "orderAmount": "订单金额",
     "sendCrypto": "发送 {{crypto}}",
@@ -64,7 +63,9 @@
     "warnNetworkLoss": "转错网络或币种可能无法找回",
     "timeLeft": "剩余支付时间",
     "warnAmountLabel": "金额",
-    "warnNetworkLabel": "网络"
+    "warnNetworkLabel": "网络",
+    "warnContractLabel": "合约",
+    "warnContractHint": "请核对合约地址，谨防仿冒代币"
   },
   "wallet": {
     "payWithWallet": "使用钱包支付",
