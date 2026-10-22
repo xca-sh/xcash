@@ -343,9 +343,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
         [payload] = self.vault_slot_open_callbacks()
         self.assertEqual(payload["appid"], self.project.appid)
-        self.assertEqual(
-            payload["sys_no"], f"deposit-customer-open:{self.customer.pk}"
-        )
+        self.assertEqual(payload["sys_no"], f"deposit-customer-open:{self.customer.pk}")
         self.assertEqual(
             payload["detail"],
             {"uid": self.customer.uid, "address": address, "chain": self.chain.code},

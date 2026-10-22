@@ -32,7 +32,11 @@ def report_deposit_customer_opened(slot: VaultSlot) -> None:
     """
     if slot.usage != VaultSlotUsage.DEPOSIT:
         return
-    if VaultSlot.objects.filter(customer_id=slot.customer_id).exclude(pk=slot.pk).exists():
+    if (
+        VaultSlot.objects.filter(customer_id=slot.customer_id)
+        .exclude(pk=slot.pk)
+        .exists()
+    ):
         return
     send_saas_callback(
         SaasCallback(
