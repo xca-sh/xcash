@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
 from decimal import Decimal
 
 import structlog
+from django.db import transaction as db_transaction
 from web3 import Web3
+from web3.exceptions import TransactionNotFound
 
 from chains.constants import EVM_UNKNOWN_SOURCE_ADDRESS
 from chains.models import Chain
@@ -56,7 +60,29 @@ def process_vault_slot_initial_native_balance(
     )
     if slot is None:
         return None
+    return record_initial_native_balance(
+        chain=chain,
+        slot=slot,
+        tx_hash=tx_hash,
+        receipt=receipt,
+        payment_datetime=tx_task.created_at,
+    )
 
+
+def record_initial_native_balance(
+    *,
+    chain: Chain,
+    slot: VaultSlot,
+    tx_hash: str,
+    receipt: dict,
+    payment_datetime: datetime,
+) -> Transfer | None:
+    """把部署事件里的 initialNativeBalance 落成一笔观测入账（部署前打进预测地址的原生币）。
+
+    EVM 原生币只靠 receive() 事件识别；部署前打进来的原生币没有事件，工厂在部署时把
+    余额写进 XcashVaultSlotDeployed 事件。按 (tx_hash, event_index) 幂等落库，
+    引擎自身部署与商户外部部署共用这一入口。
+    """
     balance_log = find_initial_native_balance_log(
         chain=chain,
         slot=slot,
@@ -76,7 +102,6 @@ def process_vault_slot_initial_native_balance(
 
     block_number = parse_int(receipt["blockNumber"])
     block_hash = required_hash(receipt["blockHash"])
-    payment_datetime = tx_task.created_at
     timestamp = int(payment_datetime.timestamp())
     native_crypto = chain.native_coin
 
@@ -180,3 +205,44 @@ def find_initial_native_balance_log(
             event_index=event_index,
         )
     return None
+
+
+def process_external_deploy_initial_native_balance(
+    *, slot: VaultSlot, tx_hash: str
+) -> None:
+    """商户在系统外部署 VaultSlot 后，补建部署前已打进预测地址的原生币入账。
+
+    外部部署不是引擎的 TxTask，回执处理器不会经过 process_vault_slot_initial_native_balance。
+    tx_hash 来自商户前端，不可信：这里自己读回执，只认官方工厂发出、slot / vault / salt
+    都与本槽位一致的部署事件（伪造哈希找不到这样的事件，直接忽略）；未达确认数或已脱离
+    canonical 链时抛错，交由调用任务退避重试。入账按 (tx_hash, event_index) 幂等。
+    """
+    if slot.usage not in (VaultSlotUsage.DEPOSIT, VaultSlotUsage.INVOICE):
+        return
+    chain = slot.chain
+    try:
+        receipt = chain.w3.eth.get_transaction_receipt(tx_hash)
+    except TransactionNotFound as exc:
+        raise RuntimeError(f"部署交易回执暂不可用: {tx_hash}") from exc
+    if receipt is None:
+        raise RuntimeError(f"部署交易回执暂不可用: {tx_hash}")
+    receipt = dict(receipt)
+    if receipt.get("status") != 1:
+        return
+
+    block_number = parse_int(receipt["blockNumber"])
+    if block_number > chain.latest_block_number - chain.confirm_block_count:
+        raise RuntimeError(f"部署交易确认数不足: {tx_hash}")
+    block = chain.w3.eth.get_block(block_number)
+    if hex_lower(block.get("hash")) != hex_lower(receipt.get("blockHash")):
+        raise RuntimeError(f"部署交易已脱离 canonical 链: {tx_hash}")
+
+    with db_transaction.atomic():
+        transfer = record_initial_native_balance(
+            chain=chain,
+            slot=slot,
+            tx_hash=required_hash(receipt["transactionHash"]),
+            receipt=receipt,
+            payment_datetime=datetime.fromtimestamp(int(block["timestamp"]), UTC),
+        )
+        confirm_initial_native_balance_transfer(transfer)

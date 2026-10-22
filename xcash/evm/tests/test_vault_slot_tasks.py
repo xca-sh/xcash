@@ -925,6 +925,85 @@ class VaultSlotAddressSchedulingTests(TestCase):
         self.assertEqual(deposit.customer, self.customer)
         notify_gas_fee.assert_called_once()
 
+    def _refresh_after_external_deploy(self, *, slot, tx_hash, receipt):
+        """模拟商户外部部署后的延迟刷新：链上回执由 mock 的 w3 返回。"""
+        from chains.vault_slots import refresh_vault_slot_from_chain
+
+        with (
+            patch.object(type(self.chain), "w3", new_callable=PropertyMock) as w3_mock,
+            patch("evm.vault_slots.is_deployed_on_chain", return_value=True),
+            patch("chains.service.TransferService.enqueue_processing"),
+            patch("chains.vault_slot_balances.refresh_vault_slot_balance_for_transfer"),
+            patch("chains.vault_slot_balances.refresh_vault_slot_balance"),
+            patch("deposits.service.WebhookService.create_event"),
+            patch("deposits.service.send_saas_callback"),
+        ):
+            w3_mock.return_value.eth.get_transaction_receipt.return_value = receipt
+            w3_mock.return_value.eth.get_block.return_value = {
+                "hash": receipt["blockHash"],
+                "timestamp": int(timezone.now().timestamp()),
+            }
+            refresh_vault_slot_from_chain(slot.pk, deploy_tx_hash=tx_hash)
+
+    def test_external_deploy_records_pre_deploy_native_balance_once(self):
+        # 商户用自己的钱包部署时，部署前打进预测地址的原生币只记录在工厂事件里；
+        # 刷新必须按部署哈希补建入账，重复刷新不重复入账。
+        slot = self._create_vault_slot()
+        self._ensure_native_crypto_mapping()
+        Chain.objects.filter(pk=self.chain.pk).update(latest_block_number=100)
+        self.chain.refresh_from_db()
+        tx_hash = "0x" + "be" * 32
+        receipt = {
+            **self._deploy_receipt(slot=slot, initial_native_balance=10**18),
+            "transactionHash": tx_hash,
+        }
+
+        for _ in range(2):
+            self._refresh_after_external_deploy(
+                slot=slot, tx_hash=tx_hash, receipt=receipt
+            )
+
+        slot.refresh_from_db()
+        self.assertTrue(slot.is_deployed)
+        transfer = Transfer.objects.get(hash=tx_hash)
+        self.assertEqual(transfer.amount, Decimal("1"))
+        self.assertEqual(transfer.crypto, self.chain.native_coin)
+        self.assertEqual(transfer.status, TransferStatus.CONFIRMED)
+        self.assertEqual(Deposit.objects.get(transfer=transfer).customer, self.customer)
+        self.assertEqual(Transfer.objects.filter(hash=tx_hash).count(), 1)
+
+    def test_external_deploy_ignores_hash_without_matching_factory_event(self):
+        # 部署哈希来自商户前端，不可信：回执里没有官方工厂对本槽位的部署事件就不入账。
+        slot = self._create_vault_slot()
+        self._ensure_native_crypto_mapping()
+        Chain.objects.filter(pk=self.chain.pk).update(latest_block_number=100)
+        self.chain.refresh_from_db()
+        tx_hash = "0x" + "bf" * 32
+        receipt = self._deploy_receipt(slot=slot, initial_native_balance=10**18)
+        receipt = {**receipt, "logs": receipt["logs"][:1], "transactionHash": tx_hash}
+
+        self._refresh_after_external_deploy(slot=slot, tx_hash=tx_hash, receipt=receipt)
+
+        self.assertFalse(Transfer.objects.filter(hash=tx_hash).exists())
+
+    def test_external_deploy_waits_for_confirmations(self):
+        # 确认数不足时抛错交给任务退避重试，不提前入账。
+        slot = self._create_vault_slot()
+        self._ensure_native_crypto_mapping()
+        Chain.objects.filter(pk=self.chain.pk).update(latest_block_number=2)
+        self.chain.refresh_from_db()
+        tx_hash = "0x" + "c0" * 32
+        receipt = {
+            **self._deploy_receipt(slot=slot, initial_native_balance=10**18),
+            "transactionHash": tx_hash,
+        }
+
+        with self.assertRaises(RuntimeError):
+            self._refresh_after_external_deploy(
+                slot=slot, tx_hash=tx_hash, receipt=receipt
+            )
+        self.assertFalse(Transfer.objects.filter(hash=tx_hash).exists())
+
     @patch("evm.internal_tx.processor.enqueue_vault_slot_deploy_gas_fee_report")
     def test_confirmed_invoice_deploy_initial_native_balance_confirms_invoice(
         self,

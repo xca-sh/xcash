@@ -71,6 +71,10 @@ def create_deploy_tx_task(*, slot: VaultSlot) -> TxTask:
     return TronTxTask.schedule(intent).base_task
 
 
+def record_external_deploy(*, slot: VaultSlot, tx_hash: str) -> None:
+    """Tron 无需补账：TRX 部署前入账由扫描器在链下观测，工厂事件也不带初始余额。"""
+
+
 def estimate_collect_gas(*, chain: Chain, crypto, slot: VaultSlot) -> int | None:
     """Tron 归集不按 EVM gas 模型计费（走能量/带宽），无 gas limit 上浮需求。
 

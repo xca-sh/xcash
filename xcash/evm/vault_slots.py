@@ -76,6 +76,15 @@ def create_deploy_tx_task(*, slot: VaultSlot) -> TxTask:
     return EvmTxTask.schedule(intent).base_task
 
 
+def record_external_deploy(*, slot: VaultSlot, tx_hash: str) -> None:
+    """商户外部部署后补建部署前原生币入账（见 process_external_deploy_initial_native_balance）。"""
+    from evm.internal_tx.vault_slot_deploy import (  # noqa: PLC0415
+        process_external_deploy_initial_native_balance,
+    )
+
+    process_external_deploy_initial_native_balance(slot=slot, tx_hash=tx_hash)
+
+
 def estimate_collect_gas(*, chain: Chain, crypto, slot: VaultSlot) -> int | None:
     """按链上 estimate_gas 估算归集 gas 并上浮；无法估算/失败时返回 None（用静态默认）。
 

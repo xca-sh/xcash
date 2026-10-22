@@ -484,38 +484,52 @@ def get_backend(chain: Chain) -> VaultSlotBackend:
 MANUAL_OPERATION_REFRESH_DELAY_SECONDS = 60
 
 
-def schedule_refresh_after_manual_operation(slot: VaultSlot) -> None:
+def schedule_refresh_after_manual_operation(
+    slot: VaultSlot, *, deploy_tx_hash: str | None = None
+) -> None:
     """商户在系统外发起部署 / 归集后，延迟同步该 VaultSlot 的部署状态与余额快照。
 
     外部交易不是引擎的 TxTask，部署回执与归集匹配器都识别不到，is_deployed 与
     VaultSlotBalance 会一直停在旧值。这里只把「去链上看一眼」排进队列：不采信调用方
     提供的任何结果，任务执行时一律以链上真值为准。同一槽位至多一个待执行的刷新任务，
-    重复通知自然合并。
+    重复通知自然合并；带部署哈希的通知单独排队，避免被先到的普通刷新合并掉而漏补入账。
     """
     from chains.tasks import MANUAL_REFRESH_VAULT_SLOT_TASK  # noqa: PLC0415
     from chains.tasks import job_lock  # noqa: PLC0415
     from chains.tasks import refresh_vault_slot_after_manual_operation  # noqa: PLC0415
 
+    queueing_lock = job_lock(MANUAL_REFRESH_VAULT_SLOT_TASK, slot.pk)
+    if deploy_tx_hash:
+        queueing_lock = f"{queueing_lock}:deploy"
     defer_once(
         refresh_vault_slot_after_manual_operation,
-        queueing_lock=job_lock(MANUAL_REFRESH_VAULT_SLOT_TASK, slot.pk),
+        queueing_lock=queueing_lock,
         schedule_at=timezone.now()
         + timedelta(seconds=MANUAL_OPERATION_REFRESH_DELAY_SECONDS),
         slot_pk=slot.pk,
+        deploy_tx_hash=deploy_tx_hash,
     )
 
 
-def refresh_vault_slot_from_chain(slot_pk: int) -> None:
-    """按链上真值同步 VaultSlot：未部署时检查合约代码，并刷新已有的各币种余额快照。
+def refresh_vault_slot_from_chain(
+    slot_pk: int, *, deploy_tx_hash: str | None = None
+) -> None:
+    """按链上真值同步 VaultSlot：补建外部部署前的原生币入账、翻转部署状态、刷新余额快照。
 
+    部署前打进预测地址的 EVM 原生币只记录在工厂部署事件里，引擎自己部署时由回执处理器
+    入账；商户外部部署时由这里按部署哈希补建（后端自行读回执校验，幂等），必须先于
+    余额刷新，否则资金被归集后充值记录、通知与计费都会缺失。
     部署翻转复用 mark_deployed（会顺带提前到期的归集计划；余额已被商户扫空时，
     归集前的阈值检查会自然跳过，不产生平台归集）。余额只刷新已有快照的币种：
     商户归集的必然是快照里有余额的币种。
     """
     from chains.vault_slot_balances import refresh_vault_slot_balance  # noqa: PLC0415
 
-    slot = VaultSlot.objects.select_related("chain").get(pk=slot_pk)
-    if not slot.is_deployed and get_backend(slot.chain).is_deployed_on_chain(
+    slot = VaultSlot.objects.select_related("chain", "project").get(pk=slot_pk)
+    backend = get_backend(slot.chain)
+    if deploy_tx_hash:
+        backend.record_external_deploy(slot=slot, tx_hash=deploy_tx_hash)
+    if not slot.is_deployed and backend.is_deployed_on_chain(
         chain=slot.chain, address=slot.address
     ):
         mark_deployed(slot)

@@ -15,6 +15,10 @@ from common.exceptions import APIError
 class VaultSlotRefreshSerializer(serializers.Serializer):
     chain = serializers.CharField()
     address = serializers.CharField()
+    # 商户本次发出的部署交易哈希（可选）：引擎据此补建部署前原生币入账，自行读回执校验
+    deploy_tx_hash = serializers.RegexField(
+        r"^(0x)?[0-9a-fA-F]{64}$", required=False, allow_blank=True
+    )
 
 
 class SaasVaultSlotViewSet(GenericViewSet):
@@ -37,5 +41,8 @@ class SaasVaultSlotViewSet(GenericViewSet):
         ).first()
         if slot is None:
             raise APIError(ErrorCode.VAULT_SLOT_NOT_FOUND)
-        schedule_refresh_after_manual_operation(slot)
+        schedule_refresh_after_manual_operation(
+            slot,
+            deploy_tx_hash=serializer.validated_data.get("deploy_tx_hash") or None,
+        )
         return Response({"scheduled": True}, status=status.HTTP_202_ACCEPTED)

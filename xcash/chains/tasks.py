@@ -40,7 +40,8 @@ PROCESS_TRANSFER_RETRY = BackoffTable((2, 4, 8), retry_exceptions=(OperationalEr
 # 链上查询失败与 receipt 暂不可见：8s → 16s → 32s → 64s → 128s，避免节点抖动时密集重试。
 CONFIRM_TRANSFER_RETRY = BackoffTable((8, 16, 32, 64, 128))
 SCHEDULE_VAULT_SLOT_DEPLOY_RETRY = BackoffTable((8, 16, 32, 64, 128))
-MANUAL_REFRESH_VAULT_SLOT_RETRY = BackoffTable((15, 30, 60, 120))
+# 外部部署补入账要等确认数（Polygon 128 块约 4 分钟），退避总时长留到 15 分钟左右。
+MANUAL_REFRESH_VAULT_SLOT_RETRY = BackoffTable((15, 30, 60, 120, 240, 480))
 
 
 def job_lock(task_name: str, pk: int) -> str:
@@ -244,7 +245,9 @@ def schedule_vault_slot_deploy(*, slot_pk: int) -> None:
     name=MANUAL_REFRESH_VAULT_SLOT_TASK,
     retry=MANUAL_REFRESH_VAULT_SLOT_RETRY,
 )
-def refresh_vault_slot_after_manual_operation(*, slot_pk: int) -> None:
+def refresh_vault_slot_after_manual_operation(
+    *, slot_pk: int, deploy_tx_hash: str | None = None
+) -> None:
     """商户在系统外部署 / 归集 VaultSlot 后，按链上真值同步部署状态与余额快照。
 
     RPC 抖动时按退避表重试；最终失败也只是快照暂时陈旧，下一次入账或归集会再刷新。
@@ -252,7 +255,7 @@ def refresh_vault_slot_after_manual_operation(*, slot_pk: int) -> None:
     from chains.vault_slots import refresh_vault_slot_from_chain  # noqa: PLC0415
 
     try:
-        refresh_vault_slot_from_chain(slot_pk)
+        refresh_vault_slot_from_chain(slot_pk, deploy_tx_hash=deploy_tx_hash)
     except Exception as exc:
         logger.warning(
             "商户手动操作后 VaultSlot 刷新失败，退避重试",

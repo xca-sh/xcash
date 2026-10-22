@@ -154,11 +154,52 @@ class TestVaultSlotRefreshEndpoint:
             assert response.status_code == 202
 
         # 重复通知合并为一个待执行任务，且延迟到约 60 秒后执行。
-        assert queued_args(MANUAL_REFRESH_VAULT_SLOT_TASK) == [{"slot_pk": slot.pk}]
+        assert queued_args(MANUAL_REFRESH_VAULT_SLOT_TASK) == [
+            {"slot_pk": slot.pk, "deploy_tx_hash": None}
+        ]
         (job,) = queued_jobs(MANUAL_REFRESH_VAULT_SLOT_TASK)
         assert job.scheduled_at >= before + timedelta(
             seconds=MANUAL_OPERATION_REFRESH_DELAY_SECONDS
         )
+
+    def test_deploy_hash_is_queued_separately_from_plain_refresh(self, client):
+        # 带部署哈希的通知不能被先到的普通刷新合并掉，否则会漏补部署前原生币入账。
+        project = Project.objects.create(name="refresh-deploy", tron_vault=TRON_VAULT)
+        slot = create_tron_slot(project)
+        deploy_hash = "ab" * 32
+        for body in (
+            {"chain": ChainCode.Tron, "address": TRON_SLOT},
+            {
+                "chain": ChainCode.Tron,
+                "address": TRON_SLOT,
+                "deploy_tx_hash": deploy_hash,
+            },
+        ):
+            response = client.post(
+                self.url(project),
+                body,
+                content_type="application/json",
+                HTTP_AUTHORIZATION=AUTH_HEADER,
+            )
+            assert response.status_code == 202
+
+        assert queued_args(MANUAL_REFRESH_VAULT_SLOT_TASK) == [
+            {"slot_pk": slot.pk, "deploy_tx_hash": None},
+            {"slot_pk": slot.pk, "deploy_tx_hash": deploy_hash},
+        ]
+
+    def test_rejects_malformed_deploy_hash(self, client):
+        project = Project.objects.create(name="bad-hash", tron_vault=TRON_VAULT)
+        create_tron_slot(project)
+
+        response = client.post(
+            self.url(project),
+            {"chain": ChainCode.Tron, "address": TRON_SLOT, "deploy_tx_hash": "nothex"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+
+        assert response.status_code == 400
 
     def test_rejects_slot_of_other_project(self, client):
         owner = Project.objects.create(name="owner", tron_vault=TRON_VAULT)
