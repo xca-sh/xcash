@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Xcash 1.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-21 01:32+0800\n"
+"POT-Creation-Date: 2026-10-22 10:54+0000\n"
 "PO-Revision-Date: 2025-09-27 02:10+0000\n"
 "Last-Translator: AI Translator <translate@xcash.com>\n"
 "Language-Team: English <team@xcash.com>\n"
@@ -18,33 +18,33 @@ msgstr ""
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && "
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 
-#: config/settings/unfold.py:71
+#: config/settings/unfold.py:73
 msgid "文档"
 msgstr "Документация"
 
-#: config/settings/unfold.py:98
+#: config/settings/unfold.py:100
 msgid "系统"
 msgstr "Система"
 
-#: config/settings/unfold.py:102 xcash/templates/admin/index.html:31
+#: config/settings/unfold.py:104 xcash/templates/admin/index.html:31
 msgid "经营看板"
 msgstr "Бизнес-дашборд"
 
-#: config/settings/unfold.py:107 config/settings/unfold.py:116
+#: config/settings/unfold.py:109 config/settings/unfold.py:118
 #: xcash/core/dashboard.py:814
 #: xcash/templates/admin/operational_inspection.html:24
 msgid "异常巡检"
 msgstr "Мониторинг аномалий"
 
-#: config/settings/unfold.py:122
+#: config/settings/unfold.py:124
 msgid "系统钱包"
 msgstr "Системный кошелек"
 
-#: config/settings/unfold.py:127
+#: config/settings/unfold.py:129
 msgid "运行参数"
 msgstr "Параметры работы"
 
-#: config/settings/unfold.py:134 xcash/chains/models.py:832
+#: config/settings/unfold.py:136 xcash/chains/models.py:832
 #: xcash/deposits/admin.py:122 xcash/invoices/models.py:57
 #: xcash/invoices/models.py:180 xcash/invoices/models.py:674
 #: xcash/projects/admin.py:377 xcash/projects/apps.py:8
@@ -54,132 +54,132 @@ msgstr "Параметры работы"
 msgid "项目"
 msgstr "Проект"
 
-#: config/settings/unfold.py:138
+#: config/settings/unfold.py:140
 msgid "项目列表"
 msgstr "Список проектов"
 
-#: config/settings/unfold.py:143 xcash/chains/models.py:839
+#: config/settings/unfold.py:145 xcash/chains/models.py:839
 #: xcash/deposits/models.py:12 xcash/projects/models.py:363
 msgid "客户"
 msgstr "Клиент"
 
-#: config/settings/unfold.py:148 xcash/invoices/models.py:77
+#: config/settings/unfold.py:150 xcash/invoices/models.py:77
 #: xcash/projects/admin.py:211 xcash/projects/admin.py:212
 msgid "钱包直收地址"
 msgstr "Прямой адрес кошелька"
 
-#: config/settings/unfold.py:157
+#: config/settings/unfold.py:159
 msgid "账单"
 msgstr "Счет"
 
-#: config/settings/unfold.py:161
+#: config/settings/unfold.py:163
 msgid "账单记录"
 msgstr "История счетов"
 
-#: config/settings/unfold.py:166
+#: config/settings/unfold.py:168
 msgid "账单合约"
 msgstr "Контракт счета"
 
-#: config/settings/unfold.py:175 xcash/deposits/admin.py:63
+#: config/settings/unfold.py:177 xcash/deposits/admin.py:63
 msgid "充值"
 msgstr "Пополнение"
 
-#: config/settings/unfold.py:179
+#: config/settings/unfold.py:181
 msgid "充值记录"
 msgstr "История пополнений"
 
-#: config/settings/unfold.py:184
+#: config/settings/unfold.py:186
 msgid "充值合约"
 msgstr "Контракт пополнения"
 
-#: config/settings/unfold.py:193 xcash/projects/admin.py:352
+#: config/settings/unfold.py:195 xcash/projects/admin.py:352
 #: xcash/projects/admin.py:403 xcash/webhooks/apps.py:8
 msgid "通知"
 msgstr "Уведомление"
 
-#: config/settings/unfold.py:197 xcash/invoices/models.py:786
+#: config/settings/unfold.py:199 xcash/invoices/models.py:786
 msgid "通知事件"
 msgstr "События уведомлений"
 
-#: config/settings/unfold.py:202 xcash/webhooks/models.py:135
+#: config/settings/unfold.py:204 xcash/webhooks/models.py:135
 msgid "投递日志"
 msgstr "Логи доставки"
 
-#: config/settings/unfold.py:213 xcash/chains/apps.py:8
+#: config/settings/unfold.py:215 xcash/chains/apps.py:8
 msgid "区块链"
 msgstr "Блокчейн"
 
-#: config/settings/unfold.py:217
+#: config/settings/unfold.py:219
 msgid "公链"
 msgstr "Сети"
 
-#: config/settings/unfold.py:222 xcash/deposits/models.py:17
+#: config/settings/unfold.py:224 xcash/deposits/models.py:17
 #: xcash/invoices/models.py:248
 msgid "链上转账"
 msgstr "Ончейн-перевод"
 
-#: config/settings/unfold.py:227 xcash/chains/admin.py:527
+#: config/settings/unfold.py:229 xcash/chains/admin.py:527
 #: xcash/chains/admin.py:528
 msgid "归集计划"
 msgstr "План консолидации"
 
-#: config/settings/unfold.py:234
+#: config/settings/unfold.py:236
 msgid "EVM 上链任务"
 msgstr "Ончейн-задача EVM"
 
-#: config/settings/unfold.py:239 xcash/evm/models.py:61
+#: config/settings/unfold.py:241 xcash/evm/models.py:61
 msgid "EVM 扫描游标"
 msgstr "Курсор сканирования EVM"
 
-#: config/settings/unfold.py:244
+#: config/settings/unfold.py:246
 msgid "Tron 上链任务"
 msgstr "Задача отправки в TRON"
 
-#: config/settings/unfold.py:249 xcash/tron/models.py:76
+#: config/settings/unfold.py:251 xcash/tron/models.py:76
 msgid "Tron 扫描游标"
 msgstr "Курсор сканирования TRON"
 
-#: config/settings/unfold.py:256 xcash/currencies/apps.py:8
+#: config/settings/unfold.py:258 xcash/currencies/apps.py:8
 msgid "货币"
 msgstr "Валюта"
 
-#: config/settings/unfold.py:260 xcash/chains/admin.py:406
+#: config/settings/unfold.py:262 xcash/chains/admin.py:406
 #: xcash/chains/models.py:1454 xcash/currencies/admin.py:84
 #: xcash/currencies/models.py:64 xcash/currencies/models.py:257
 #: xcash/invoices/admin.py:352 xcash/invoices/models.py:210
 msgid "加密货币"
 msgstr "Криптовалюта"
 
-#: config/settings/unfold.py:265 xcash/currencies/admin.py:150
+#: config/settings/unfold.py:267 xcash/currencies/admin.py:150
 msgid "法定货币"
 msgstr "Фиатная валюта"
 
-#: config/settings/unfold.py:272 xcash/deposits/admin.py:90
+#: config/settings/unfold.py:274 xcash/deposits/admin.py:90
 #: xcash/invoices/admin.py:241
 msgid "风控"
 msgstr "Управление рисками"
 
-#: config/settings/unfold.py:276
+#: config/settings/unfold.py:278
 msgid "风险评估"
 msgstr "Оценка рисков"
 
-#: config/settings/unfold.py:283
+#: config/settings/unfold.py:285
 msgid "运维"
 msgstr "Администрирование"
 
-#: config/settings/unfold.py:287
+#: config/settings/unfold.py:289
 msgid "任务日志"
 msgstr "Логи задач"
 
-#: config/settings/unfold.py:294 xcash/users/admin.py:104
+#: config/settings/unfold.py:296 xcash/users/admin.py:104
 msgid "后台用户"
 msgstr "Пользователи панели"
 
-#: config/settings/unfold.py:299
+#: config/settings/unfold.py:301
 msgid "权限组"
 msgstr "Группы прав"
 
-#: config/settings/unfold.py:304
+#: config/settings/unfold.py:306
 msgid "API Token"
 msgstr "API Token"
 
@@ -1045,6 +1045,10 @@ msgstr "Проект не существует"
 #: xcash/common/error_codes.py:68
 msgid "账户已冻结"
 msgstr "Аккаунт заблокирован"
+
+#: xcash/common/error_codes.py:69
+msgid "收款地址不存在"
+msgstr "Адрес получателя не найден"
 
 #: xcash/common/fields.py:132
 msgid "系统单号"
@@ -2659,6 +2663,10 @@ msgstr "Добро пожаловать"
 #: xcash/templates/auth/login.html:38 xcash/users/views.py:62
 msgid "登录"
 msgstr "Вход"
+
+#: xcash/templates/unfold/helpers/unauthenticated_header.html:8
+msgid "Return to site"
+msgstr "Вернуться на сайт"
 
 #: xcash/tron/admin.py:68
 msgid "支持按交易哈希、tx_id、发送地址或目标地址搜索"

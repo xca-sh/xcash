@@ -23,6 +23,8 @@ class SaasVaultSlotBalanceViewSet(ListModelMixin, GenericViewSet):
             VaultSlotBalance.objects.filter(
                 vault_slot__project__appid=self.kwargs["project_appid"]
             )
-            .select_related("vault_slot__customer", "chain", "crypto")
+            .select_related(
+                "vault_slot__customer", "vault_slot__project", "chain", "crypto"
+            )
             .order_by(ordering, "-pk")
         )

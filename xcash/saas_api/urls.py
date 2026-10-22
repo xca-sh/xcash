@@ -18,6 +18,7 @@ from saas_api.viewsets.epay import EpayMerchantView
 from saas_api.viewsets.invoices import SaasInvoiceViewSet
 from saas_api.viewsets.stats import StatsViewSet
 from saas_api.viewsets.vault_slot_balances import SaasVaultSlotBalanceViewSet
+from saas_api.viewsets.vault_slots import SaasVaultSlotViewSet
 from saas_api.viewsets.webhooks import DeliveryAttemptViewSet
 from saas_api.viewsets.webhooks import WebhookEventViewSet
 
@@ -41,6 +42,7 @@ project_router.register(
     SaasVaultSlotBalanceViewSet,
     basename="saas-vault-slot-balance",
 )
+project_router.register("vault-slots", SaasVaultSlotViewSet, basename="saas-vault-slot")
 
 app_name = "saas_api"
 urlpatterns = [

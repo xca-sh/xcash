@@ -66,6 +66,7 @@ class ErrorCode(Enum):
     INVALID_SAAS_TOKEN = ErrorInfo("6000", _("SaaS API 令牌无效"), 401)
     PROJECT_NOT_FOUND = ErrorInfo("6002", _("项目不存在"), 404)
     ACCOUNT_FROZEN = ErrorInfo("6004", _("账户已冻结"), 403)
+    VAULT_SLOT_NOT_FOUND = ErrorInfo("6005", _("收款地址不存在"), 404)
 
     def __init__(self, info: ErrorInfo):
         self._info = info

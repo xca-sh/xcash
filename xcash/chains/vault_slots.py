@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import structlog
 from django.db import IntegrityError
 from django.db import transaction as db_transaction
@@ -476,3 +478,48 @@ def get_backend(chain: Chain) -> VaultSlotBackend:
         return get_chain_family(chain.type).vault_slot_backend
     except ValueError:
         raise ValueError("VaultSlot 仅支持 EVM / Tron 链") from None
+
+
+# 商户用自己的钱包部署 / 归集后，等交易稳定上链再读链上真值；60 秒覆盖 Tron 固化与常见 EVM 确认。
+MANUAL_OPERATION_REFRESH_DELAY_SECONDS = 60
+
+
+def schedule_refresh_after_manual_operation(slot: VaultSlot) -> None:
+    """商户在系统外发起部署 / 归集后，延迟同步该 VaultSlot 的部署状态与余额快照。
+
+    外部交易不是引擎的 TxTask，部署回执与归集匹配器都识别不到，is_deployed 与
+    VaultSlotBalance 会一直停在旧值。这里只把「去链上看一眼」排进队列：不采信调用方
+    提供的任何结果，任务执行时一律以链上真值为准。同一槽位至多一个待执行的刷新任务，
+    重复通知自然合并。
+    """
+    from chains.tasks import (
+        REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_TASK,
+    )  # noqa: PLC0415
+    from chains.tasks import job_lock  # noqa: PLC0415
+    from chains.tasks import refresh_vault_slot_after_manual_operation  # noqa: PLC0415
+
+    defer_once(
+        refresh_vault_slot_after_manual_operation,
+        queueing_lock=job_lock(REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_TASK, slot.pk),
+        schedule_at=timezone.now()
+        + timedelta(seconds=MANUAL_OPERATION_REFRESH_DELAY_SECONDS),
+        slot_pk=slot.pk,
+    )
+
+
+def refresh_vault_slot_from_chain(slot_pk: int) -> None:
+    """按链上真值同步 VaultSlot：未部署时检查合约代码，并刷新已有的各币种余额快照。
+
+    部署翻转复用 mark_deployed（会顺带提前到期的归集计划；余额已被商户扫空时，
+    归集前的阈值检查会自然跳过，不产生平台归集）。余额只刷新已有快照的币种：
+    商户归集的必然是快照里有余额的币种。
+    """
+    from chains.vault_slot_balances import refresh_vault_slot_balance  # noqa: PLC0415
+
+    slot = VaultSlot.objects.select_related("chain").get(pk=slot_pk)
+    if not slot.is_deployed and get_backend(slot.chain).is_deployed_on_chain(
+        chain=slot.chain, address=slot.address
+    ):
+        mark_deployed(slot)
+    for balance in slot.balances.select_related("crypto"):
+        refresh_vault_slot_balance(slot=slot, crypto=balance.crypto)
