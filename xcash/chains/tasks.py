@@ -31,9 +31,7 @@ logger = structlog.get_logger()
 PROCESS_TRANSFER_TASK = "chains.process_transfer"
 CONFIRM_TRANSFER_TASK = "chains.confirm_transfer"
 SCHEDULE_VAULT_SLOT_DEPLOY_TASK = "chains.schedule_vault_slot_deploy"
-REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_TASK = (
-    "chains.refresh_vault_slot_after_manual_operation"
-)
+MANUAL_REFRESH_VAULT_SLOT_TASK = "chains.refresh_vault_slot_after_manual_operation"
 
 # 高并发下 try_match_invoice / confirm_invoice 等行锁链路会触发 PostgreSQL 死锁，
 # PG 死锁的设计前提就是被牺牲方应重试；死锁（OperationalError）时按表退避重试，
@@ -42,7 +40,7 @@ PROCESS_TRANSFER_RETRY = BackoffTable((2, 4, 8), retry_exceptions=(OperationalEr
 # 链上查询失败与 receipt 暂不可见：8s → 16s → 32s → 64s → 128s，避免节点抖动时密集重试。
 CONFIRM_TRANSFER_RETRY = BackoffTable((8, 16, 32, 64, 128))
 SCHEDULE_VAULT_SLOT_DEPLOY_RETRY = BackoffTable((8, 16, 32, 64, 128))
-REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_RETRY = BackoffTable((15, 30, 60, 120))
+MANUAL_REFRESH_VAULT_SLOT_RETRY = BackoffTable((15, 30, 60, 120))
 
 
 def job_lock(task_name: str, pk: int) -> str:
@@ -243,8 +241,8 @@ def schedule_vault_slot_deploy(*, slot_pk: int) -> None:
 
 
 @app.task(
-    name=REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_TASK,
-    retry=REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_RETRY,
+    name=MANUAL_REFRESH_VAULT_SLOT_TASK,
+    retry=MANUAL_REFRESH_VAULT_SLOT_RETRY,
 )
 def refresh_vault_slot_after_manual_operation(*, slot_pk: int) -> None:
     """商户在系统外部署 / 归集 VaultSlot 后，按链上真值同步部署状态与余额快照。

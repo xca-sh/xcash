@@ -14,6 +14,7 @@ from common.error_codes import ErrorCode
 from common.exceptions import APIError
 from common.permission_check import check_saas_permission
 from common.permission_check import get_saas_aml_supported
+from common.permission_check import get_saas_auto_collect_enabled
 from common.permission_check import get_saas_deposit_customer_limit
 from common.permission_check import get_saas_invoice_vault_slot_limit
 from common.permission_check import refresh_saas_permission
@@ -221,6 +222,26 @@ class CheckSaasPermissionTest(TestCase):
 
         # 冷缓存也按支持处理
         self.assertIs(get_saas_aml_supported(appid="XC-aml-cold"), True)
+
+    @patch("common.permission_check.refresh_executor")
+    def test_auto_collect_reads_cache_and_defaults_to_enabled(self, mock_executor):
+        cases = (
+            ({"auto_collect": False}, False),
+            ({"auto_collect": True}, True),
+            # 老缓存缺 key（SaaS 升级前写入）按开启处理，不让全平台归集停摆
+            ({}, True),
+        )
+        for index, (payload, expected) in enumerate(cases):
+            appid = f"XC-auto-collect-{index}"
+            cache.set(
+                f"saas:permission:{appid}",
+                {"frozen": False, "_fetched_at": time.time(), **payload},
+                None,
+            )
+            self.assertIs(get_saas_auto_collect_enabled(appid=appid), expected)
+
+        # 冷缓存也按开启处理
+        self.assertIs(get_saas_auto_collect_enabled(appid="XC-auto-collect-cold"), True)
 
     def test_invoice_vault_slot_limit_missing_or_invalid_means_fallback(self):
         cases = (

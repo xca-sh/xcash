@@ -1858,6 +1858,40 @@ class VaultSlotAddressSchedulingTests(TestCase):
             )
         )
 
+    def test_due_collect_schedule_paused_by_saas_skips_deploy_and_collect(self):
+        # SaaS 按商户余额关闭自动归集时，平台热钱包既不部署也不归集，且不读链上余额；
+        # 计划留着并退避，商户充值恢复后下一轮继续。
+        slot = self._create_vault_slot()
+        deposit = self._create_deposit(slot=slot)
+        address_patch = self.patch_address_derivation()
+
+        with address_patch:
+            schedule = DepositService.schedule_collect_for_deposit(deposit.pk)
+        schedule.due_at = timezone.now() - timedelta(seconds=1)
+        schedule.save(update_fields=["due_at", "updated_at"])
+
+        with (
+            address_patch,
+            patch(
+                "common.permission_check.get_saas_auto_collect_enabled",
+                return_value=False,
+            ),
+            patch(
+                "chains.vault_slot_balances.refresh_vault_slot_balance_safely"
+            ) as refresh_mock,
+            patch("chains.vault_slots.schedule_deploy") as schedule_deploy_mock,
+        ):
+            created_count = VaultSlotCollectSchedule.dispatch_due_collects()
+
+        self.assertEqual(created_count, 0)
+        refresh_mock.assert_not_called()
+        schedule_deploy_mock.assert_not_called()
+        schedule.refresh_from_db()
+        self.assertIsNone(schedule.tx_task)
+        self.assertGreater(schedule.due_at, timezone.now())
+        slot.refresh_from_db()
+        self.assertIsNone(slot.deploy_tx_task)
+
     def test_due_collect_schedule_below_threshold_skips_deploy_for_undeployed_slot(
         self,
     ):

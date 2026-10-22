@@ -11,7 +11,7 @@ from chains.models import Chain
 from chains.models import VaultSlot
 from chains.models import VaultSlotBalance
 from chains.models import VaultSlotUsage
-from chains.tasks import REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_TASK
+from chains.tasks import MANUAL_REFRESH_VAULT_SLOT_TASK
 from chains.vault_slots import MANUAL_OPERATION_REFRESH_DELAY_SECONDS
 from chains.vault_slots import refresh_vault_slot_from_chain
 from common.tests.job_helpers import queued_args
@@ -93,6 +93,48 @@ class TestVaultSlotBalanceWalletFields:
 
 @pytest.mark.django_db
 @pytest.mark.usefixtures("saas_token")
+class TestVaultSlotBalanceSummary:
+    def test_sums_only_this_project_positive_balances(self, client):
+        project = Project.objects.create(name="summary", tron_vault=TRON_VAULT)
+        other = Project.objects.create(name="summary-other")
+        slot = create_tron_slot(project)
+        other_slot = VaultSlot.objects.create(
+            chain=slot.chain,
+            usage=VaultSlotUsage.DEPOSIT,
+            project=other,
+            customer=Customer.objects.create(project=other, uid="other"),
+            address="TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+            salt=b"9" * 32,
+        )
+        usdt = Crypto.objects.create(name="Tether USD", symbol="USDT", active=True)
+        trx = slot.chain.native_coin
+        for target, crypto, value, worth in (
+            (slot, usdt, 120, "120.5"),
+            (slot, trx, 30, "3.5"),
+            # 已归集清零的快照不计入
+            (slot, Crypto.objects.create(name="USD Coin", symbol="USDC"), 0, "0"),
+            (other_slot, usdt, 999, "999"),
+        ):
+            VaultSlotBalance.objects.create(
+                vault_slot=target,
+                chain=slot.chain,
+                crypto=crypto,
+                value=Decimal(value),
+                worth=Decimal(worth),
+            )
+
+        response = client.get(
+            f"/saas/v1/projects/{project.appid}/vault-slot-balances/summary",
+            HTTP_AUTHORIZATION=AUTH_HEADER,
+        )
+
+        assert response.status_code == 200
+        assert Decimal(response.json()["total_worth"]) == Decimal("124")
+        assert response.json()["count"] == 2
+
+
+@pytest.mark.django_db
+@pytest.mark.usefixtures("saas_token")
 class TestVaultSlotRefreshEndpoint:
     def url(self, project: Project) -> str:
         return f"/saas/v1/projects/{project.appid}/vault-slots/refresh"
@@ -112,10 +154,8 @@ class TestVaultSlotRefreshEndpoint:
             assert response.status_code == 202
 
         # 重复通知合并为一个待执行任务，且延迟到约 60 秒后执行。
-        assert queued_args(REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_TASK) == [
-            {"slot_pk": slot.pk}
-        ]
-        (job,) = queued_jobs(REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_TASK)
+        assert queued_args(MANUAL_REFRESH_VAULT_SLOT_TASK) == [{"slot_pk": slot.pk}]
+        (job,) = queued_jobs(MANUAL_REFRESH_VAULT_SLOT_TASK)
         assert job.scheduled_at >= before + timedelta(
             seconds=MANUAL_OPERATION_REFRESH_DELAY_SECONDS
         )
@@ -133,7 +173,7 @@ class TestVaultSlotRefreshEndpoint:
         )
 
         assert response.status_code == 404
-        assert queued_jobs(REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_TASK) == []
+        assert queued_jobs(MANUAL_REFRESH_VAULT_SLOT_TASK) == []
 
     def test_rejects_missing_fields(self, client):
         project = Project.objects.create(name="bad-request")

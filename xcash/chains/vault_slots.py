@@ -492,15 +492,13 @@ def schedule_refresh_after_manual_operation(slot: VaultSlot) -> None:
     提供的任何结果，任务执行时一律以链上真值为准。同一槽位至多一个待执行的刷新任务，
     重复通知自然合并。
     """
-    from chains.tasks import (
-        REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_TASK,
-    )  # noqa: PLC0415
+    from chains.tasks import MANUAL_REFRESH_VAULT_SLOT_TASK  # noqa: PLC0415
     from chains.tasks import job_lock  # noqa: PLC0415
     from chains.tasks import refresh_vault_slot_after_manual_operation  # noqa: PLC0415
 
     defer_once(
         refresh_vault_slot_after_manual_operation,
-        queueing_lock=job_lock(REFRESH_VAULT_SLOT_AFTER_MANUAL_OPERATION_TASK, slot.pk),
+        queueing_lock=job_lock(MANUAL_REFRESH_VAULT_SLOT_TASK, slot.pk),
         schedule_at=timezone.now()
         + timedelta(seconds=MANUAL_OPERATION_REFRESH_DELAY_SECONDS),
         slot_pk=slot.pk,

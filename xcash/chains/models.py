@@ -1263,6 +1263,7 @@ class VaultSlotCollectSchedule(models.Model):
         """
         from chains.vault_slot_balances import refresh_vault_slot_balance_safely
         from chains.vault_slots import can_create_collect_tx_task
+        from common.permission_check import get_saas_auto_collect_enabled
 
         schedule = (
             cls.objects.select_related(
@@ -1282,6 +1283,11 @@ class VaultSlotCollectSchedule(models.Model):
         # 饿死所有链的归集。成功绑定任务后 due_at 不再有意义，零余额/粉尘按原逻辑删除
         # 计划，其余提前返回都已处在退避窗口内，无需再逐个分支退避。
         schedule.defer_retry()
+        # SaaS 按商户余额关闭自动归集时，部署与归集都不由平台热钱包代发（部署只在
+        # 归集前经下面的部署闸门触发，拦在这里即同时拦住两者）。不读余额、不打 RPC；
+        # 租约已把计划推后一个退避窗口，商户充值恢复后下一轮自然继续。
+        if not get_saas_auto_collect_enabled(appid=schedule.vault_slot.project.appid):
+            return False
         # 余额与粉尘阈值必须先于部署闸门判定：未部署槽位过闸门就会发部署交易，
         # 若先部署再判粉尘，0.02U 这类小额账单会白烧一笔部署 gas 却不归集。
         # 余额读的是预测地址上的链上真值（ERC20/TRC20 balanceOf、原生币 getBalance），

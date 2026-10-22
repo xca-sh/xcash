@@ -175,6 +175,20 @@ def get_saas_aml_supported(*, appid: str) -> bool:
     return perm.get("aml_supported", True) is not False
 
 
+def get_saas_auto_collect_enabled(*, appid: str) -> bool:
+    """读取 SaaS 是否允许引擎为该项目自动部署 / 归集 VaultSlot。
+
+    SaaS 按商户余额下发：余额不足以覆盖链上 gas 时关闭，避免平台热钱包替低价值
+    商户垫付 gas 后收不回。关闭后商户仍可在商户中心用自己的钱包手动归集。
+    缺省按开启处理：自托管、冷缓存、老缓存缺 key 都返回 True，避免 SaaS 升级前后
+    或 SaaS 短暂不可达时全平台归集停摆；只有 SaaS 明确下发 False 才暂停。
+    """
+    perm = _read_saas_perm(appid)
+    if perm is None:
+        return True
+    return perm.get("auto_collect", True) is not False
+
+
 def get_saas_invoice_vault_slot_limit(*, appid: str) -> int | None:
     """读取 SaaS 下发的账单 VaultSlot 单项目单链上限。
 
