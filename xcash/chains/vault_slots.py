@@ -491,8 +491,8 @@ def schedule_refresh_after_manual_operation(
 
     外部交易不是引擎的 TxTask，部署回执与归集匹配器都识别不到，is_deployed 与
     VaultSlotBalance 会一直停在旧值。这里只把「去链上看一眼」排进队列：不采信调用方
-    提供的任何结果，任务执行时一律以链上真值为准。同一槽位至多一个待执行的刷新任务，
-    重复通知自然合并；带部署哈希的通知单独排队，避免被先到的普通刷新合并掉而漏补入账。
+    提供的任何结果，任务执行时一律以链上真值为准。同一槽位的普通刷新合并；
+    部署通知按槽位和规范化后的交易哈希去重，替换交易不会被旧哈希的待执行任务吞掉。
     """
     from chains.tasks import MANUAL_REFRESH_VAULT_SLOT_TASK  # noqa: PLC0415
     from chains.tasks import job_lock  # noqa: PLC0415
@@ -500,7 +500,10 @@ def schedule_refresh_after_manual_operation(
 
     queueing_lock = job_lock(MANUAL_REFRESH_VAULT_SLOT_TASK, slot.pk)
     if deploy_tx_hash:
-        queueing_lock = f"{queueing_lock}:deploy"
+        # 同一链上哈希的大小写、0x 前缀差异不能重复入队；钱包加速产生的新哈希
+        # 必须独立排队，旧哈希可能一直没有回执，不能替新哈希完成补账。
+        deploy_tx_hash = "0x" + deploy_tx_hash.lower().removeprefix("0x")
+        queueing_lock = f"{queueing_lock}:deploy:{deploy_tx_hash}"
     defer_once(
         refresh_vault_slot_after_manual_operation,
         queueing_lock=queueing_lock,

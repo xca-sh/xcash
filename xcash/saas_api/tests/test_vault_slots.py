@@ -185,7 +185,64 @@ class TestVaultSlotRefreshEndpoint:
 
         assert queued_args(MANUAL_REFRESH_VAULT_SLOT_TASK) == [
             {"slot_pk": slot.pk, "deploy_tx_hash": None},
-            {"slot_pk": slot.pk, "deploy_tx_hash": deploy_hash},
+            {"slot_pk": slot.pk, "deploy_tx_hash": "0x" + deploy_hash},
+        ]
+
+    def test_replacement_hash_is_not_merged_with_pending_original(self, client):
+        project = Project.objects.create(name="refresh-replaced", tron_vault=TRON_VAULT)
+        slot = create_tron_slot(project)
+        original_hash = "0x" + "ab" * 32
+        replacement_hash = "0x" + "cd" * 32
+        for tx_hash in (
+            original_hash,
+            replacement_hash,
+            original_hash,
+            replacement_hash,
+        ):
+            response = client.post(
+                self.url(project),
+                {
+                    "chain": ChainCode.Tron,
+                    "address": TRON_SLOT,
+                    "deploy_tx_hash": tx_hash,
+                },
+                content_type="application/json",
+                HTTP_AUTHORIZATION=AUTH_HEADER,
+            )
+            assert response.status_code == 202
+
+        # 原交易可能永远没有回执：替换交易必须拥有自己的补账任务，同一哈希仍幂等。
+        assert queued_args(MANUAL_REFRESH_VAULT_SLOT_TASK) == [
+            {"slot_pk": slot.pk, "deploy_tx_hash": original_hash},
+            {"slot_pk": slot.pk, "deploy_tx_hash": replacement_hash},
+        ]
+
+    def test_hash_case_and_prefix_variants_share_one_refresh(self, client):
+        project = Project.objects.create(
+            name="refresh-normalized", tron_vault=TRON_VAULT
+        )
+        slot = create_tron_slot(project)
+        raw_hash = "ab" * 32
+        for tx_hash in (
+            raw_hash,
+            raw_hash.upper(),
+            "0x" + raw_hash,
+            "0x" + raw_hash.upper(),
+        ):
+            response = client.post(
+                self.url(project),
+                {
+                    "chain": ChainCode.Tron,
+                    "address": TRON_SLOT,
+                    "deploy_tx_hash": tx_hash,
+                },
+                content_type="application/json",
+                HTTP_AUTHORIZATION=AUTH_HEADER,
+            )
+            assert response.status_code == 202
+
+        assert queued_args(MANUAL_REFRESH_VAULT_SLOT_TASK) == [
+            {"slot_pk": slot.pk, "deploy_tx_hash": "0x" + raw_hash},
         ]
 
     def test_rejects_malformed_deploy_hash(self, client):
