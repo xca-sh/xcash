@@ -31,7 +31,9 @@ from evm.models import EvmScanCursor
 from evm.models import EvmTxTask
 from evm.scanner.logs import EvmLogScanner
 from evm.scanner.rpc import EvmScannerRpcError
+from evm.scanner.watchers import load_internal_sender_addresses_for_candidates
 from evm.scanner.watchers import load_owned_addresses_for_candidates
+from invoices.models import DifferRecipientAddress
 from projects.models import Customer
 from projects.models import Project
 
@@ -1276,7 +1278,7 @@ class EvmErc20ScannerTests(TestCase):
         process_mock,
     ):
         # 第一段只拿收款方查库，与本系统无关的转账（两端都是外部地址）不进候选；
-        # 第二段只对收款方命中的日志查付款方，自有地址之间的转移仍能被识别并跳过。
+        # 第二段只查询系统控制的付款方，不能把商户钱包直收地址排除在外部充值之外。
         other_slot = VaultSlot.objects.create(
             customer=Customer.objects.create(project=self.project, uid="scanner-b"),
             usage=VaultSlotUsage.DEPOSIT,
@@ -1301,10 +1303,16 @@ class EvmErc20ScannerTests(TestCase):
             ),
         ]
 
-        with patch(
-            "evm.scanner.logs.load_owned_addresses_for_candidates",
-            wraps=load_owned_addresses_for_candidates,
-        ) as lookup_mock:
+        with (
+            patch(
+                "evm.scanner.logs.load_owned_addresses_for_candidates",
+                wraps=load_owned_addresses_for_candidates,
+            ) as lookup_mock,
+            patch(
+                "evm.scanner.logs.load_internal_sender_addresses_for_candidates",
+                wraps=load_internal_sender_addresses_for_candidates,
+            ) as sender_lookup_mock,
+        ):
             EvmLogScanner._process_logs(
                 chain=self.chain,
                 logs=logs,
@@ -1315,13 +1323,97 @@ class EvmErc20ScannerTests(TestCase):
         queried = [call.kwargs["addresses"] for call in lookup_mock.call_args_list]
         self.assertEqual(
             queried,
-            [
-                {self.vault_slot.address, unrelated_to},
-                {external_payer, other_slot.address},
-            ],
+            [{self.vault_slot.address, unrelated_to}],
+        )
+        sender_lookup_mock.assert_called_once_with(
+            chain=self.chain, addresses={external_payer, other_slot.address}
         )
         owned = process_mock.call_args.kwargs["owned_addresses"]
-        self.assertEqual(owned, {self.vault_slot.address, other_slot.address})
+        self.assertEqual(owned, {self.vault_slot.address})
+        self.assertEqual(
+            process_mock.call_args.kwargs["internal_sender_addresses"],
+            {other_slot.address},
+        )
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    def test_merchant_wallet_can_deposit_and_replay_without_duplicate(
+        self, enqueue_processing_mock
+    ):
+        # 商户可用本项目或其他项目的钱包直收地址充值；停用仅影响新账单分配，
+        # 同一窗口中该钱包也收到另一笔付款时，仍不能误判它发出的充值为内部交易。
+        other_project = Project.objects.create(name="Merchant wallet owner")
+        for index, (project, active) in enumerate(
+            [(self.project, True), (other_project, True), (other_project, False)]
+        ):
+            with self.subTest(project=project.pk, active=active):
+                payer = Web3.to_checksum_address("0x" + f"{210 + index:02x}" * 20)
+                DifferRecipientAddress.objects.create(
+                    project=project,
+                    chain_type=ChainType.EVM,
+                    address=payer,
+                    active=active,
+                )
+                deposit_log = self._build_transfer_log(
+                    from_address=payer,
+                    to_address=self.vault_slot.address,
+                    value=100 * 10**18,
+                )
+                deposit_log["transactionHash"] = bytes([index + 1]) * 32
+                incoming_log = self._build_transfer_log(
+                    from_address=Web3.to_checksum_address("0x" + "ee" * 20),
+                    to_address=payer,
+                    log_index=6,
+                )
+                incoming_log["transactionHash"] = bytes([index + 11]) * 32
+                rpc = Mock()
+                receipts = {
+                    Web3.to_hex(log["transactionHash"]): self._build_receipt(log)
+                    for log in [deposit_log, incoming_log]
+                }
+                rpc.get_transaction_receipt.side_effect = (
+                    lambda *, tx_hash, receipts=receipts: receipts[tx_hash]
+                )
+                rpc.get_block_timestamp.return_value = 1_700_000_000
+                for _ in range(2):
+                    EvmLogScanner._process_logs(
+                        chain=self.chain,
+                        logs=[incoming_log, deposit_log],
+                        rpc_client=rpc,
+                        token_registry={
+                            self.token_on_chain.address: self.token_on_chain
+                        },
+                    )
+                transfer = Transfer.objects.get(
+                    hash=Web3.to_hex(deposit_log["transactionHash"])
+                )
+                self.assertEqual(transfer.from_address, payer)
+                self.assertEqual(transfer.to_address, self.vault_slot.address)
+                self.assertEqual(transfer.amount, Decimal("100"))
+                self.assertEqual(transfer.event_index, 0)
+                self.assertEqual(
+                    sum(
+                        call.args[0].pk == transfer.pk
+                        for call in enqueue_processing_mock.call_args_list
+                    ),
+                    1,
+                )
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    def test_scanner_excludes_system_wallet_and_slot_senders(self, enqueue_mock):
+        for sender in [self.addr.address, self.vault_slot.address]:
+            with self.subTest(sender=sender):
+                EvmLogScanner._process_logs(
+                    chain=self.chain,
+                    logs=[
+                        self._build_transfer_log(
+                            from_address=sender, to_address=self.vault_slot.address
+                        )
+                    ],
+                    rpc_client=Mock(),
+                    token_registry={self.token_on_chain.address: self.token_on_chain},
+                )
+        self.assertFalse(Transfer.objects.exists())
+        enqueue_mock.assert_not_called()
 
     def test_candidate_lookup_includes_vault_slots_and_excludes_system_addresses(self):
         # scanner 只观察本轮日志候选中的 VaultSlot 等入账地址，热钱包 Address 不承接外部入账。

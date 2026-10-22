@@ -17,6 +17,7 @@ from evm.scanner.logs import EvmLogScanner
 from evm.tests._fixtures import make_crypto
 from evm.tests._fixtures import make_evm_chain
 from evm.tests._fixtures import make_evm_system_address
+from invoices.models import DifferRecipientAddress
 from projects.models import Customer
 from projects.models import Project
 
@@ -115,6 +116,31 @@ class EvmLogScannerTests(TestCase):
             "blockHash": logs[0]["blockHash"],
             "logs": list(logs),
         }
+
+    @patch("chains.service.TransferService.enqueue_processing")
+    def test_native_deposit_from_merchant_wallet_is_observed(self, enqueue_mock):
+        DifferRecipientAddress.objects.create(
+            project=self.project,
+            chain_type=self.chain.type,
+            address=self.payer,
+        )
+        log = self._build_native_log()
+        rpc = Mock()
+        rpc.get_transaction_receipt.return_value = self._build_receipt(log)
+        rpc.get_block_timestamp.return_value = 1_700_000_000
+
+        EvmLogScanner._process_logs(
+            chain=self.chain,
+            logs=[log],
+            rpc_client=rpc,
+            token_registry={},
+        )
+
+        transfer = Transfer.objects.get()
+        self.assertEqual(transfer.from_address, self.payer)
+        self.assertEqual(transfer.to_address, self.slot.address)
+        self.assertEqual(transfer.amount, Decimal("1"))
+        enqueue_mock.assert_called_once_with(transfer)
 
     @patch("chains.service.TransferService.enqueue_processing")
     def test_scan_range_creates_native_transfer_from_deposit_event(

@@ -22,6 +22,7 @@ from evm.scanner.constants import XCASH_NATIVE_RECEIVED_TOPIC0
 from evm.scanner.observed_transfers import EvmObservedTransferProcessor
 from evm.scanner.rpc import EvmScannerRpcClient
 from evm.scanner.rpc import EvmScannerRpcError
+from evm.scanner.watchers import load_internal_sender_addresses_for_candidates
 from evm.scanner.watchers import load_owned_addresses_for_candidates
 from evm.scanner.watchers import load_token_registry
 
@@ -156,32 +157,30 @@ class EvmLogScanner:
         地址（owned_addresses）由本窗口日志即时匹配得出，分两段：
         1. 只用收款方（ERC20 的 to、原生事件的槽位地址）查库。主网一个窗口有数千条
            代币转账，几乎都与本系统无关，这一步就把它们全部排除。
-        2. 只对收款方命中的日志，再查付款方是否也是自有地址：自有地址之间的转移不是
-           外部入账（由内部交易路径收口），处理器据此跳过。
-        处理器只在收款方命中时才看付款方，所以两段的并集与把全部地址一次查完等价，
-        候选集与 address__in 查询却小得多。
+        2. 只对收款方命中的日志，再查付款方是否由系统控制。钱包直收地址属于商户，
+           即使已在收款观察集中，也允许向充值地址付款；系统 Address / VaultSlot
+           发出的内部资金移动则由内部交易路径收口。
         """
         parties = cls._transfer_parties_from_logs(logs=logs)
         owned_addresses = load_owned_addresses_for_candidates(
             chain=chain,
             addresses={recipient for recipient, _ in parties},
         )
-        owned_senders = {
+        sender_candidates = {
             sender
             for recipient, sender in parties
             if recipient in owned_addresses and sender is not None
-        } - owned_addresses
-        if owned_senders:
-            owned_addresses |= load_owned_addresses_for_candidates(
-                chain=chain,
-                addresses=owned_senders,
-            )
+        }
+        internal_sender_addresses = load_internal_sender_addresses_for_candidates(
+            chain=chain, addresses=sender_candidates
+        )
         EvmObservedTransferProcessor.process(
             chain=chain,
             rpc_client=rpc_client,
             raw_logs=logs,
             token_registry=token_registry,
             owned_addresses=owned_addresses,
+            internal_sender_addresses=internal_sender_addresses,
         )
 
     @classmethod

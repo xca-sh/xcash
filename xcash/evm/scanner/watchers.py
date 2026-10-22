@@ -5,6 +5,7 @@ from collections.abc import Iterator
 import structlog
 from django.core.cache import cache
 
+from chains.models import Address
 from chains.models import Chain
 from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
@@ -114,6 +115,30 @@ def load_owned_addresses_for_candidates(
             candidates=candidate_chunk,
         )
     return frozenset(vault_slot_addresses | business_addresses)
+
+
+def load_internal_sender_addresses_for_candidates(
+    *, chain: Chain, addresses: set[str]
+) -> frozenset[str]:
+    """只排除系统控制的付款地址，商户钱包直收地址仍可用于外部充值。
+
+    收款观察集包含商户自行控制的 EOA，不能复用为内部转账的判据。
+    VaultSlot 的归集和系统 Address 的主动交易由内部交易管线处理；
+    此处只查询候选地址，不为付款方补建跨链槽位。
+    """
+    internal_addresses: set[str] = set()
+    for candidate_chunk in chunk_addresses(addresses):
+        internal_addresses.update(
+            VaultSlot.objects.filter(
+                chain=chain, address__in=candidate_chunk
+            ).values_list("address", flat=True)
+        )
+        internal_addresses.update(
+            Address.objects.filter(
+                chain_type=chain.type, address__in=candidate_chunk
+            ).values_list("address", flat=True)
+        )
+    return frozenset(internal_addresses)
 
 
 def ensure_cross_chain_deposit_slots(

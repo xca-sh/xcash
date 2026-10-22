@@ -58,6 +58,7 @@ class EvmObservedTransferProcessor:
         raw_logs: list[dict[str, Any]],
         token_registry: dict[str, CryptoOnChain],
         owned_addresses: frozenset[str],
+        internal_sender_addresses: frozenset[str],
     ) -> None:
         """解析外部入账日志并幂等落库。"""
         candidate_logs = [
@@ -69,6 +70,7 @@ class EvmObservedTransferProcessor:
                     chain=chain,
                     token_registry=token_registry,
                     owned_addresses=owned_addresses,
+                    internal_sender_addresses=internal_sender_addresses,
                 )
             )
             is not None
@@ -111,6 +113,7 @@ class EvmObservedTransferProcessor:
         chain: Chain,
         token_registry: dict[str, CryptoOnChain],
         owned_addresses: frozenset[str],
+        internal_sender_addresses: frozenset[str],
     ) -> ParsedEvmTransferLog | None:
         """按 topic0 分派到原生币或 ERC20 解析；非入账日志返回 None。"""
         if log.get("removed"):
@@ -122,7 +125,10 @@ class EvmObservedTransferProcessor:
         topic0 = prefixed_hex(topics[0])
         if topic0 == XCASH_NATIVE_RECEIVED_TOPIC0.lower():
             return cls._parse_native_log(
-                log=log, chain=chain, owned_addresses=owned_addresses
+                log=log,
+                chain=chain,
+                owned_addresses=owned_addresses,
+                internal_sender_addresses=internal_sender_addresses,
             )
         if topic0 == ERC20_TRANSFER_TOPIC0.lower():
             return cls._parse_erc20_log(
@@ -130,6 +136,7 @@ class EvmObservedTransferProcessor:
                 chain=chain,
                 token_registry=token_registry,
                 owned_addresses=owned_addresses,
+                internal_sender_addresses=internal_sender_addresses,
             )
         return None
 
@@ -140,6 +147,7 @@ class EvmObservedTransferProcessor:
         log: dict[str, Any],
         chain: Chain,
         owned_addresses: frozenset[str],
+        internal_sender_addresses: frozenset[str],
     ) -> ParsedEvmTransferLog | None:
         """解析 VaultSlot 上的原生币入账事件，并过滤掉不在观察集中的 slot。"""
         topics = list(log.get("topics") or [])
@@ -172,7 +180,7 @@ class EvmObservedTransferProcessor:
                 value=str(value),
             )
             return None
-        if payer in owned_addresses:
+        if payer in internal_sender_addresses:
             return None
 
         return ParsedEvmTransferLog(
@@ -195,6 +203,7 @@ class EvmObservedTransferProcessor:
         chain: Chain,
         token_registry: dict[str, CryptoOnChain],
         owned_addresses: frozenset[str],
+        internal_sender_addresses: frozenset[str],
     ) -> ParsedEvmTransferLog | None:
         """解析 ERC20 Transfer 日志，仅保留外部地址打入系统观察地址的入账。"""
         topics = list(log.get("topics") or [])
@@ -208,13 +217,13 @@ class EvmObservedTransferProcessor:
                 return None
 
             # 只观察外部地址打入系统观察地址的入账事实；
-            # 系统地址或 VaultSlot 发出的资产移动由 internal_tx receipt 路径收口。
+            # 付款方只排除系统 Address / VaultSlot，商户钱包直收地址可以正常充值。
             # 先判收款方：窗口内绝大多数日志与本系统无关，不必再解码付款方。
             to_address = topic_to_address(topics[2])
             if to_address not in owned_addresses:
                 return None
             from_address = topic_to_address(topics[1])
-            if from_address in owned_addresses:
+            if from_address in internal_sender_addresses:
                 return None
 
             raw_hex = hex_lower(log.get("data", "0x0"))
