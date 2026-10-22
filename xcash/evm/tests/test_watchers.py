@@ -399,7 +399,7 @@ class CrossChainDepositSlotTests(TestCase):
                 if args["payload"]["event"] == "vault_slot.created"
             ]
 
-        # setUp 建 ETH 行时已报过一次占用费
+        # setUp 建 ETH 行时已报过一次充值用户开通费
         self.assertEqual(len(open_callbacks()), 1)
 
         load_owned_addresses_for_candidates(

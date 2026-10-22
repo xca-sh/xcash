@@ -43,8 +43,8 @@ class CallbackEvent(models.TextChoices):
     )
     # 一次成功的外部 AML 查询；引擎只报次数，单次价格由 SaaS 按套餐核算
     AML_SCREENED = "aml.screened", "AML 查询成功"
-    # 项目新增一个收款合约地址；引擎只报地址，占用费单价由 SaaS 决定
-    VAULT_SLOT_CREATED = "vault_slot.created", "收款合约地址开通"
+    # 充值用户拿到第一个充币地址（每个 uid 一次）；事件名沿用以保持契约，开通费单价由 SaaS 决定
+    VAULT_SLOT_CREATED = "vault_slot.created", "充值用户开通"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -57,7 +57,7 @@ class SaasCallback:
     - invoice/deposit → 只带 worth（成交/充值等值金额）；
     - gas_fee → 只带 tx_detail（链上成本明细，含 gas_cost）；
     - aml → 都不带：只报一次查询，单价由 SaaS 全局配置决定；
-    - vault_slot → 只带 detail（地址 / 链 / 用途），占用费单价由 SaaS 全局配置决定。
+    - vault_slot → 只带 detail（uid / 地址 / 链），每个充值用户只报一次，开通费单价由 SaaS 全局配置决定。
     sys_no 是 SaaS 侧扣费的幂等键。uid 仅在 VaultSlot 能关联 Customer 时携带，
     供 SaaS 共享充值项目定位实际用户。
     """

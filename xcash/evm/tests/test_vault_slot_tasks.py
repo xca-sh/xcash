@@ -327,7 +327,7 @@ class VaultSlotAddressSchedulingTests(TestCase):
             if args["payload"]["event"] == "vault_slot.created"
         ]
 
-    def test_new_deposit_address_reports_vault_slot_open_fee(self):
+    def test_new_deposit_customer_reports_open_fee_once(self):
         with self.patch_address_derivation(), patch.object(EvmTxTask, "schedule"):
             address = ensure_deposit_address(
                 chain=self.chain,
@@ -343,13 +343,15 @@ class VaultSlotAddressSchedulingTests(TestCase):
 
         [payload] = self.vault_slot_open_callbacks()
         self.assertEqual(payload["appid"], self.project.appid)
-        self.assertEqual(payload["sys_no"], f"vault-slot-open:{address}")
+        self.assertEqual(
+            payload["sys_no"], f"deposit-customer-open:{self.customer.pk}"
+        )
         self.assertEqual(
             payload["detail"],
-            {"address": address, "chain": self.chain.code, "usage": "deposit"},
+            {"uid": self.customer.uid, "address": address, "chain": self.chain.code},
         )
 
-    def test_same_address_on_second_evm_chain_is_not_reported_again(self):
+    def test_same_customer_on_second_evm_chain_is_not_reported_again(self):
         second_chain = make_evm_chain(
             code=ChainCode.BSC, rpc="http://vault-slot-fee.local"
         )
@@ -361,24 +363,69 @@ class VaultSlotAddressSchedulingTests(TestCase):
                 chain=second_chain, customer=self.customer, crypto=self.token
             )
 
-        # 收的是地址占用费：同一 CREATE2 地址在多条 EVM 链各一行，只报一次
+        # 按充值用户收开通费：同一用户在多条链各一行，只报一次
         self.assertEqual(VaultSlot.objects.filter(customer=self.customer).count(), 2)
         self.assertEqual(len(self.vault_slot_open_callbacks()), 1)
 
-    def test_new_invoice_address_reports_vault_slot_open_fee(self):
+    def test_same_customer_with_different_address_is_not_reported_again(self):
+        second_chain = make_evm_chain(
+            code=ChainCode.BSC, rpc="http://vault-slot-fee-other.local"
+        )
+        with self.patch_address_derivation(), patch.object(EvmTxTask, "schedule"):
+            ensure_deposit_address(
+                chain=self.chain, customer=self.customer, crypto=self.token
+            )
+        # 模拟 Tron 等地址不同的链：同一用户的另一个充币地址也不再收费
+        VaultSlot.objects.create(
+            chain=second_chain,
+            usage=VaultSlotUsage.DEPOSIT,
+            customer=self.customer,
+            address=Web3.to_checksum_address(
+                "0x0000000000000000000000000000000000000a99"
+            ),
+            salt=b"\x01" * 32,
+        )
+
+        self.assertEqual(len(self.vault_slot_open_callbacks()), 1)
+
+    def test_each_new_deposit_customer_is_reported(self):
+        other_customer = Customer.objects.create(
+            project=self.project, uid="vault-slot-customer-2"
+        )
+        with self.patch_address_derivation(), patch.object(EvmTxTask, "schedule"):
+            ensure_deposit_address(
+                chain=self.chain, customer=self.customer, crypto=self.token
+            )
+            ensure_deposit_address(
+                chain=self.chain, customer=other_customer, crypto=self.token
+            )
+
+        self.assertEqual(
+            sorted(payload["sys_no"] for payload in self.vault_slot_open_callbacks()),
+            sorted(
+                f"deposit-customer-open:{customer.pk}"
+                for customer in (self.customer, other_customer)
+            ),
+        )
+
+    def test_new_invoice_address_does_not_report_open_fee(self):
         from chains.vault_slots import ensure_invoice_address
 
         with self.patch_address_derivation(), patch.object(EvmTxTask, "schedule"):
-            address = ensure_invoice_address(
+            ensure_invoice_address(
                 project=self.project,
                 chain=self.chain,
                 invoice_index=0,
                 crypto=self.token,
             )
 
-        [payload] = self.vault_slot_open_callbacks()
-        self.assertEqual(payload["sys_no"], f"vault-slot-open:{address}")
-        self.assertEqual(payload["detail"]["usage"], "invoice")
+        # 只对充值用户收开通费：账单槽位是引擎自动扩出的地址池，不上报
+        self.assertTrue(
+            VaultSlot.objects.filter(
+                project=self.project, usage=VaultSlotUsage.INVOICE
+            ).exists()
+        )
+        self.assertEqual(self.vault_slot_open_callbacks(), [])
 
     def test_vault_slot_open_report_rolls_back_with_creation(self):
         class AbortError(Exception):

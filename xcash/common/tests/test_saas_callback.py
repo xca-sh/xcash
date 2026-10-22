@@ -130,15 +130,15 @@ class SaasCallbackTest(TestCase):
         assert aml_payload["sys_no"] == "aml-screening:INV-001"
         assert not {"worth", "tx_detail", "currency"} & aml_payload.keys()
 
-        # vault_slot：只带 detail（地址 / 链 / 用途），不带金额
+        # vault_slot：只带 detail（uid / 地址 / 链），不带金额
         slot_payload = SaasCallback(
             event=CallbackEvent.VAULT_SLOT_CREATED,
             appid="XC-test",
-            sys_no="vault-slot-open:0xabc",
-            detail={"address": "0xabc", "chain": "ethereum", "usage": "deposit"},
+            sys_no="deposit-customer-open:1",
+            detail={"uid": "user-1", "address": "0xabc", "chain": "ethereum"},
         ).to_payload()
         assert slot_payload["event"] == "vault_slot.created"
-        assert slot_payload["detail"]["usage"] == "deposit"
+        assert slot_payload["detail"]["uid"] == "user-1"
         assert not {"worth", "tx_detail"} & slot_payload.keys()
         assert "detail" not in aml_payload
 
@@ -198,13 +198,13 @@ class SaasCallbackTest(TestCase):
             SaasCallback(
                 event=CallbackEvent.VAULT_SLOT_CREATED,
                 appid="XC-test",
-                sys_no="vault-slot-open:0xabc",
+                sys_no="deposit-customer-open:1",
             )
         with pytest.raises(ValueError, match="vault_slot 回调必须且只能带 detail"):
             SaasCallback(
                 event=CallbackEvent.VAULT_SLOT_CREATED,
                 appid="XC-test",
-                sys_no="vault-slot-open:0xabc",
+                sys_no="deposit-customer-open:1",
                 detail={"address": "0xabc"},
                 worth="0.01",
             )
