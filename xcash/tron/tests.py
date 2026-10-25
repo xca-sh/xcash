@@ -173,6 +173,24 @@ class TronAdapterTests(SimpleTestCase):
         )
 
     @patch("tron.adapter.TronHttpClient")
+    def test_is_contract_raises_when_rpc_fails(self, client_cls):
+        # 节点故障是「状态未知」而不是「未部署」：返回 False 会让部署调度为已部署槽位
+        # 重发必然 revert 的部署交易，故必须上抛交给调用方退避。
+        from tron.adapter import TronAdapter
+        from tron.client import TronClientError
+
+        client_cls.return_value.get_contract.side_effect = TronClientError(
+            "failed to fetch contract"
+        )
+        chain = SimpleNamespace(code="tron", tron_api_key="")
+
+        with self.assertRaises(TronClientError):
+            TronAdapter().is_contract(
+                chain,
+                "TMrsM1EyGrm5W8c1e2aQHFUrwKbneQEjnX",
+            )
+
+    @patch("tron.adapter.TronHttpClient")
     def test_tx_result_returns_success_with_block_position(self, client_cls):
         from tron.adapter import TronAdapter
 
@@ -3963,6 +3981,35 @@ class TronCollectScheduleExecuteTests(TestCase):
         # 部署参数 = abi.encode(vault, salt):尾 32 字节是该槽位的 CREATE2 盐。
         self.assertTrue(tron_task.parameter.endswith("02" * 32))
         is_contract.assert_called_once()
+
+    @patch("tron.adapter.TronHttpClient")
+    def test_execute_due_does_not_deploy_when_contract_check_rpc_fails(
+        self, client_cls
+    ):
+        # 部署判活 RPC 失败时链上状态未知：不能当成「未部署」去建部署任务（槽位可能
+        # 已被商户自行部署，重复部署必然 revert 烧能量），本轮归集退避重试。
+        from tron.client import TronClientError
+
+        client_cls.return_value.get_contract.side_effect = TronClientError(
+            "failed to fetch contract"
+        )
+        schedule = self.make_pending_schedule()
+
+        with (
+            patch("tron.vault_slots.SystemWallet.get_current") as get_current,
+            self.patch_collectable_balance(),
+        ):
+            get_current.return_value.wallet.get_address.return_value = self.sender
+            created = VaultSlotCollectSchedule.dispatch_due_collects()
+
+        self.assertEqual(created, 0)
+        client_cls.return_value.get_contract.assert_called_once()
+        schedule.refresh_from_db()
+        self.assertIsNone(schedule.tx_task_id)
+        self.assertGreater(schedule.due_at, timezone.now())
+        self.slot.refresh_from_db()
+        self.assertFalse(self.slot.is_deployed)
+        self.assertIsNone(self.slot.deploy_tx_task_id)
 
     def test_collect_token_address_native_maps_to_zero_else_contract(self):
         # 归集 token 路由：原生币 → address(0)，TRC20 → 其合约地址。

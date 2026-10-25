@@ -23,10 +23,11 @@ class TronAdapter(AdapterInterface):
     def is_contract(self, chain, address: str) -> bool:
         if not self.validate_address(address):
             return False
-        try:
-            payload = TronHttpClient(chain=chain).get_contract(address=address)
-        except TronClientError:
-            return False
+        # RPC 失败必须上抛而不是返回 False：False 表示「链上确认无合约」，部署调度会据此
+        # 为已部署（如商户自行部署、尚未刷新）的槽位再发一笔必然 revert 的部署交易；
+        # 商户刷新任务也会因没有异常而不重试。与 EVM 的 get_code 失败即抛错语义一致，
+        # 各调用方已按「状态未知、本轮暂缓」消化异常。
+        payload = TronHttpClient(chain=chain).get_contract(address=address)
         # wallet/getcontract 只对顶层 DeployContract 部署回填 bytecode/abi；工厂用
         # CREATE2 内部创建的 VaultSlot clone 不带这两个字段，只回填 code_hash。非合约
         # 地址（EOA / 未部署的反事实地址）返回空 payload，code_hash 缺失。故以 code_hash
