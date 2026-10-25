@@ -7,6 +7,7 @@ import structlog
 from aml.service import AmlScreeningService
 from aml.tasks import enqueue_screen_transfer_aml
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import transaction
 from django.utils import timezone
 
 from chains.capabilities import ChainProductCapabilityService
@@ -178,12 +179,10 @@ class DepositService:
     @classmethod
     def _notify(cls, deposit: Deposit, *, confirmed: bool) -> None:
         payload = cls.build_webhook_payload(deposit, confirmed=confirmed)
-        try:
-            WebhookService.create_event(
-                project=deposit.customer.project, payload=payload
-            )
-        except Exception:  # noqa
-            logger.exception("创建充币 webhook 通知失败", deposit_id=deposit.pk)
+        # 不吞异常：webhook 事件与充值确认同一事务，创建失败（尤其 DB 级异常会让
+        # 外层事务进入 aborted 状态）必须冒泡回滚整个确认，交给确认任务重试，
+        # 否则会留下「已入账但商户永远收不到通知」的缺口。与账单确认写法一致。
+        WebhookService.create_event(project=deposit.customer.project, payload=payload)
 
     @classmethod
     def notify_completed(cls, deposit: Deposit) -> None:
@@ -265,8 +264,12 @@ class DepositService:
     def confirm_deposit(cls, deposit: Deposit) -> None:
         # 确认副作用（归集调度、webhook、内部回调）的「恰好一次」由上游
         # Transfer.confirm 的行锁 + 幂等护栏保证，这里不再维护独立状态机。
+        # 归集调度失败不阻塞入账（存量余额由对账安全网补建计划）。必须套保存点：
+        # 否则调度中的 DB 异常会让外层确认事务进入 aborted 状态，后续 webhook
+        # 与计费写入全部失败。
         try:
-            cls.schedule_collect_for_completed_deposit(deposit)
+            with transaction.atomic():
+                cls.schedule_collect_for_completed_deposit(deposit)
         except Exception:  # noqa
             logger.exception("调度 VaultSlot 归集任务失败", deposit_id=deposit.pk)
         AmlScreeningService.bill_screening(deposit)

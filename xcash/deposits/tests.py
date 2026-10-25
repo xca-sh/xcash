@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core.cache import cache
+from django.db import connection
 from django.db.models.deletion import ProtectedError
 from django.test import SimpleTestCase
 from django.test import TestCase
@@ -38,6 +39,7 @@ from deposits.viewsets import wait_deposit_address_deployed
 from evm.models import EvmTxTask
 from projects.models import Customer
 from projects.models import Project
+from webhooks.models import WebhookEvent
 
 
 class DepositServiceCoreTests(TestCase):
@@ -207,6 +209,58 @@ class DepositNotificationTests(TestCase):
         self.assertTrue(deposit.confirmed)
         schedule_collect.assert_called_once_with(deposit)
         create_event_mock.assert_called_once()
+        send_saas_callback_mock.assert_called_once()
+
+    def make_confirming_deposit_transfer(self):
+        context = create_deposit_context(confirmed=False)
+        Transfer.objects.filter(pk=context.transfer.pk).update(
+            type=TransferType.Deposit
+        )
+        return context, Transfer.objects.get(pk=context.transfer.pk)
+
+    @patch("deposits.service.send_saas_callback")
+    @patch(
+        "deposits.service.WebhookService.create_event",
+        side_effect=RuntimeError("webhook store down"),
+    )
+    def test_webhook_creation_failure_rolls_back_transfer_confirm(
+        self, create_event_mock, send_saas_callback_mock
+    ):
+        # webhook 事件建不出来时不能静默入账：整个确认事务回滚，交给确认任务重试，
+        # 否则商户永远收不到这笔已入账充值的通知。
+        _context, transfer = self.make_confirming_deposit_transfer()
+
+        with self.assertRaises(RuntimeError):
+            transfer.confirm()
+
+        transfer.refresh_from_db()
+        self.assertEqual(transfer.status, TransferStatus.CONFIRMING)
+        self.assertFalse(Deposit.objects.filter(transfer=transfer).exists())
+        send_saas_callback_mock.assert_not_called()
+
+    @patch("deposits.service.send_saas_callback")
+    def test_collect_schedule_db_error_does_not_break_deposit_confirm(
+        self, send_saas_callback_mock
+    ):
+        # 归集调度中的 DB 异常会让当前事务进入 aborted 状态；调度套了保存点，
+        # 入账与 webhook 事件创建仍须照常完成。
+        context, transfer = self.make_confirming_deposit_transfer()
+
+        def failing_db_schedule(_deposit):
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1 / 0")
+
+        with patch.object(
+            DepositService,
+            "schedule_collect_for_completed_deposit",
+            side_effect=failing_db_schedule,
+        ):
+            transfer.confirm()
+
+        transfer.refresh_from_db()
+        self.assertEqual(transfer.status, TransferStatus.CONFIRMED)
+        self.assertTrue(Deposit.objects.filter(transfer=transfer).exists())
+        self.assertTrue(WebhookEvent.objects.filter(project=context.project).exists())
         send_saas_callback_mock.assert_called_once()
 
     @patch("deposits.service.send_saas_callback")
