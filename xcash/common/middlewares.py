@@ -106,10 +106,12 @@ class XcashRequestContext:
 
 class XcashMiddleware:
     CONTEXT_ATTR = "_xcash_ctx"
-    # 修复：NONCE_TTL_SECONDS 必须 >= TIMESTAMP_TOLERANCE_SECONDS
-    # 否则 nonce 在时间窗口内过期后可被重放
-    NONCE_TTL_SECONDS = 300
     TIMESTAMP_TOLERANCE_SECONDS = 300  # 5 分钟，兼顾网络延迟与安全
+    # 时间戳 T 在服务端时间 [T-容差, T+容差] 内都被接受，同一签名的有效窗口长 2×容差。
+    # 首次请求可能出现在窗口最前端（客户端时钟超前），nonce 必须从那一刻起存活到
+    # 窗口末端才能防住窗口内重放，故取 2×容差；另留 60s 余量吸收容差判定的边界
+    # 与校验到写入 nonce 之间的处理耗时。
+    NONCE_TTL_SECONDS = 2 * TIMESTAMP_TOLERANCE_SECONDS + 60
 
     def __init__(self, get_response):
         self.get_response = get_response
@@ -230,8 +232,8 @@ class XcashMiddleware:
         if not settings.DEBUG:
             request_timestamp = self.timestamp(request)
             now_ts = int(timezone.now().timestamp())
-            # 容限取 TIMESTAMP_TOLERANCE_SECONDS（300s），与 NONCE_TTL_SECONDS 保持一致，
-            # 防止 nonce 在时间窗口内过期后被重放
+            # 容限取 TIMESTAMP_TOLERANCE_SECONDS；窗口内的重放由 nonce 拦截，
+            # NONCE_TTL_SECONDS 按 2×容差推导，覆盖整个签名有效窗口。
             if (
                 not request_timestamp
                 or abs(request_timestamp - now_ts) > self.TIMESTAMP_TOLERANCE_SECONDS
@@ -292,8 +294,8 @@ class XcashMiddleware:
         try:
             # nx=True：仅当 key 不存在时写入并返回 True
             # 若 key 已存在（nonce 已被使用）则返回 None/False → 触发 REPLAY_ATTACK
-            # TTL 与时间戳容限一致（NONCE_TTL_SECONDS == TIMESTAMP_TOLERANCE_SECONDS）
-            # 保证在有效时间窗口内 nonce 始终存在，防止窗口内重放
+            # TTL 覆盖签名的完整有效窗口（2×时间戳容差 + 余量），即使首次请求落在
+            # 窗口最前端，nonce 也会存活到窗口结束，防止窗口内重放
             stored = cache.set(
                 key,
                 1,

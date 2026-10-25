@@ -1,4 +1,7 @@
 import json
+from datetime import UTC
+from datetime import datetime
+from unittest.mock import patch
 from uuid import uuid4
 
 from django.test import RequestFactory
@@ -17,6 +20,21 @@ from common.middlewares import XcashMiddleware
 from projects.models import Project
 
 
+class ClockedNonceStore:
+    """按假时钟判定过期的最小 Redis 替身，只实现 nonce 注册用到的 set(nx, ex)。"""
+
+    def __init__(self, clock):
+        self.clock = clock
+        self.expires_at = {}
+
+    def set(self, key, value, *, ex, nx):
+        now = self.clock()
+        if nx and self.expires_at.get(key, 0) > now:
+            return None
+        self.expires_at[key] = now + ex
+        return True
+
+
 @override_settings(DEBUG=False)
 class XcashApiMiddlewareTests(TestCase):
     """商户 /v1 API 准入链：项目 → IP 白名单 → HMAC 签名 → nonce 防重放。"""
@@ -32,9 +50,13 @@ class XcashApiMiddlewareTests(TestCase):
         self.passed = object()
         self.middleware = XcashMiddleware(lambda _request: self.passed)
 
-    def signed_request(self, *, remote_addr="127.0.0.1", signature=None, nonce=None):
+    def signed_request(
+        self, *, remote_addr="127.0.0.1", signature=None, nonce=None, timestamp=None
+    ):
         body = json.dumps({"out_no": "gate-1"})
-        timestamp = str(int(timezone.now().timestamp()))
+        timestamp = str(
+            int(timezone.now().timestamp()) if timestamp is None else timestamp
+        )
         nonce = uuid4().hex if nonce is None else nonce
         headers = {
             APPID_HEADER: self.project.appid,
@@ -93,3 +115,27 @@ class XcashApiMiddlewareTests(TestCase):
         request.META["HTTP_XC_APPID"] = "XC-unknown"
 
         self.assert_rejected(self.middleware(request), ErrorCode.INVALID_APPID)
+
+    def test_replay_at_window_end_is_rejected_after_first_use_at_window_start(self):
+        # 客户端时钟超前一个容差：服务端在窗口最前端（T-容差）首次收到请求，
+        # 攻击者在窗口最末端（T+容差）重放同一请求，时间戳仍合法，必须被 nonce 拦下。
+        tolerance = XcashMiddleware.TIMESTAMP_TOLERANCE_SECONDS
+        signed_at = int(timezone.now().timestamp())
+        server_now = [signed_at - tolerance]
+        self.middleware._nonce_connection = ClockedNonceStore(lambda: server_now[0])
+        nonce = uuid4().hex
+
+        with patch(
+            "common.middlewares.timezone.now",
+            side_effect=lambda: datetime.fromtimestamp(server_now[0], tz=UTC),
+        ):
+            first = self.middleware(
+                self.signed_request(nonce=nonce, timestamp=signed_at)
+            )
+            server_now[0] = signed_at + tolerance
+            replay = self.middleware(
+                self.signed_request(nonce=nonce, timestamp=signed_at)
+            )
+
+        self.assertIs(first, self.passed)
+        self.assert_rejected(replay, ErrorCode.REPLAY_ATTACK)

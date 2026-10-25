@@ -60,7 +60,7 @@
 |------|------|
 | `XC-Appid` | 项目 AppID |
 | `XC-Timestamp` | 当前 Unix 时间戳（秒），与服务器时间相差不得超过 300 秒 |
-| `XC-Nonce` | 随机串，必填；同一 AppID 下 300 秒内不可重复 |
+| `XC-Nonce` | 随机串，必填；同一 AppID 下 660 秒内不可重复 |
 | `XC-Signature` | 签名，小写十六进制 |
 | `Content-Type` | `application/json` |
 
