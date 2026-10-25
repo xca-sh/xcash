@@ -208,6 +208,13 @@ class XcashMiddleware:
         if not self._requires_project(request):
             return self.get_response(request)
 
+        # 签名原文要把请求体按 UTF-8 解码；非 UTF-8 body 属于参数错误，
+        # 必须在鉴权入口拒绝，不能让解码异常冒成 500。
+        try:
+            self._get_context(request)
+        except UnicodeDecodeError:
+            return APIError(ErrorCode.PARAMETER_ERROR, detail="body").to_response()
+
         rejection = (
             self.check_project(request)
             or self.check_ip_whitelist(request)

@@ -139,3 +139,20 @@ class XcashApiMiddlewareTests(TestCase):
 
         self.assertIs(first, self.passed)
         self.assert_rejected(replay, ErrorCode.REPLAY_ATTACK)
+
+    def test_non_utf8_body_is_rejected_as_parameter_error(self):
+        # 非 UTF-8 请求体在鉴权前就无法拼签名原文，应返回明确的参数错误而不是 500。
+        response = self.client.post(
+            "/v1/invoice",
+            data=b"\xff\xfe{}",
+            content_type="application/json",
+            headers={
+                APPID_HEADER: self.project.appid,
+                TIMESTAMP_HEADER: str(int(timezone.now().timestamp())),
+                NONCE_HEADER: uuid4().hex,
+                SIGNATURE_HEADER: "0" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], ErrorCode.PARAMETER_ERROR.value.code)
