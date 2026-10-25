@@ -1055,9 +1055,12 @@ class InvoiceDuplicateOutNoTests(TestCase):
                 return Invoice.objects.none()
             return original_filter(*args, **kwargs)
 
-        with patch(
-            "invoices.viewsets.Invoice.objects.filter",
-            side_effect=filter_blind_to_existing_once,
+        with (
+            patch(
+                "invoices.viewsets.Invoice.objects.filter",
+                side_effect=filter_blind_to_existing_once,
+            ),
+            patch("invoices.viewsets.InvoiceService.finalize_methods", return_value={}),
         ):
             response = self._create_with_stub_serializer(
                 project, self._matching_validated_data()
@@ -1094,6 +1097,10 @@ class InvoiceDuplicateOutNoTests(TestCase):
 
         with (
             patch.object(InvoiceViewSet, "get_serializer", return_value=serializer),
+            patch(
+                "invoices.viewsets.InvoiceService.finalize_methods",
+                return_value=serializer.validated_data["methods"],
+            ),
             patch(
                 "invoices.viewsets.Invoice.objects.create",
                 side_effect=IntegrityError,
@@ -1173,6 +1180,67 @@ class InvoiceDuplicateOutNoTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["code"], ErrorCode.DUPLICATE_OUT_NO.code)
+
+    def _create_via_api(self, project, **overrides):
+        payload = {
+            "out_no": "idem-order",
+            "title": "Idempotent",
+            "currency": "USD",
+            "amount": "10",
+            "notify_url": "https://merchant.example.com/notify",
+        }
+        payload.update(overrides)
+        request = APIRequestFactory().post(
+            "/v1/invoice",
+            payload,
+            format="json",
+            HTTP_XC_APPID=project.appid,
+        )
+        return InvoiceViewSet.as_view({"post": "create"})(request)
+
+    # 注：DRF 异常处理会把请求事务标记为回滚，TestCase 内报错请求之后无法再查库，
+    # 故每个测试至多一次报错请求，且放在最后。
+
+    @override_settings(DEBUG=False)
+    def test_retry_returns_existing_invoice_when_waiting_capacity_full(self):
+        # 项目待支付已满额时，原请求的重试必须仍能拿回已建好的账单；
+        # 容量上限只约束真正的新建，新 out_no 照常被拒。
+        project, existing = self._idempotency_fixtures()
+
+        with patch("invoices.service.MAX_WAITING_INVOICES_PER_PROJECT", 1):
+            retry = self._create_via_api(project)
+            self.assertEqual(retry.status_code, 200)
+            self.assertEqual(retry.data["sys_no"], existing.sys_no)
+            self.assertEqual(Invoice.objects.filter(project=project).count(), 1)
+
+            fresh = self._create_via_api(project, out_no="new-order")
+
+        self.assertEqual(fresh.status_code, 400)
+        self.assertEqual(fresh.data["code"], ErrorCode.TOO_MANY_WAITING.code)
+
+    @override_settings(DEBUG=False)
+    def test_conflicting_out_no_reports_duplicate_when_waiting_capacity_full(self):
+        # 参数不一致仍是商户侧冲突，不因满额而被掩盖成容量错误。
+        project, _existing = self._idempotency_fixtures()
+
+        with patch("invoices.service.MAX_WAITING_INVOICES_PER_PROJECT", 1):
+            conflict = self._create_via_api(project, amount="11")
+
+        self.assertEqual(conflict.status_code, 400)
+        self.assertEqual(conflict.data["code"], ErrorCode.DUPLICATE_OUT_NO.code)
+
+    def test_retry_returns_existing_invoice_when_methods_unavailable(self):
+        # 商户事后关闭了原支付方式（此项目已无任何可用收款方式），原请求重试
+        # 仍返回已有账单；methods 不参与幂等比较，也不应在重试时被重新收敛。
+        project, existing = self._idempotency_fixtures()
+        with self.assertRaises(APIError) as ctx:
+            InvoiceService.finalize_methods(project=project, requested={})
+        self.assertEqual(ctx.exception.error_code, ErrorCode.NO_RECIPIENT_ADDRESS)
+
+        retry = self._create_via_api(project)
+
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(retry.data["sys_no"], existing.sys_no)
 
     def test_create_rejects_out_no_reuse_across_protocol(self):
         # EPay 建的账单共用 out_no 命名空间，即便参数全等也不跨协议幂等返回。
@@ -1478,7 +1546,6 @@ class InvoiceContractBillingValidationTests(TestCase):
 
     def setUp(self):
         cache.clear()
-        self.factory = APIRequestFactory()
         self.project = Project.objects.create(
             name="Invoice Mixed Billing Project",
             evm_vault="0x0000000000000000000000000000000000007801",
@@ -1511,31 +1578,15 @@ class InvoiceContractBillingValidationTests(TestCase):
             decimals=6,
         )
 
-    def build_serializer(self, *, methods):
-        request = self.factory.post(
-            "/invoices",
-            {},
-            format="json",
-            HTTP_XC_APPID=self.project.appid,
-        )
-        data = {
-            "out_no": "contract-order",
-            "title": "contract",
-            "currency": "USD",
-            "amount": "10",
-            "methods": methods,
-        }
-        return InvoiceCreateSerializer(data=data, context={"request": request})
+    def finalize(self, *, methods):
+        return InvoiceService.finalize_methods(project=self.project, requested=methods)
 
     def test_default_methods_filters_out_tron(self):
         # 不传 methods：默认暴露全部可用收款方式（ETH 原生 + USDT）；计价货币恒为法币，
         # 不再把 methods 收敛到单一币种。但全局智能合约模式下 Tron 未通过运行时门控，
         # 故仍不出现在结果里。
-        serializer = self.build_serializer(methods={})
-
-        self.assertTrue(serializer.is_valid(raise_exception=True))
         self.assertEqual(
-            serializer.validated_data["methods"],
+            self.finalize(methods={}),
             {
                 self.eth_chain.native_coin.symbol: [self.eth_chain.code],
                 self.usdt.symbol: [self.eth_chain.code],
@@ -1544,12 +1595,8 @@ class InvoiceContractBillingValidationTests(TestCase):
 
     def test_explicit_tron_rejected(self):
         # 显式要求 Tron，但全局智能合约模式下 Tron 运行时未就绪，拒绝。
-        serializer = self.build_serializer(
-            methods={self.usdt.symbol: [self.tron_chain.code]},
-        )
-
         with self.assertRaises(APIError) as ctx:
-            serializer.is_valid(raise_exception=True)
+            self.finalize(methods={self.usdt.symbol: [self.tron_chain.code]})
         self.assertEqual(ctx.exception.error_code, ErrorCode.NO_RECIPIENT_ADDRESS)
 
     def test_differ_methods_exposed_without_tron_vault_slot_runtime_gate(self):
@@ -2166,6 +2213,10 @@ class InvoiceCreatePermissionCheckTests(TestCase):
                 InvoiceViewSet, "get_serializer", return_value=serializer_stub
             ),
             patch(
+                "invoices.viewsets.InvoiceService.finalize_methods",
+                return_value=serializer_stub.validated_data["methods"],
+            ),
+            patch(
                 "invoices.viewsets.Invoice.objects.create",
                 return_value=Mock(
                     sys_no="inv-0001",
@@ -2202,6 +2253,10 @@ class InvoiceCreatePermissionCheckTests(TestCase):
         with (
             patch.object(
                 InvoiceViewSet, "get_serializer", return_value=serializer_stub
+            ),
+            patch(
+                "invoices.viewsets.InvoiceService.finalize_methods",
+                return_value=serializer_stub.validated_data["methods"],
             ),
             patch(
                 "invoices.viewsets.Invoice.objects.create",

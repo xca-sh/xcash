@@ -129,6 +129,15 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 request, existing, validated_data
             )
 
+        # 待支付容量与 methods 收敛只约束真正的新建，必须放在已有账单判定之后：
+        # 否则项目待支付满额、或商户事后关闭了原支付方式时，原请求的合法重试
+        # 会被拒，拿不回已建好的账单（methods 本就不参与幂等比较）。
+        InvoiceService.ensure_waiting_capacity(project)
+        methods = InvoiceService.finalize_methods(
+            project=project,
+            requested=validated_data.get("methods") or {},
+        )
+
         try:
             # 内层 atomic 建立保存点，与 epay 建单路径一致。
             # 全局 ATOMIC_REQUESTS=True 让整个请求跑在一个事务里：不套保存点的话，
@@ -142,7 +151,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     title=validated_data["title"],
                     currency_id=validated_data["currency"],
                     amount=validated_data["amount"],
-                    methods=validated_data["methods"],
+                    methods=methods,
                     notify_url=validated_data.get("notify_url", ""),
                     return_url=validated_data.get("return_url", ""),
                     expires_at=timezone.now()

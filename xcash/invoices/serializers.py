@@ -9,7 +9,6 @@ from rest_framework.serializers import Serializer
 from chains.capabilities import ChainProductCapabilityService
 from chains.serializers import TransferSerializer
 from chains.service import ChainService
-from common.consts import APPID_HEADER
 from common.consts import MAX_INVOICE_DURATION
 from common.consts import MIN_INVOICE_DURATION
 from common.error_codes import ErrorCode
@@ -17,7 +16,6 @@ from common.exceptions import APIError
 from common.serializers import StrippedDecimalField
 from currencies.service import CryptoService
 from currencies.service import FiatService
-from projects.service import ProjectService
 from webhooks.service import delivery_url_scheme_allowed
 
 from .models import CALLBACK_URL_MAX_LENGTH
@@ -95,15 +93,6 @@ class InvoiceCreateSerializer(Serializer):
         required=False, max_length=CALLBACK_URL_MAX_LENGTH
     )
 
-    def _get_project(self):
-        # 缓存到实例，避免 validate_out_no / validate_methods / validate 三处重复查询。
-        if not hasattr(self, "_project"):
-            request = self.context["request"]
-            self._project = ProjectService.get_by_appid(
-                request.headers.get(APPID_HEADER)
-            )
-        return self._project
-
     def validate_notify_url(self, value):  # noqa
         # 投递只接受 https；http 地址要到付款后投递时才失败，商户收不到支付通知。
         if not delivery_url_scheme_allowed(value):
@@ -116,21 +105,10 @@ class InvoiceCreateSerializer(Serializer):
             raise APIError(ErrorCode.INVALID_INVOICE_CURRENCY, detail=value)
         return value
 
-    # out_no 的重复判定不在 serializer 做：viewset 层实现条件幂等
-    # （参数一致返回已有账单，不一致才报 DUPLICATE_OUT_NO），
-    # 且最终幂等边界在数据库唯一约束。
-
-    def validate(self, attrs):
-        project = self._get_project()
-
-        InvoiceService.ensure_waiting_capacity(project)
-
-        attrs["methods"] = InvoiceService.finalize_methods(
-            project=project,
-            requested=attrs.get("methods") or {},
-        )
-
-        return attrs
+    # out_no 的重复判定、待支付容量与 methods 收敛都不在 serializer 做：
+    # viewset 层先按 out_no 实现条件幂等（参数一致返回已有账单，不一致才报
+    # DUPLICATE_OUT_NO），容量与 methods 只对真正的新建执行，最终幂等边界在
+    # 数据库唯一约束。
 
 
 class InvoicePublicSerializer(serializers.ModelSerializer):
