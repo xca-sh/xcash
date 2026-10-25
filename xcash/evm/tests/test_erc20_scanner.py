@@ -651,59 +651,43 @@ class EvmErc20ScannerTests(TestCase):
         self.assertEqual(observed.event_index, 1)
         self.assertEqual(observed.to_address, second_slot.address)
 
-    @patch("evm.scanner.observed_transfers.TransferService.create_observed_transfer")
-    def test_erc20_scanner_continues_after_single_persist_error(
+    @patch("chains.service.TransferService.enqueue_processing")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_transaction_receipt")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_block_timestamp")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
+    @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
+    def test_scan_chain_keeps_cursor_and_records_error_when_enqueue_fails(
         self,
-        create_observed_transfer_mock,
+        get_latest_block_number_mock,
+        get_logs_mock,
+        get_block_timestamp_mock,
+        get_transaction_receipt_mock,
+        enqueue_processing_mock,
     ):
-        second_customer = Customer.objects.create(
-            project=self.project,
-            uid="scanner-customer-after-error",
-        )
-        second_slot = VaultSlot.objects.create(
-            customer=second_customer,
-            usage=VaultSlotUsage.DEPOSIT,
-            chain=self.chain,
-            address=Web3.to_checksum_address(
-                "0x00000000000000000000000000000000000000bf"
-            ),
-            salt=b"\x04" * 32,
-        )
-        sender = Web3.to_checksum_address("0x" + "cc" * 20)
-        logs = [
-            self._build_transfer_log(
-                from_address=sender,
-                to_address=self.vault_slot.address,
-                log_index=5,
-            ),
-            self._build_transfer_log(
-                from_address=sender,
-                to_address=second_slot.address,
-                log_index=6,
-            ),
-        ]
-        rpc_client = Mock()
-        rpc_client.get_transaction_receipt.return_value = self._build_receipt(*logs)
-        rpc_client.get_block_timestamp.return_value = 1_700_000_000
-        create_observed_transfer_mock.side_effect = [
-            RuntimeError("numeric field overflow"),
-            None,
-        ]
+        # 入队与落库同一事务：Procrastinate 把暂时性 DB 故障改包成非 django.db.Error 的
+        # ConnectorException，Transfer 随之回滚。扫描必须中断、游标停在原处并把错误写进
+        # 游标供 /health/scanning 告警，绝不能当毒事件跳过后推进游标永久漏账。
+        from procrastinate.exceptions import ConnectorException
 
-        created = EvmLogScanner._process_logs(
-            chain=self.chain,
-            logs=logs,
-            rpc_client=rpc_client,
-            token_registry={self.token_on_chain.address: self.token_on_chain},
+        EvmScanCursor.objects.create(chain=self.chain, last_scanned_block=90)
+        get_latest_block_number_mock.return_value = 100
+        get_block_timestamp_mock.return_value = 1_700_000_000
+        transfer_log = self._build_transfer_log(
+            from_address=Web3.to_checksum_address("0x" + "cc" * 20),
+            to_address=self.vault_slot.address,
         )
+        get_logs_mock.side_effect = [[], [transfer_log], [], []]
+        get_transaction_receipt_mock.return_value = self._build_receipt(transfer_log)
+        enqueue_processing_mock.side_effect = ConnectorException()
 
-        self.assertIsNone(created)
-        self.assertEqual(create_observed_transfer_mock.call_count, 2)
-        observed_events = [
-            call.kwargs["observed"].event_index
-            for call in create_observed_transfer_mock.call_args_list
-        ]
-        self.assertEqual(observed_events, [0, 1])
+        with self.assertRaises(ConnectorException):
+            EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
+
+        enqueue_processing_mock.assert_called_once()
+        cursor = EvmScanCursor.objects.get(chain=self.chain)
+        self.assertEqual(cursor.last_scanned_block, 90)
+        self.assertIsNotNone(cursor.last_error_at)
+        self.assertFalse(Transfer.objects.exists())
 
     @patch("evm.scanner.observed_transfers.TransferService.create_observed_transfer")
     def test_erc20_scanner_raises_on_transient_database_error(

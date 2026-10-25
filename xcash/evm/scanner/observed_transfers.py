@@ -6,7 +6,6 @@ from decimal import Decimal
 from typing import Any
 
 import structlog
-from django.db import Error as DatabaseLayerError
 from django.utils import timezone
 from web3.exceptions import TransactionNotFound
 
@@ -291,7 +290,8 @@ class EvmObservedTransferProcessor:
         由下一轮重扫幂等恢复。若该 tx 确实已被重组丢弃，下一轮 eth_getLogs 自然不再
         返回该日志，扫描随即继续推进，不会永久卡死。
 
-        数据库层暂时性故障同样由落库入口上抛，语义一致。
+        落库失败同理：任何异常都原样上抛，不按单事件跳过（见 create_observed_transfer
+        调用处的说明）。
         """
         timestamp_cache: dict[int, int] = {}
         receipt_cache: dict[str, dict[str, Any] | None] = {}
@@ -345,7 +345,13 @@ class EvmObservedTransferProcessor:
                 block_hash=log.block_hash,
                 source="evm-scan",
             )
-            cls._persist_observed_transfer_safely(chain=chain, observed=observed)
+            # 落库失败一律上抛，中断本轮、游标停在本段之前，由下一轮重扫幂等恢复。
+            # 不能按异常类型挑出"可跳过"的单条事件：入队业务处理与落库同一事务，
+            # Procrastinate 会把死锁、连接中断等暂时性 DB 故障改包成非 django.db.Error
+            # 的 ConnectorException，按类型放行就会回滚 Transfer 后照常推进游标，
+            # 把真实入账永久丢弃。确定性脏数据（值超界 DataError、唯一键冲突
+            # IntegrityError）已在 create_observed_transfer 内部用 savepoint 消化。
+            TransferService.create_observed_transfer(observed=observed)
 
     @staticmethod
     def receipt_for_log(
@@ -381,29 +387,3 @@ class EvmObservedTransferProcessor:
             if parse_optional_int(receipt_log.get("logIndex")) == block_log_index:
                 return index
         return None
-
-    @staticmethod
-    def _persist_observed_transfer_safely(
-        *,
-        chain: Chain,
-        observed: ObservedTransferPayload,
-    ) -> None:
-        try:
-            TransferService.create_observed_transfer(observed=observed)
-        except DatabaseLayerError:
-            # 数据库层异常多为暂时性故障（死锁被牺牲、连接抖动、超时），必须上抛，
-            # 让本轮扫描中断、游标不推进，由下一轮重扫幂等恢复；
-            # 在这里吞掉会推进游标，把真实入账事件永久静默丢弃。
-            # 确定性脏数据（值超界 DataError、唯一键冲突 IntegrityError）已在
-            # create_observed_transfer 内部用 savepoint 消化，不会传播到这里。
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "EVM 入账事件落库失败，已跳过",
-                chain=chain.code,
-                tx_hash=observed.tx_hash,
-                event_index=observed.event_index,
-                value=str(observed.value),
-                amount=str(observed.amount),
-                error=str(exc),
-            )

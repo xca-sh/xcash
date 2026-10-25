@@ -9,7 +9,6 @@ from django.utils import timezone
 
 from chains.models import Chain
 from chains.models import ChainType
-from chains.scanning import ScanRoundBudgetExceeded
 from chains.scanning import check_scan_round_deadline
 from currencies.models import CryptoOnChain
 from evm.hexutil import checksum_address
@@ -112,9 +111,10 @@ class EvmLogScanner:
                 )
                 cls._advance_cursor(cursor=cursor, scanned_to_block=chunk_to)
                 chunk_from = chunk_to + 1
-        except (EvmScannerRpcError, ScanRoundBudgetExceeded) as exc:
-            # 预算耗尽同样是本轮扫描失败；此前 chunk 的进度已提交，只记录错误并原样
-            # 上抛，否则 last_scanned_at 刷新后，外部探针会把持续追不上链头报成健康。
+        except Exception as exc:
+            # RPC 失败、预算耗尽、落库异常都是本轮扫描失败；此前 chunk 的进度已提交，
+            # 只记录错误并原样上抛。任何一种漏记都会让游标卡住而 last_scanned_at 照常
+            # 刷新，/health/scanning 只看 last_error_at，会把停滞的扫描报成健康。
             cls._mark_cursor_error(cursor=cursor, exc=exc)
             raise
 
@@ -329,7 +329,7 @@ class EvmLogScanner:
 
     @staticmethod
     def _mark_cursor_error(*, cursor: EvmScanCursor, exc: Exception) -> None:
-        """记录本轮 RPC 错误或预算耗尽到游标，便于运维观察。"""
+        """记录本轮扫描失败（RPC、预算耗尽、落库异常）到游标，便于运维观察。"""
         logger.warning(
             "EVM 日志扫描失败",
             chain=cursor.chain.code,

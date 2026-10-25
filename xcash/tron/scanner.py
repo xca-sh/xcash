@@ -8,7 +8,6 @@ from functools import lru_cache
 
 import structlog
 from django.conf import settings
-from django.db import Error as DatabaseLayerError
 from django.db.models import F
 from django.db.models.functions import Greatest
 from django.utils import timezone
@@ -21,7 +20,6 @@ from chains.models import Chain
 from chains.models import ChainType
 from chains.models import VaultSlot
 from chains.registry import match_recipient_addresses
-from chains.scanning import ScanRoundBudgetExceeded
 from chains.scanning import check_scan_round_deadline
 from chains.service import MAX_TRANSFER_VALUE
 from chains.service import ObservedTransferPayload
@@ -145,14 +143,24 @@ class TronScanner:
                     )
                     events_seen += len(parsed_events)
                     for event in parsed_events:
-                        cls._persist_observed_transfer_safely(observed=event.observed)
+                        # 落库失败一律上抛，游标停在本块之前，由下一轮重扫幂等恢复。
+                        # 不能按异常类型挑出"可跳过"的单条事件：入队业务处理与落库同一
+                        # 事务，Procrastinate 会把死锁、连接中断等暂时性 DB 故障改包成
+                        # 非 django.db.Error 的 ConnectorException，按类型放行就会回滚
+                        # Transfer 后照常推进游标，把真实入账永久丢弃。确定性脏数据
+                        # （值超界 DataError、唯一键冲突 IntegrityError）已在
+                        # create_observed_transfer 内部用 savepoint 消化。
+                        TransferService.create_observed_transfer(
+                            observed=event.observed
+                        )
                     blocks_scanned += 1
                     last_successfully_scanned = block_number
-        except (TronClientError, ScanRoundBudgetExceeded) as exc:
+        except Exception as exc:
             # 已经成功扫完的块仍需落到游标，避免下一轮重新扫一遍 + 让错误信息可见。
             # 顺序：先 advance（清 last_error），再 mark_error（写新 last_error），
-            # 保证 last_error 反映最近一次失败而非被 advance 覆盖；预算耗尽也必须记录，
-            # 否则任务 finally 刷新 last_scanned_at 后，外部探针会误报健康。
+            # 保证 last_error 反映最近一次失败而非被 advance 覆盖。RPC 失败、预算耗尽、
+            # 落库异常都必须记录：任何一种漏记都会让游标卡住而 last_scanned_at 照常刷新，
+            # /health/scanning 只看 last_error_at，会把停滞的扫描报成健康。
             cls.flush_scan_progress(
                 cursor=cursor,
                 latest_block=latest_block,
@@ -161,7 +169,8 @@ class TronScanner:
             cls._mark_cursor_error(cursor=cursor, exc=exc)
             raise
         except BaseException:
-            # 其他中断同样必须落盘已完成的进度，避免下一轮从同一起点重来。
+            # 进程退出等中断（SystemExit / KeyboardInterrupt）同样必须落盘已完成的进度，
+            # 避免下一轮从同一起点重来；这不是扫描失败，不写游标错误。
             cls.flush_scan_progress(
                 cursor=cursor,
                 latest_block=latest_block,
@@ -709,31 +718,6 @@ class TronScanner:
             for event in candidates
             if event.observed.to_address in matched_addresses
         ]
-
-    @staticmethod
-    def _persist_observed_transfer_safely(
-        *,
-        observed: ObservedTransferPayload,
-    ) -> None:
-        try:
-            TransferService.create_observed_transfer(observed=observed)
-        except DatabaseLayerError:
-            # 数据库层异常多为暂时性故障（死锁被牺牲、连接抖动、超时），必须上抛，
-            # 让本轮扫描中断、游标停在该块之前，由下一轮重扫幂等恢复；
-            # 在这里吞掉会推进游标，把真实入账事件永久静默丢弃。
-            # 确定性脏数据（值超界 DataError、唯一键冲突 IntegrityError）已在
-            # create_observed_transfer 内部用 savepoint 消化，不会传播到这里。
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Tron 入账事件落库失败，已跳过",
-                chain=observed.chain.code,
-                tx_hash=observed.tx_hash,
-                event_index=observed.event_index,
-                value=str(observed.value),
-                amount=str(observed.amount),
-                error=str(exc),
-            )
 
     @classmethod
     def flush_scan_progress(

@@ -2701,13 +2701,19 @@ class TronScannerTests(TestCase):
         self.assertEqual(transfer.amount, Decimal("1"))
         enqueue_processing_mock.assert_called_once()
 
-    @patch("tron.scanner.TransferService.create_observed_transfer")
+    @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")
-    def test_scan_chain_continues_after_single_persist_error(
+    def test_scan_chain_keeps_cursor_and_records_error_when_enqueue_fails(
         self,
         client_cls,
-        create_observed_transfer_mock,
+        enqueue_processing_mock,
     ):
+        """入队失败（ConnectorException，非 django.db.Error）不能当毒事件跳过。
+
+        入队与落库同一事务，Transfer 已随之回滚；扫描必须中断、游标停在该块之前，
+        并把错误写进游标供 /health/scanning 告警，由下一轮重扫恢复。
+        """
+        from procrastinate.exceptions import ConnectorException
         from tron.scanner import TronScanner
 
         VaultSlot.objects.create(
@@ -2732,31 +2738,17 @@ class TronScannerTests(TestCase):
                     )
                 ],
             ),
-            self._transaction_info(
-                tx_id="5" * 64,
-                logs=[
-                    {"topics": [], "data": ""},
-                    self._trc20_transfer_log(
-                        to_address=self.watch_address,
-                        value=2_000_000,
-                    ),
-                ],
-            ),
         ]
-        create_observed_transfer_mock.side_effect = [
-            RuntimeError("numeric field overflow"),
-            None,
-        ]
+        enqueue_processing_mock.side_effect = ConnectorException()
 
-        summary = TronScanner.scan_chain(chain=self.chain)
+        with self.assertRaises(ConnectorException):
+            TronScanner.scan_chain(chain=self.chain)
 
-        self.assertEqual(summary.events_seen, 2)
-        self.assertEqual(create_observed_transfer_mock.call_count, 2)
-        observed_events = [
-            call.kwargs["observed"].event_index
-            for call in create_observed_transfer_mock.call_args_list
-        ]
-        self.assertEqual(observed_events, [0, 1])
+        enqueue_processing_mock.assert_called_once()
+        cursor = TronWatchCursor.objects.get(chain=self.chain)
+        self.assertEqual(cursor.last_scanned_block, 123455)
+        self.assertIsNotNone(cursor.last_error_at)
+        self.assertFalse(Transfer.objects.filter(hash="4" * 64).exists())
 
     @patch("tron.scanner.TransferService.create_observed_transfer")
     @patch("tron.scanner.TronHttpClient")
@@ -2801,6 +2793,7 @@ class TronScannerTests(TestCase):
 
         cursor = TronWatchCursor.objects.get(chain=self.chain)
         self.assertEqual(cursor.last_scanned_block, 123455)
+        self.assertIsNotNone(cursor.last_error_at)
 
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("tron.scanner.TronHttpClient")
