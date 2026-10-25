@@ -45,7 +45,7 @@ from webhooks.models import WebhookEvent
 class DepositServiceCoreTests(TestCase):
     """Deposit 不再维护独立状态机，确认状态完全取自其 Transfer。"""
 
-    def test_content_property_handles_null_customer(self):
+    def test_webhook_payload_handles_null_customer(self):
         transfer = SimpleNamespace(
             chain=SimpleNamespace(code="ethereum"),
             block=100,
@@ -62,11 +62,11 @@ class DepositServiceCoreTests(TestCase):
             confirmed=False,
         )
 
-        content = Deposit.content.fget(fake_deposit)
+        payload = DepositService.build_webhook_payload(fake_deposit)
 
-        self.assertIsNone(content["data"]["uid"])
-        self.assertEqual(content["data"]["sys_no"], "DXC-test")
-        self.assertEqual(content["data"]["chain"], "ethereum")
+        self.assertIsNone(payload["data"]["uid"])
+        self.assertEqual(payload["data"]["sys_no"], "DXC-test")
+        self.assertEqual(payload["data"]["chain"], "ethereum")
 
 
 class DepositCreationTests(TestCase):

@@ -39,9 +39,3 @@ class Deposit(models.Model):
         from chains.models import TransferStatus
 
         return self.transfer.status == TransferStatus.CONFIRMED
-
-    @property
-    def content(self):
-        from deposits.service import DepositService
-
-        return DepositService.build_webhook_payload(self)
