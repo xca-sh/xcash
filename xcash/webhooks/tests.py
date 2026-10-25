@@ -1,6 +1,7 @@
 import socket
 import threading
 import time
+from unittest.mock import Mock
 from unittest.mock import patch
 
 import httpx
@@ -966,6 +967,42 @@ class ReapStalledEventsTests(TestCase):
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
+
+    def test_event_delivered_after_selection_is_not_reverted_to_failed(self):
+        # 回收先选出超龄 PENDING 再批量更新；两步之间若事件恰好投递成功，
+        # 更新不得把已 SUCCEEDED 的事件改回 FAILED，真正滞留的仍要被回收。
+        project = _make_project()
+        delivered = WebhookEvent.objects.create(project=project, payload={"n": 1})
+        stalled = WebhookEvent.objects.create(project=project, payload={"n": 2})
+        WebhookEvent.objects.filter(pk__in=[delivered.pk, stalled.pk]).update(
+            created_at=timezone.now() - timezone.timedelta(days=3)
+        )
+        original_filter = WebhookEvent.objects.filter
+
+        def select_then_deliver(*args, **kwargs):
+            queryset = original_filter(*args, **kwargs)
+            if "pk__in" in kwargs:
+                return queryset
+            # 选中阶段：先物化 pk 列表，再模拟投递成功落库，最后交回选中结果。
+            selected_pks = list(
+                queryset.order_by("created_at").values_list("pk", flat=True)
+            )
+            original_filter(pk=delivered.pk).update(
+                status=WebhookEvent.Status.SUCCEEDED
+            )
+            selection = Mock()
+            selection.order_by.return_value.values_list.return_value = selected_pks
+            return selection
+
+        with patch.object(
+            WebhookEvent.objects, "filter", side_effect=select_then_deliver
+        ):
+            reap_stalled_events()
+
+        delivered.refresh_from_db()
+        stalled.refresh_from_db()
+        self.assertEqual(delivered.status, WebhookEvent.Status.SUCCEEDED)
+        self.assertEqual(stalled.status, WebhookEvent.Status.FAILED)
 
     def test_recent_pending_event_is_untouched(self):
         event = WebhookEvent.objects.create(

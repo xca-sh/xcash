@@ -396,7 +396,13 @@ def reap_stalled_events(
     if not stalled_pks:
         return
 
-    reaped = WebhookEvent.objects.filter(pk__in=stalled_pks).update(
+    # 更新时重新限定 PENDING 与超龄：选中与更新之间事件可能刚好投递成功，
+    # 只按 pk 更新会把已 SUCCEEDED 的事件改回 FAILED。
+    reaped = WebhookEvent.objects.filter(
+        pk__in=stalled_pks,
+        status=WebhookEvent.Status.PENDING,
+        created_at__lte=deadline,
+    ).update(
         status=WebhookEvent.Status.FAILED,
         last_error="Delivery stalled beyond timeout; reaped by janitor.",
         schedule_locked_until=None,
