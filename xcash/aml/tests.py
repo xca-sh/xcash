@@ -494,9 +494,9 @@ class AmlPaymentFlowTests(AmlTestMixin, TestCase):
         self.transfer.refresh_from_db()
         self.assertEqual(self.transfer.confirm_mode, ConfirmMode.QUICK)
 
-    def test_deposit_match_starts_screening(self):
+    def match_deposit(self, *, amount: Decimal = Decimal("1")) -> None:
         Transfer.objects.filter(pk=self.transfer.pk).update(
-            type=TransferType.Unmatched, amount=Decimal("1")
+            type=TransferType.Unmatched, amount=amount
         )
         self.transfer.refresh_from_db()
         VaultSlot.objects.create(
@@ -509,10 +509,50 @@ class AmlPaymentFlowTests(AmlTestMixin, TestCase):
 
         self.assertTrue(DepositService.try_match_deposit_transfer(self.transfer))
 
+    def test_deposit_match_starts_screening(self):
+        self.match_deposit()
+
         # 1 ETH × 2000 USD 超过 100 USD 阈值
         self.assertEqual(
             queued_args("aml.screen_transfer_aml"), [{"transfer_id": self.transfer.pk}]
         )
+
+    def test_deposit_below_threshold_is_not_screened(self):
+        # 0.01 ETH × 2000 USD = 20 USD，未超过 100 USD 阈值
+        self.match_deposit(amount=Decimal("0.01"))
+
+        self.assertEqual(queued_args("aml.screen_transfer_aml"), [])
+
+    def test_deposit_with_stale_price_is_screened_fail_closed(self):
+        # 行情过期时估值未知：不能按 0 计价跳过 AML，大额黑币会借行情陈旧期绕过筛查。
+        self.native.prices_updated_at = timezone.now() - timedelta(days=1)
+        self.native.save(update_fields=["prices_updated_at"])
+
+        self.match_deposit(amount=Decimal("0.01"))
+
+        self.assertEqual(
+            queued_args("aml.screen_transfer_aml"), [{"transfer_id": self.transfer.pk}]
+        )
+
+    def test_deposit_with_missing_price_is_screened_fail_closed(self):
+        self.native.prices = {}
+        self.native.save(update_fields=["prices"])
+
+        self.match_deposit(amount=Decimal("0.01"))
+
+        self.assertEqual(
+            queued_args("aml.screen_transfer_aml"), [{"transfer_id": self.transfer.pk}]
+        )
+
+    def test_deposit_with_unknown_worth_is_not_screened_when_aml_disabled(self):
+        self.project.aml_screening_enabled = False
+        self.project.save(update_fields=["aml_screening_enabled"])
+        self.native.prices = {}
+        self.native.save(update_fields=["prices"])
+
+        self.match_deposit()
+
+        self.assertEqual(queued_args("aml.screen_transfer_aml"), [])
 
     @patch("aml.service.send_saas_callback")
     def test_invoice_confirm_writes_risk_into_webhook_and_bills(self, report):

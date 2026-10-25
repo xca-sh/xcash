@@ -137,11 +137,29 @@ class DepositService:
 
     @staticmethod
     def calculate_worth(transfer: Transfer) -> Decimal | None:
-        """按当前价格折算转账的 USD 价值；价格不可用时返回 None。"""
+        """按当前价格折算转账的 USD 价值，用于 Deposit.worth 落库。
+
+        缺价或价格过期时沿用 Crypto.usd_amount 的降级口径返回 0；
+        只有取价过程出现意外异常才返回 None。
+        """
         try:
             return transfer.crypto.usd_amount(transfer.amount)
         except Exception:  # noqa
             logger.exception("calculate_worth 失败", transfer_id=transfer.pk)
+            return None
+
+    @staticmethod
+    def estimate_worth_for_aml(transfer: Transfer) -> Decimal | None:
+        """匹配时估算充值的 USD 价值供 AML 判定；缺价或价格过期返回 None 表示估值未知。
+
+        不能复用 calculate_worth：它把缺价降级为 0，会让非稳定币充值在行情陈旧期
+        一律低于阈值而跳过 AML。估值未知交给 should_screen 按 fail-closed 处理。
+        """
+        try:
+            return transfer.amount * transfer.crypto.price("USD")
+        except Exception:  # noqa
+            # 除缺价/过期（PriceUnavailableError）外，取价的意外异常同样视为估值未知，
+            # 不能因此阻断充值归类。
             return None
 
     @classmethod
@@ -196,15 +214,17 @@ class DepositService:
         transfer.save(update_fields=["type"])
 
         # 匹配即开始 AML 查询，与区块确认并行；充值记录要到确认时才创建，
-        # 这里按当前价格估算价值判断是否达到项目阈值。
-        worth = cls.calculate_worth(transfer)
-        if (
-            slot.customer is not None
-            and worth is not None
-            and AmlScreeningService.should_screen(
-                project=slot.customer.project, worth=worth, transfer=transfer
-            )
+        # 这里按当前价格估算价值判断是否达到项目阈值，估值未知时 fail-closed 照常查询。
+        worth = cls.estimate_worth_for_aml(transfer)
+        if slot.customer is not None and AmlScreeningService.should_screen(
+            project=slot.customer.project, worth=worth, transfer=transfer
         ):
+            if worth is None:
+                logger.warning(
+                    "充值估值未知（缺价或价格过期），按 fail-closed 发起 AML 查询",
+                    transfer_id=transfer.pk,
+                    crypto_id=transfer.crypto_id,
+                )
             enqueue_screen_transfer_aml(transfer.pk)
         return True
 

@@ -55,16 +55,21 @@ class AmlScreeningService:
     """
 
     @staticmethod
-    def should_screen(*, project: Project, worth: Decimal, transfer: Transfer) -> bool:
+    def should_screen(
+        *, project: Project, worth: Decimal | None, transfer: Transfer
+    ) -> bool:
         """匹配时判定这笔收款是否需要 AML 查询（走快速确认的账单由调用方先行排除）。
 
         以下情况不查询、不写记录：项目未开启、价值不超过项目阈值（小额收款占绝大多数）、
         链不在 MistTrack 覆盖范围（测试网等）、付款地址未知、未配置查询 endpoint、
         SaaS 暂不支持 AML（单价为 0）。
+
+        worth=None 表示估值未知（缺价或价格过期）：按 fail-closed 视为超过阈值，
+        否则行情陈旧期的大额收款会全部绕过 AML。
         """
         return (
             project.aml_screening_enabled
-            and worth > project.aml_screening_threshold_usd
+            and (worth is None or worth > project.aml_screening_threshold_usd)
             and transfer.chain.code in QUICKNODE_MISTTRACK_CHAIN
             and not transfer.has_unknown_source_address()
             and bool(get_quicknode_misttrack_endpoint_url())
