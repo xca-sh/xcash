@@ -1673,6 +1673,86 @@ class VaultSlotReceivedFlagTests(TestCase):
         self.assertIsNone(pending_schedule.tx_task_id)
         self.assertLessEqual(pending_schedule.due_at, timezone.now())
 
+    def finished_collect_schedule(self, *, status: TxTaskStatus):
+        """建一条已绑定终局归集任务的计划（创建顺序即归集发生顺序）。"""
+        sender = Address.objects.filter(usage=AddressUsage.HotWallet).first()
+        if sender is None:
+            sender = Address.objects.create(
+                wallet=Wallet.objects.create(),
+                chain_type=ChainType.EVM,
+                usage=AddressUsage.HotWallet,
+                bip44_account=Wallet.get_bip44_account(AddressUsage.HotWallet),
+                address_index=0,
+                address=Web3.to_checksum_address("0x" + "46" * 20),
+            )
+        task = TxTask.objects.create(
+            sender=sender,
+            chain=self.chain,
+            tx_type=TxTaskType.VaultSlotCollect,
+            status=status,
+        )
+        return VaultSlotCollectSchedule.objects.create(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+            due_at=timezone.now() - timedelta(minutes=1),
+            tx_task=task,
+        )
+
+    def create_positive_balance_gap(self):
+        VaultSlotBalance.objects.create(
+            chain=self.chain,
+            vault_slot=self.slot,
+            crypto=self.crypto,
+            value=Decimal("1234567"),
+            amount=Decimal("1.234567"),
+            worth=Decimal("0"),
+            synced_at=timezone.now(),
+        )
+
+    def test_reconcile_resumes_after_manual_requeue_succeeds(self):
+        # 失败 → 人工重新排队并成功 → 之后再出现余额缺口：旧 FAILED 计划作为历史保留，
+        # 但已不代表当前状态，安全网必须恢复自动补建，不能永久挡住该槽位×币种。
+        from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
+
+        self.finished_collect_schedule(status=TxTaskStatus.FAILED)
+        self.finished_collect_schedule(status=TxTaskStatus.SUCCEEDED)
+        self.create_positive_balance_gap()
+
+        summary = reconcile_vault_slot_collect_balance_gaps()
+
+        self.assertEqual(summary["failed_blocked_count"], 0)
+        self.assertEqual(summary["created_count"], 1)
+        self.assertTrue(
+            VaultSlotCollectSchedule.objects.filter(
+                chain=self.chain,
+                vault_slot=self.slot,
+                crypto=self.crypto,
+                tx_task__isnull=True,
+            ).exists()
+        )
+
+    def test_reconcile_blocks_again_when_latest_collect_failed_after_success(self):
+        # 最近一次归集以失败收场（成功之后又失败）仍需人工确认，避免永久 revert 被反复烧 gas。
+        from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
+
+        self.finished_collect_schedule(status=TxTaskStatus.SUCCEEDED)
+        self.finished_collect_schedule(status=TxTaskStatus.FAILED)
+        self.create_positive_balance_gap()
+
+        summary = reconcile_vault_slot_collect_balance_gaps()
+
+        self.assertEqual(summary["failed_blocked_count"], 1)
+        self.assertEqual(summary["created_count"], 0)
+        self.assertFalse(
+            VaultSlotCollectSchedule.objects.filter(
+                chain=self.chain,
+                vault_slot=self.slot,
+                crypto=self.crypto,
+                tx_task__isnull=True,
+            ).exists()
+        )
+
     def test_requeue_action_only_available_to_superuser(self):
         # 重新排队失败归集会触发链上归集交易、消耗热钱包 gas，属资金治理操作。
         # ReadOnlyModelAdmin 下 view 是所有查看者的基线权限，必须把该 action 收口到

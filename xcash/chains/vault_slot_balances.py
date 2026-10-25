@@ -4,12 +4,16 @@ from decimal import Decimal
 
 import structlog
 from django.db import transaction
+from django.db.models import BooleanField
 from django.db.models import Exists
+from django.db.models import ExpressionWrapper
 from django.db.models import OuterRef
 from django.db.models import Q
+from django.db.models import Subquery
 from django.utils import timezone
 
 from chains.adapters import AdapterFactory
+from chains.models import TERMINAL_TX_TASK_STATUSES
 from chains.models import Transfer
 from chains.models import TxTask
 from chains.models import TxTaskStatus
@@ -223,12 +227,25 @@ def vault_slot_collect_balance_gaps():
     active_schedules = matching_schedules.filter(
         Q(tx_task__isnull=True) | Q(tx_task__status__in=ACTIVE_COLLECT_TASK_STATUSES)
     )
-    failed_schedules = matching_schedules.filter(tx_task__status=TxTaskStatus.FAILED)
+    # 只看最近一次已终局的归集：人工重新排队会另建计划，原 FAILED 计划作为历史永久
+    # 保留。若按「历史上存在失败」判定，重试成功后该槽位×币种仍被永久挡在安全网外，
+    # 并每轮误报"等待人工重试"。最近一次成功即视为已恢复，再失败才重新阻塞。
+    latest_finished_collect_status = Subquery(
+        matching_schedules.filter(tx_task__status__in=TERMINAL_TX_TASK_STATUSES)
+        .order_by("-created_at", "-pk")
+        .values("tx_task__status")[:1]
+    )
     return (
         VaultSlotBalance.objects.select_related("chain", "crypto", "vault_slot")
         .annotate(
             has_active_collect_schedule=Exists(active_schedules),
-            has_failed_collect_schedule=Exists(failed_schedules),
+            latest_finished_collect_status=latest_finished_collect_status,
+        )
+        .annotate(
+            has_failed_collect_schedule=ExpressionWrapper(
+                Q(latest_finished_collect_status=TxTaskStatus.FAILED),
+                output_field=BooleanField(),
+            ),
         )
         .filter(value__gt=0, has_active_collect_schedule=False)
         .order_by("updated_at", "pk")
@@ -242,8 +259,9 @@ def reconcile_vault_slot_collect_balance_gaps(
 ) -> dict:
     """对账余额快照，补齐遗漏的归集计划并暴露失败归集的人工恢复入口。
 
-    已存在 FAILED 归集任务时不自动重试，避免黑名单 / 永久 revert 场景被周期任务
-    反复烧 gas；这类余额只输出告警，由后台 action 人工确认后重新排队。
+    最近一次已终局的归集以 FAILED 收场时不自动重试，避免黑名单 / 永久 revert 场景被
+    周期任务反复烧 gas；这类余额只输出告警，由后台 action 人工确认后重新排队。人工
+    重试成功后恢复自动补建。
 
     deadline 是协作式时间预算（monotonic 时刻，None 不限时）：只在两行余额之间检查，
     第一行之前不检查，保证每轮至少推进一行；撞线时未处理的余额 updated_at 不变，
