@@ -53,9 +53,9 @@ dev = [
     # black 是本项目唯一的格式化器（见 .pre-commit-config.yaml 的说明）；
     # 必须列在依赖里，否则本地 `uv run black` 不可用，只有 pre-commit 自建环境能跑。
     "black==26.10.1",
-    "ruff==0.17.1",
-    "coverage==7.16.2",
-    "djlint==1.46.6",
+    "ruff==0.17.2",
+    "coverage==7.17.0",
+    "djlint==1.47.0",
     "pre-commit==4.7.0",
     # Django
     "django-debug-toolbar==8.0.0",
