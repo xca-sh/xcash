@@ -218,7 +218,7 @@ class WebhookEventAdmin(ReadOnlyModelAdmin):
     @admin.action(description=_("重新投递"))
     def mark_as_pending(self, request, queryset):
         queryset = queryset.filter(status=WebhookEvent.Status.FAILED)
-        # 重新投递只影响选中的事件；Project.webhook_open 是商户/管理员开关。
+        # 重新投递只影响选中的事件。
         # 清除调度/投递锁，避免事件在退避窗口或旧 worker claim 内仍被跳过。
         # attempt_count 必须归零：失败事件的计数已经到达上限，不重置的话第一次
         # 投递不成功就会立刻再次终局，人工重投等于只换来一次机会。

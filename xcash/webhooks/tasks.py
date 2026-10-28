@@ -462,19 +462,14 @@ def deliver_event(*, event_pk: int) -> None:
     # 认领时已原子自增，这里读到的就是本次的尝试序号。
     try_number = event.attempt_count
 
-    # 商户通知开关关闭 / 投递地址未配置：这是可恢复的配置态，不能判终局。
-    # 商户在后台改回调地址（清空保存再填新值）只需几秒，若一次就打成 FAILED，
-    # 期间确认的所有账单与充值通知都会永久丢失，只能靠人工逐条重投。
-    if not project.webhook_open or not target_url:
-        reason = (
-            "Endpoint not open."
-            if not project.webhook_open
-            else "Webhook URL not configured."
-        )
+    # 投递地址未配置：这是可恢复的配置态，不能判终局。填了地址即视为开启通知，
+    # 不另设开关。商户在后台改回调地址（清空保存再填新值）只需几秒，若一次就打成
+    # FAILED，期间确认的所有账单与充值通知都会永久丢失，只能靠人工逐条重投。
+    if not target_url:
         suspend_or_fail(
             event_pk,
             try_number=try_number,
-            reason=reason,
+            reason="Webhook URL not configured.",
             delay=CONFIG_MISSING_RETRY_DELAY,
         )
         return
@@ -559,8 +554,6 @@ def deliver_event(*, event_pk: int) -> None:
         )
 
         if ok:
-            # 投递成功只完成当前事件。Project.webhook_open 是商户/管理员开关，
-            # 不由单次投递结果自动改写。
             WebhookEvent.objects.filter(pk=event_pk).update(
                 status=WebhookEvent.Status.SUCCEEDED,
                 last_error="",

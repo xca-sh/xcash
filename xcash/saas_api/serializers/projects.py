@@ -68,7 +68,6 @@ class ProjectUpdateSerializer(serializers.ModelSerializer):
         model = Project
         fields = [
             "webhook",
-            "webhook_open",
             "hmac_key",
             "ip_white_list",
             "fast_confirm_threshold",
@@ -174,7 +173,6 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
             "appid",
             "name",
             "webhook",
-            "webhook_open",
             "ip_white_list",
             "hmac_key",
             "fast_confirm_threshold",

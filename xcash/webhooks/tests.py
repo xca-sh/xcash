@@ -44,7 +44,6 @@ def _make_project(**kwargs):
     defaults = {
         "name": f"Demo-{Project.objects.count()}",
         "webhook": "https://93.184.216.34/hook",
-        "webhook_open": True,
     }
     defaults.update(kwargs)
     return Project.objects.create(**defaults)
@@ -115,17 +114,6 @@ class DeliverEventTests(TestCase):
         self.assertEqual(event.last_error, "")
 
     @patch("webhooks.tasks._execute_http_delivery")
-    def test_deliver_success_does_not_touch_project_webhook_state(self, mock_http):
-        mock_http.return_value = (True, 200, {}, "ok", "", 50)
-        project = _make_project()
-        event = self._create_event(project=project)
-
-        deliver_event(event_pk=event.pk)
-
-        project.refresh_from_db()
-        self.assertTrue(project.webhook_open)
-
-    @patch("webhooks.tasks._execute_http_delivery")
     def test_deliver_success_creates_attempt(self, mock_http):
         mock_http.return_value = (True, 200, {}, "ok", "", 50)
         event = self._create_event()
@@ -191,23 +179,6 @@ class DeliverEventTests(TestCase):
         self.assertEqual(event.status, WebhookEvent.Status.PENDING)
         self.assertIsNotNone(event.schedule_locked_until)
         self.assertIsNone(event.delivery_locked_until)
-
-    # ── 项目通知状态隔离 ──
-
-    @patch("webhooks.tasks._execute_http_delivery")
-    def test_retryable_failure_does_not_close_project_webhook(self, mock_http):
-        """投递失败最多影响当前事件，不自动关闭项目 webhook。"""
-        mock_http.return_value = (False, 500, {}, "error", "", 50)
-        project = _make_project()
-        event = self._create_event(project=project)
-
-        deliver_event(event_pk=event.pk)
-
-        project.refresh_from_db()
-        self.assertTrue(project.webhook_open)
-        event.refresh_from_db()
-        self.assertEqual(event.status, WebhookEvent.Status.PENDING)
-        self.assertIsNotNone(event.schedule_locked_until)
 
     # ── 幂等：非 PENDING 跳过 ──
 
@@ -378,22 +349,6 @@ class DeliverEventTests(TestCase):
         self.assertEqual(event.status, WebhookEvent.Status.SUCCEEDED)
         mock_http.assert_called_once()
 
-    # ── webhook_open=False ──
-
-    @patch("webhooks.tasks._execute_http_delivery")
-    def test_webhook_closed_suspends_instead_of_failing(self, mock_http):
-        """通知开关关闭同样是可恢复状态，重新打开后事件应还能投递。"""
-        project = _make_project(webhook_open=False)
-        event = self._create_event(project=project)
-
-        deliver_event(event_pk=event.pk)
-
-        event.refresh_from_db()
-        self.assertEqual(event.status, WebhookEvent.Status.PENDING)
-        self.assertIsNotNone(event.schedule_locked_until)
-        self.assertIn("not open", event.last_error)
-        mock_http.assert_not_called()
-
     # ── 超出重试次数 ──
 
     @patch("webhooks.tasks._execute_http_delivery")
@@ -415,8 +370,6 @@ class DeliverEventTests(TestCase):
 
         event.refresh_from_db()
         self.assertEqual(event.status, WebhookEvent.Status.FAILED)
-        project.refresh_from_db()
-        self.assertTrue(project.webhook_open)
 
 
 class WebhookDeliveryPolicyTests(TestCase):
@@ -668,29 +621,6 @@ class WebhookResponseMatchingTests(TestCase):
 
         self.assertLessEqual(len(resp_text.encode("utf-8")), MAX_RESPONSE_BYTES)
         self.assertFalse(ok)
-
-
-class ProjectWebhookOpenTests(TestCase):
-    """项目通知开关不再承担事件重投语义。"""
-
-    def test_reopen_webhook_does_not_reset_failed_events(self):
-        project = _make_project(webhook_open=False)
-        event = WebhookEvent.objects.create(
-            project=project,
-            payload={"type": "test"},
-            status=WebhookEvent.Status.FAILED,
-            schedule_locked_until=timezone.now() + timezone.timedelta(hours=1),
-        )
-
-        project.webhook_open = True
-        project.save()
-
-        event.refresh_from_db()
-        self.assertEqual(event.status, WebhookEvent.Status.FAILED)
-        self.assertIsNotNone(event.schedule_locked_until)
-
-        project.refresh_from_db()
-        self.assertTrue(project.webhook_open)
 
 
 class DeliveryAttemptCountingTests(TestCase):

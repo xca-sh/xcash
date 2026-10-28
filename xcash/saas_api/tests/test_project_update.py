@@ -71,7 +71,7 @@ class TestMethodRestrictions:
     def test_patch_allowed(self, client, project):
         response = client.patch(
             _url(project),
-            data={"webhook_open": False},
+            data={"webhook": "https://example.com/cb"},
             content_type="application/json",
             HTTP_AUTHORIZATION=AUTH_HEADER,
         )
@@ -146,7 +146,6 @@ class TestPatchFieldWhitelist:
         """合法 PATCH：同时修改多个白名单字段，均正确入库。"""
         payload = {
             "webhook": "https://example.com/cb",
-            "webhook_open": False,
             "fast_confirm_threshold": "25.50",
         }
         response = client.patch(
@@ -159,7 +158,6 @@ class TestPatchFieldWhitelist:
 
         project.refresh_from_db()
         assert project.webhook == "https://example.com/cb"
-        assert project.webhook_open is False
         assert project.fast_confirm_threshold == Decimal("25.50")
 
 

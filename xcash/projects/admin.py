@@ -56,7 +56,6 @@ class ProjectForm(forms.ModelForm):
             "name",
             "ip_white_list",
             "webhook",
-            "webhook_open",
             "fast_confirm_threshold",
             "hmac_key",
             "contract_receiving_enabled",
@@ -239,7 +238,6 @@ class ProjectAdmin(ModelAdmin):
     list_editable = ("active",)
     list_filter = (
         "active",
-        "webhook_open",
         "is_test",
         ("created_at", RangeDateTimeFilter),
     )
@@ -352,10 +350,7 @@ class ProjectAdmin(ModelAdmin):
             _("通知"),
             {
                 "classes": ("tab",),
-                "fields": (
-                    "webhook",
-                    "webhook_open",
-                ),
+                "fields": ("webhook",),
             },
         ),
         (
@@ -402,10 +397,7 @@ class ProjectAdmin(ModelAdmin):
 
     @display(description=_("通知"), ordering="webhook")
     def display_webhook(self, instance: Project):
-        if not instance.webhook:
-            return fmt.empty()
-        state = _("已开启") if instance.webhook_open else _("已关闭")
-        return fmt.stacked(instance.webhook, state)
+        return instance.webhook or fmt.empty()
 
     @display(description=_("收款模式"))
     def display_receiving_mode(self, instance: Project):

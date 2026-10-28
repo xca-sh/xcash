@@ -52,7 +52,6 @@ class Project(models.Model):
         default="",
         help_text=_("用于本网关发送通知到商户后端"),
     )
-    webhook_open = models.BooleanField(verbose_name=_("通知状态"), default=True)
     fast_confirm_threshold = models.DecimalField(
         max_digits=10,
         decimal_places=2,
