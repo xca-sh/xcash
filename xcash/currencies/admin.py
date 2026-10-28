@@ -20,6 +20,7 @@ class CryptoOnChainInline(TabularInline):
     verbose_name = _("链上形态")
     verbose_name_plural = _("链上形态")
     fields = ("chain", "address", "decimals", "active")
+    ordering = ("-pk",)
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related("chain")
@@ -28,7 +29,7 @@ class CryptoOnChainInline(TabularInline):
 @admin.register(Crypto)
 class CryptoAdmin(ModelAdmin):
     inlines = (CryptoOnChainInline,)
-    ordering = ("-active", "symbol")
+    ordering = ("-pk",)
     list_display = (
         "display_identity",
         "display_type",
@@ -136,7 +137,7 @@ class CryptoAdmin(ModelAdmin):
 
 @admin.register(Fiat)
 class FiatAdmin(ModelAdmin):
-    ordering = ("code",)
+    ordering = ("-pk",)
     list_display = ("display_identity",)
     search_fields = ("code",)
     search_help_text = _("支持按法币代码搜索")

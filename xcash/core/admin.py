@@ -43,7 +43,7 @@ class ProcrastinateEventInline(TabularInline):
     show_title = False
     verbose_name = _("状态事件")
     verbose_name_plural = _("状态事件")
-    ordering = ("at",)
+    ordering = ("-at",)
     fields = ("type", "at")
     readonly_fields = fields
 
@@ -222,6 +222,7 @@ class SystemWalletAdmin(ModelAdmin):
     # 页面不暴露任何可编辑字段，给一组空 fieldset 让 admin 表单机制安全空转。
     fieldsets = ((None, {"fields": ()}),)
     list_display = ("id", "wallet", "updated_at")
+    ordering = ("-created_at",)
 
     def has_module_permission(self, request):
         # 系统热钱包是平台基础设施入口，只向超管暴露。

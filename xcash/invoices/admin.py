@@ -66,6 +66,7 @@ class EpayOrderInline(StackedInline):
 
 @admin.register(DifferRecipientAddress)
 class DifferRecipientAddressAdmin(ModelAdmin):
+    ordering = ("-created_at",)
     list_display = (
         "display_address",
         "project",

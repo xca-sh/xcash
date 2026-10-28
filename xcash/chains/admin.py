@@ -66,7 +66,7 @@ SCANNER_STATE_LABELS = {
 @admin.register(Chain)
 class ChainAdmin(ModelAdmin):
     form = ChainAdminForm
-    ordering = ("is_testnet", "sort_order", "code")
+    ordering = ("-created_at",)
     list_display = (
         "display_identity",
         "native_coin_display",
@@ -254,6 +254,7 @@ class ChainAdmin(ModelAdmin):
 class WalletAdmin(ReadOnlyModelAdmin):
     # 助记词密文永远不进后台；这里只暴露钱包与其派生地址的对应关系。
     list_display = ("__str__", "display_address_count")
+    ordering = ("-pk",)
     fields = ("__str__",)
 
     def get_queryset(self, request):
@@ -528,7 +529,7 @@ class VaultSlotCollectScheduleInline(TabularInline):
     verbose_name_plural = _("归集计划")
     fields = ("crypto", "due_at", "tx_task", "created_at", "updated_at")
     readonly_fields = fields
-    ordering = ("-due_at",)
+    ordering = ("-created_at",)
 
     def has_add_permission(self, request, obj=None):
         return False
@@ -546,6 +547,7 @@ class VaultSlotBalanceInline(TabularInline):
     show_title = False
     verbose_name = _("余额快照")
     verbose_name_plural = _("余额快照")
+    ordering = ("-pk",)
     fields = (
         "crypto",
         "amount",
@@ -707,7 +709,7 @@ class InvoiceVaultSlotAdmin(VaultSlotAdminBase):
 class VaultSlotCollectScheduleAdmin(ReadOnlyModelAdmin):
     actions = ("requeue_failed_collect_schedules",)
     date_hierarchy = "due_at"
-    ordering = ("due_at",)
+    ordering = ("-created_at",)
     list_display = (
         "display_slot_address",
         "chain",

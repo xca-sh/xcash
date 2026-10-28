@@ -209,6 +209,7 @@ class DifferRecipientAddressInline(TabularInline):
     show_title = False
     verbose_name = _("钱包直收地址")
     verbose_name_plural = _("钱包直收地址")
+    ordering = ("-created_at",)
     fields = (
         "chain_type",
         "address",

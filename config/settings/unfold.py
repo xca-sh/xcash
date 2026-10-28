@@ -256,7 +256,7 @@ SIDEBAR_UNFOLD = {
             },
             {
                 "title": _("货币"),
-                "collapsible": True,
+                "collapsible": False,
                 "items": [
                     {
                         "title": _("加密货币"),
@@ -272,7 +272,7 @@ SIDEBAR_UNFOLD = {
             },
             {
                 "title": _("风控"),
-                "collapsible": True,
+                "collapsible": False,
                 "items": [
                     {
                         "title": _("风险评估"),
@@ -283,7 +283,7 @@ SIDEBAR_UNFOLD = {
             },
             {
                 "title": _("运维"),
-                "collapsible": True,
+                "collapsible": False,
                 "items": [
                     {
                         "title": _("任务日志"),

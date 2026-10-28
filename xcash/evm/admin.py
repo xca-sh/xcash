@@ -263,7 +263,7 @@ class EvmScanCursorAdmin(SyncScanCursorToLatestActionMixin, ReadOnlyModelAdmin):
         "disable_selected_scanners",
         "sync_selected_to_latest",
     )
-    ordering = ("chain__code",)
+    ordering = ("-created_at",)
     list_display = (
         "display_chain",
         "display_enabled",

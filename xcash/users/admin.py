@@ -84,7 +84,7 @@ class UserAdmin(BaseUserAdmin, ModelAdmin):
     )
     search_fields = ["username"]
     search_help_text = _("支持按用户名搜索")
-    ordering = ("id",)
+    ordering = ("-id",)
     readonly_fields = ("last_login", "date_joined")
 
     @display(
@@ -115,6 +115,7 @@ admin.site.unregister(TokenProxy)
 @admin.register(Group)
 class GroupAdmin(BaseGroupAdmin, ModelAdmin):
     list_display = ("name", "display_permission_count")
+    ordering = ("-id",)
     search_fields = ("name",)
     search_help_text = _("支持按权限组名称搜索")
     filter_horizontal = ("permissions",)
@@ -136,6 +137,7 @@ class GroupAdmin(BaseGroupAdmin, ModelAdmin):
 @admin.register(TokenProxy)
 class TokenAdmin(BaseTokenAdmin, ModelAdmin):
     list_display = ("display_key", "user", "created")
+    ordering = ("-created",)
     search_help_text = _("支持按用户名搜索")
 
     @display(description=_("Token"), ordering="key")
