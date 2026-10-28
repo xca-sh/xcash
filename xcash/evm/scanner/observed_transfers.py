@@ -286,7 +286,7 @@ class EvmObservedTransferProcessor:
         调用方会在本轮结束后把游标推进到 to_block（批次最多 100 块、只回放 LOG_SCAN_REPLAY_BLOCKS 块），
         跳过等于把一笔真实入账永久静默丢弃——链上钱已进 VaultSlot、会被归集扫走，
         客户账上却没有 Deposit，且无任何自愈路径。故这里上抛 EvmScannerRpcError，
-        让本轮扫描中断、游标停在原处、错误落到 EvmScanCursor.last_error 供运维观察，
+        让本轮扫描中断、游标停在原处、错误落到 Chain.scan_last_error 供运维观察，
         由下一轮重扫幂等恢复。若该 tx 确实已被重组丢弃，下一轮 eth_getLogs 自然不再
         返回该日志，扫描随即继续推进，不会永久卡死。
 

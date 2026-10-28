@@ -12,6 +12,8 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db import models
 from django.db import transaction as db_transaction
+from django.db.models import F
+from django.db.models.functions import Greatest
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from eth_utils import keccak  # noqa
@@ -122,6 +124,21 @@ class Chain(models.Model):
     # 以创建时刻为起点。
     last_scanned_at = models.DateTimeField(_("最近扫描时间"), auto_now_add=True)
 
+    # 扫描位点：每条链一个，由所属链族的扫描器（evm.scanner.logs / tron.scanner）推进。
+    # 全部 editable=False：位点只进不退且没有回补机制，只能由扫描器或后台超管动作改写。
+    scan_enabled = models.BooleanField(_("扫描启用"), default=True, editable=False)
+    # 已成功扫描推进到的最高块高；0 表示尚未锚定，首轮扫描会直接对齐链头。
+    scan_cursor_block = models.PositiveIntegerField(
+        _("已扫描到的区块"), default=0, editable=False
+    )
+    # 最近一轮扫描失败的原因；任何一轮成功扫描都会连同时间一起清空。
+    scan_last_error = models.TextField(
+        _("最近扫描错误"), blank=True, default="", editable=False
+    )
+    scan_last_error_at = models.DateTimeField(
+        _("最近扫描错误时间"), blank=True, null=True, editable=False
+    )
+
     class Meta:
         verbose_name = _("链")
         verbose_name_plural = _("链")
@@ -153,8 +170,8 @@ class Chain(models.Model):
                     "is_testnet",
                 }  # noqa
         self.full_clean()
-        # 包一层事务：链族在 post_save 上挂的配套数据（如 Tron 扫描游标，见
-        # tron.chain_hooks）与链配置同生同灭，任一失败整体回滚。
+        # 包一层事务：post_save 上挂的配套数据（如原生币 CryptoOnChain，见
+        # currencies.signals）与链配置同生同灭，任一失败整体回滚。
         with db_transaction.atomic():
             return super().save(*args, **kwargs)
 
@@ -212,6 +229,51 @@ class Chain(models.Model):
         now = timezone.now()
         Chain.objects.filter(pk=self.pk).update(last_scanned_at=now)
         self.last_scanned_at = now
+
+    def advance_scan_cursor(self, scanned_to_block: int) -> None:
+        """把扫描位点推进到 scanned_to_block（只进不退），并清空扫描错误。
+
+        同链扫描由 chain-runner 的按链 advisory lock 串行化；Greatest 让位点即使遇到
+        乱序写入也不会回退。
+        """
+        Chain.objects.filter(pk=self.pk).update(
+            scan_cursor_block=Greatest(F("scan_cursor_block"), scanned_to_block),
+            scan_last_error="",
+            scan_last_error_at=None,
+        )
+        self.scan_cursor_block = max(self.scan_cursor_block, scanned_to_block)
+        self.scan_last_error = ""
+        self.scan_last_error_at = None
+
+    def reset_scan_cursor(self, block: int) -> None:
+        """把扫描位点直接置为 block 并清空扫描错误，仅用于首轮锚定到链头。"""
+        Chain.objects.filter(pk=self.pk).update(
+            scan_cursor_block=block,
+            scan_last_error="",
+            scan_last_error_at=None,
+        )
+        self.scan_cursor_block = block
+        self.scan_last_error = ""
+        self.scan_last_error_at = None
+
+    def clear_scan_error(self) -> None:
+        """本轮扫描成功但没有新块可扫时，只清空扫描错误、不动位点。"""
+        Chain.objects.filter(pk=self.pk).update(
+            scan_last_error="",
+            scan_last_error_at=None,
+        )
+        self.scan_last_error = ""
+        self.scan_last_error_at = None
+
+    def record_scan_error(self, exc: Exception) -> None:
+        """记录本轮扫描失败（RPC、预算耗尽、落库异常），/health/scanning 据此报 failing。"""
+        now = timezone.now()
+        Chain.objects.filter(pk=self.pk).update(
+            scan_last_error=str(exc),
+            scan_last_error_at=now,
+        )
+        self.scan_last_error = str(exc)
+        self.scan_last_error_at = now
 
     @cached_property
     def native_coin(self):

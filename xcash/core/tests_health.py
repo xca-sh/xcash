@@ -12,7 +12,6 @@ from chains.models import Chain
 from chains.tests_fixtures import make_evm_chain
 from chains.tests_fixtures import make_tron_chain
 from core.monitoring import SCAN_STALL_ALERT_AFTER_SECONDS
-from evm.models import EvmScanCursor
 
 
 class HealthEndpointTests(TestCase):
@@ -124,11 +123,9 @@ class ScanningHealthEndpointTests(TestCase):
         返回 200，而游标和入账其实完全不动。
         """
         chain = make_evm_chain(code=ChainCode.Anvil)
-        EvmScanCursor.objects.create(
-            chain=chain,
-            enabled=True,
-            last_error="rpc down",
-            last_error_at=timezone.now(),
+        Chain.objects.filter(pk=chain.pk).update(
+            scan_last_error="rpc down",
+            scan_last_error_at=timezone.now(),
         )
 
         response = self.client.get(reverse("health-scanning"))
@@ -136,33 +133,25 @@ class ScanningHealthEndpointTests(TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json(), {"status": "stalled"})
 
-    def test_cleared_cursor_error_returns_to_ok(self):
-        # 成功扫描会清空 last_error_at（_advance_cursor / _mark_cursor_idle），
+    def test_cleared_scan_error_returns_to_ok(self):
+        # 成功扫描会清空 scan_last_error_at（advance_scan_cursor / clear_scan_error），
         # 探针必须随之恢复 200，否则一次抖动就会永久红着。
         chain = make_evm_chain(code=ChainCode.Anvil)
-        cursor = EvmScanCursor.objects.create(
-            chain=chain,
-            enabled=True,
-            last_error="rpc down",
-            last_error_at=timezone.now(),
-        )
+        chain.record_scan_error(Exception("rpc down"))
 
         self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 503)
 
-        EvmScanCursor.objects.filter(pk=cursor.pk).update(
-            last_error="", last_error_at=None
-        )
+        chain.clear_scan_error()
 
         self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 200)
 
-    def test_disabled_cursor_error_never_triggers_alert(self):
-        # 停用的游标不参与扫描，其 last_error_at 会停在停用前的那次失败上。
+    def test_paused_scan_error_never_triggers_alert(self):
+        # 暂停扫描的链不参与扫描，其 scan_last_error_at 会停在暂停前的那次失败上。
         chain = make_evm_chain(code=ChainCode.Anvil)
-        EvmScanCursor.objects.create(
-            chain=chain,
-            enabled=False,
-            last_error="rpc down",
-            last_error_at=timezone.now(),
+        Chain.objects.filter(pk=chain.pk).update(
+            scan_enabled=False,
+            scan_last_error="rpc down",
+            scan_last_error_at=timezone.now(),
         )
 
         self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 200)

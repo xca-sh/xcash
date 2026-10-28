@@ -14,7 +14,6 @@ from django.utils import timezone
 from eth_utils import keccak
 from tron.client import TronClientError
 from tron.client import TronHttpClient
-from tron.models import TronWatchCursor
 
 from chains.models import Chain
 from chains.models import ChainType
@@ -62,9 +61,10 @@ class TronScanner:
     """按链扫描本链 TRC20 与原生 TRX 的入账事件。
 
     与 EVM 扫描器对齐：代币集合来自 CryptoOnChain（不写死 USDT/地址），每条 Tron 链一个
-    游标。TRC20 逐块经 walletsolidity 读整块交易 receipt 的 raw TVM log、按 topic0 解析
-    Transfer 事件（与固化头同一数据面，见 _collect_block_events）。原生 TRX 走
-    TransferContract、不 emit 事件，故在同一游标循环内额外逐块读整块交易、按 to_address
+    扫描位点（Chain.scan_cursor_block）。TRC20 逐块经 walletsolidity 读整块交易 receipt
+    的 raw TVM log、按 topic0 解析 Transfer 事件（与固化头同一数据面，见
+    _collect_block_events）。原生 TRX 走 TransferContract、不 emit 事件，故在同一
+    位点循环内额外逐块读整块交易、按 to_address
     匹配（见 _collect_block_native_transfers）；停用原生币 CryptoOnChain 即关闭原生扫描。
     """
 
@@ -83,7 +83,6 @@ class TronScanner:
 
         tokens_by_address = cls._load_crypto_on_chains(chain=chain)
         native_on_chain = cls._load_native_on_chain(chain=chain)
-        cursor = cls._get_or_create_cursor(chain=chain)
         client = TronHttpClient(chain=chain)
         previous_latest_block = chain.latest_block_number
         events_seen = 0
@@ -115,12 +114,12 @@ class TronScanner:
                 0,
             )
 
-            if cursor.enabled:
-                cursor = cls._bootstrap_cursor_if_needed(
-                    cursor=cursor,
+            if chain.scan_enabled:
+                cls._bootstrap_cursor_if_needed(
+                    chain=chain,
                     latest_block=latest_block,
                 )
-                start_block = cursor.last_scanned_block + 1
+                start_block = chain.scan_cursor_block + 1
                 # 单轮最多推进 DEFAULT_TRON_SCAN_BATCH_SIZE 块，避免大幅落后时 range 无界，
                 # 让单轮耗时失控、迟迟不刷新 last_scanned_at。
                 end_block = min(
@@ -156,41 +155,37 @@ class TronScanner:
                     blocks_scanned += 1
                     last_successfully_scanned = block_number
         except Exception as exc:
-            # 已经成功扫完的块仍需落到游标，避免下一轮重新扫一遍 + 让错误信息可见。
-            # 顺序：先 advance（清 last_error），再 mark_error（写新 last_error），
-            # 保证 last_error 反映最近一次失败而非被 advance 覆盖。RPC 失败、预算耗尽、
-            # 落库异常都必须记录：任何一种漏记都会让游标卡住而 last_scanned_at 照常刷新，
-            # /health/scanning 只看 last_error_at，会把停滞的扫描报成健康。
+            # 已经成功扫完的块仍需落到扫描位点，避免下一轮重新扫一遍 + 让错误信息可见。
+            # 顺序：先推进位点（清空扫描错误），再 record_scan_error（写新错误），保证
+            # scan_last_error 反映最近一次失败而非被推进覆盖。RPC 失败、预算耗尽、落库
+            # 异常都必须记录：任何一种漏记都会让位点卡住而 last_scanned_at 照常刷新，
+            # /health/scanning 只看 scan_last_error_at，会把停滞的扫描报成健康。
             cls.flush_scan_progress(
-                cursor=cursor,
+                chain=chain,
                 latest_block=latest_block,
                 scanned_block=last_successfully_scanned,
             )
-            cls._mark_cursor_error(cursor=cursor, exc=exc)
+            chain.record_scan_error(exc)
             raise
         except BaseException:
             # 进程退出等中断（SystemExit / KeyboardInterrupt）同样必须落盘已完成的进度，
-            # 避免下一轮从同一起点重来；这不是扫描失败，不写游标错误。
+            # 避免下一轮从同一起点重来；这不是扫描失败，不写扫描错误。
             cls.flush_scan_progress(
-                cursor=cursor,
+                chain=chain,
                 latest_block=latest_block,
                 scanned_block=last_successfully_scanned,
             )
             raise
         else:
             cls.flush_scan_progress(
-                cursor=cursor,
+                chain=chain,
                 latest_block=latest_block,
                 scanned_block=last_successfully_scanned,
             )
-            if cursor.enabled and last_successfully_scanned is None:
-                # RPC 已恢复但没有新块时，本轮同样成功；不能等下一次游标推进才解除
+            if chain.scan_enabled and last_successfully_scanned is None:
+                # RPC 已恢复但没有新块时，本轮同样成功；不能等下一次位点推进才解除
                 # 故障探针，否则会把已恢复的节点继续报成失败。
-                TronWatchCursor.objects.filter(pk=cursor.pk).update(
-                    last_error="",
-                    last_error_at=None,
-                    updated_at=timezone.now(),
-                )
+                chain.clear_scan_error()
 
         return TronScanSummary(
             filter_addresses=len(matched_addresses_seen),
@@ -469,47 +464,24 @@ class TronScanner:
         return timestamp_ms
 
     @classmethod
-    def _get_or_create_cursor(cls, *, chain: Chain) -> TronWatchCursor:
-        """取出或新建本链的扫描游标；不加行锁的理由同 EvmLogScanner._get_or_create_cursor。"""
-        cursor, _ = TronWatchCursor.objects.get_or_create(
-            chain=chain,
-            defaults={
-                "last_scanned_block": 0,
-                "enabled": True,
-            },
-        )
-        return cursor
-
-    @classmethod
     def _bootstrap_cursor_if_needed(
         cls,
         *,
-        cursor: TronWatchCursor,
+        chain: Chain,
         latest_block: int,
-    ) -> TronWatchCursor:
-        debug_key = cursor.chain_id
+    ) -> None:
+        """尚未锚定的扫描位点直接对齐链头；DEBUG 下每个进程首轮都重新对齐。"""
         should_reset = False
 
         if settings.DEBUG:
-            if debug_key not in cls._debug_bootstrapped_cursors:
-                cls._debug_bootstrapped_cursors.add(debug_key)
+            if chain.pk not in cls._debug_bootstrapped_cursors:
+                cls._debug_bootstrapped_cursors.add(chain.pk)
                 should_reset = True
-        elif cursor.last_scanned_block == 0:
+        elif chain.scan_cursor_block == 0:
             should_reset = True
 
-        if not should_reset:
-            return cursor
-
-        TronWatchCursor.objects.filter(pk=cursor.pk).update(
-            last_scanned_block=latest_block,
-            last_error="",
-            last_error_at=None,
-            updated_at=timezone.now(),
-        )
-        cursor.last_scanned_block = latest_block
-        cursor.last_error = ""
-        cursor.last_error_at = None
-        return cursor
+        if should_reset:
+            chain.reset_scan_cursor(latest_block)
 
     @classmethod
     def _collect_block_events(
@@ -723,48 +695,18 @@ class TronScanner:
     def flush_scan_progress(
         cls,
         *,
-        cursor: TronWatchCursor,
+        chain: Chain,
         latest_block: int,
         scanned_block: int | None,
     ) -> None:
-        """把本轮已成功扫完的最高块落到游标；一块都没扫成时保持游标不动。
+        """把本轮已成功扫完的最高块落到扫描位点；一块都没扫成时保持位点不动。
 
         正常结束、RPC 失败或预算耗尽、被中断（进程退出）三条路径共用，确保任何退出方式
         都不会丢弃已完成的扫描进度。
         """
         if scanned_block is None:
             return
-        cls._advance_cursor(
-            cursor=cursor,
-            latest_block=latest_block,
-            scanned_block=scanned_block,
-        )
-
-    @staticmethod
-    def _advance_cursor(
-        *,
-        cursor: TronWatchCursor,
-        latest_block: int,
-        scanned_block: int,
-    ) -> None:
-        target_block = min(scanned_block, latest_block)
-        TronWatchCursor.objects.filter(pk=cursor.pk).update(
-            last_scanned_block=Greatest(F("last_scanned_block"), target_block),
-            last_error="",
-            last_error_at=None,
-            updated_at=timezone.now(),
-        )
-        cursor.last_scanned_block = max(cursor.last_scanned_block, target_block)
-        cursor.last_error = ""
-        cursor.last_error_at = None
-
-    @staticmethod
-    def _mark_cursor_error(*, cursor: TronWatchCursor, exc: Exception) -> None:
-        TronWatchCursor.objects.filter(pk=cursor.pk).update(
-            last_error=str(exc)[:255],
-            last_error_at=timezone.now(),
-            updated_at=timezone.now(),
-        )
+        chain.advance_scan_cursor(min(scanned_block, latest_block))
 
     @staticmethod
     def _normalize_hex(value: object) -> str:
@@ -799,7 +741,7 @@ def event_address_to_base58(raw_value: str) -> str:
 def scan_tron_chain_round(chain: Chain, deadline: float) -> None:
     """chain-runner 按链循环调用的 Tron 单轮扫描（登记为链族的 scan_round）。
 
-    RPC 失败只记 warning 后返回：游标错误已由 scan_chain 写入，/health/scanning 据此
+    RPC 失败只记 warning 后返回：扫描错误已由 scan_chain 写入 Chain，/health/scanning 据此
     报 failing，runner 照常推进 last_scanned_at、按扫描周期重试。预算耗尽与其他异常
     原样上抛，由 runner 统一记录。
     """

@@ -5,7 +5,6 @@ from typing import Any
 import structlog
 from django.db.models import F
 from django.db.models.functions import Greatest
-from django.utils import timezone
 
 from chains.models import Chain
 from chains.models import ChainType
@@ -14,7 +13,6 @@ from currencies.models import CryptoOnChain
 from evm.hexutil import checksum_address
 from evm.hexutil import hex_lower
 from evm.hexutil import topic_to_address
-from evm.models import EvmScanCursor
 from evm.scanner.constants import DEFAULT_LOG_SCAN_BATCH_SIZE
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 from evm.scanner.constants import XCASH_NATIVE_RECEIVED_TOPIC0
@@ -51,15 +49,14 @@ class EvmLogScanner:
         rpc_client: EvmScannerRpcClient | None = None,
         deadline: float | None = None,
     ):
-        """根据游标推进一次正向日志扫描，成功后更新游标。
+        """根据本链扫描位点推进一次正向日志扫描，成功后推进位点。
 
         deadline 是本轮截止时刻（monotonic），只在 chunk 之间检查，见 chains.scanning。
         """
         if chain.type != ChainType.EVM:
             raise ValueError(f"仅支持 EVM 链扫描，当前链为 {chain.code}")
 
-        cursor = cls._get_or_create_cursor(chain=chain)
-        if not cursor.enabled:
+        if not chain.scan_enabled:
             return
         rpc_client = rpc_client or EvmScannerRpcClient(chain=chain)
         previous_latest_block = chain.latest_block_number
@@ -81,12 +78,13 @@ class EvmLogScanner:
 
             token_registry = load_token_registry(chain=chain)
             scan_window = cls._compute_scan_window(
-                cursor=cursor,
+                scanned_block=chain.scan_cursor_block,
                 latest_block=latest_block,
                 batch_size=batch_size,
             )
             if scan_window is None:
-                cls._mark_cursor_idle(cursor=cursor)
+                # 无新块可扫也是成功的一轮：只清空扫描错误，不推进位点。
+                chain.clear_scan_error()
                 return
             from_block, to_block = scan_window
 
@@ -109,13 +107,14 @@ class EvmLogScanner:
                     from_block=chunk_from,
                     to_block=chunk_to,
                 )
-                cls._advance_cursor(cursor=cursor, scanned_to_block=chunk_to)
+                chain.advance_scan_cursor(chunk_to)
                 chunk_from = chunk_to + 1
         except Exception as exc:
             # RPC 失败、预算耗尽、落库异常都是本轮扫描失败；此前 chunk 的进度已提交，
             # 只记录错误并原样上抛。任何一种漏记都会让游标卡住而 last_scanned_at 照常
-            # 刷新，/health/scanning 只看 last_error_at，会把停滞的扫描报成健康。
-            cls._mark_cursor_error(cursor=cursor, exc=exc)
+            # 刷新，/health/scanning 只看 scan_last_error_at，会把停滞的扫描报成健康。
+            logger.warning("EVM 日志扫描失败", chain=chain.code, error=str(exc))
+            chain.record_scan_error(exc)
             raise
 
     @classmethod
@@ -268,84 +267,38 @@ class EvmLogScanner:
         except ValueError:
             return None
 
-    @classmethod
-    def _get_or_create_cursor(cls, *, chain: Chain) -> EvmScanCursor:
-        """取出或新建本链的扫描游标。
-
-        不加行锁：同链扫描已由 chain-runner 的按链 advisory lock 串行化，游标推进全部
-        是带 Greatest 的条件 UPDATE；并发新建由 chain 唯一约束收口（get_or_create 撞约束后回查）。
-        """
-        cursor, _ = EvmScanCursor.objects.get_or_create(
-            chain=chain,
-            defaults={"last_scanned_block": 0, "enabled": True},
-        )
-        return cursor
-
     @staticmethod
     def _compute_scan_window(
         *,
-        cursor: EvmScanCursor,
+        scanned_block: int,
         latest_block: int,
         batch_size: int,
     ) -> tuple[int, int] | None:
-        """根据游标和批次大小算出本轮扫描区间；永远只扫到最新块前一块。
+        """根据扫描位点和批次大小算出本轮扫描区间；永远只扫到最新块前一块。
 
-        新建游标（last_scanned_block<=0）只把扫描起点锚定到当前链头，绝不从
+        尚未锚定的位点（scanned_block<=0）只把扫描起点锚定到当前链头，绝不从
         创世块全量回扫历史日志：首轮仅观测最新确认块，之后再按批次正向推进。
         """
         target_block = latest_block - 1
         if target_block <= 0:
             return None
 
-        # 首次扫描：游标尚未锚定，直接对齐链头，避免从区块 1 全量回扫历史。
-        if cursor.last_scanned_block <= 0:
+        # 首次扫描：位点尚未锚定，直接对齐链头，避免从区块 1 全量回扫历史。
+        if scanned_block <= 0:
             return target_block, target_block
 
         forward_batch_size = max(1, batch_size)
-        to_block = min(target_block, cursor.last_scanned_block + forward_batch_size)
-        from_block = max(1, cursor.last_scanned_block + 1 - LOG_SCAN_REPLAY_BLOCKS)
+        to_block = min(target_block, scanned_block + forward_batch_size)
+        from_block = max(1, scanned_block + 1 - LOG_SCAN_REPLAY_BLOCKS)
         if from_block > to_block:
             return None
         return from_block, to_block
-
-    @staticmethod
-    def _mark_cursor_idle(*, cursor: EvmScanCursor) -> None:
-        """无新块可扫时只清空错误状态，不推进游标。"""
-        EvmScanCursor.objects.filter(pk=cursor.pk).update(
-            last_error="",
-            last_error_at=None,
-            updated_at=timezone.now(),
-        )
-
-    @staticmethod
-    def _advance_cursor(*, cursor: EvmScanCursor, scanned_to_block: int) -> None:
-        """把游标推进到本轮扫描末端，并清空错误状态。"""
-        EvmScanCursor.objects.filter(pk=cursor.pk).update(
-            last_scanned_block=Greatest(F("last_scanned_block"), scanned_to_block),
-            last_error="",
-            last_error_at=None,
-            updated_at=timezone.now(),
-        )
-
-    @staticmethod
-    def _mark_cursor_error(*, cursor: EvmScanCursor, exc: Exception) -> None:
-        """记录本轮扫描失败（RPC、预算耗尽、落库异常）到游标，便于运维观察。"""
-        logger.warning(
-            "EVM 日志扫描失败",
-            chain=cursor.chain.code,
-            error=str(exc),
-        )
-        EvmScanCursor.objects.filter(pk=cursor.pk).update(
-            last_error=str(exc),
-            last_error_at=timezone.now(),
-            updated_at=timezone.now(),
-        )
 
 
 def scan_evm_chain_round(chain: Chain, deadline: float) -> None:
     """chain-runner 按链循环调用的 EVM 单轮扫描（登记为链族的 scan_round）。
 
-    RPC 失败只记 warning 后返回：游标错误已由 scan_chain 写入，/health/scanning 据此
+    RPC 失败只记 warning 后返回：扫描错误已由 scan_chain 写入 Chain，/health/scanning 据此
     报 failing，runner 照常推进 last_scanned_at、按扫描周期重试。预算耗尽与其他异常
     原样上抛，由 runner 统一记录。
     """

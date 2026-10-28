@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from unittest.mock import patch
 
+from django.contrib.admin.sites import AdminSite
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
 from django.core.exceptions import ValidationError
@@ -106,6 +107,79 @@ class ChainDerivedFieldsSaveTests(TestCase):
         chain.refresh_from_db()
         self.assertEqual(chain.type, ChainType.EVM)
         self.assertTrue(chain.is_testnet)
+
+
+class ChainScanCursorTests(TestCase):
+    def test_advance_scan_cursor_never_rewinds_database_value(self):
+        # 内存里仍是 100，库里已被推进到 150：推进到 120 不得回退库值。
+        chain = Chain.objects.create(code=ChainCode.Anvil, active=False)
+        chain.reset_scan_cursor(100)
+        Chain.objects.filter(pk=chain.pk).update(scan_cursor_block=150)
+
+        chain.advance_scan_cursor(120)
+
+        chain.refresh_from_db()
+        self.assertEqual(chain.scan_cursor_block, 150)
+
+
+class ChainAdminScannerTests(TestCase):
+    def setUp(self):
+        from chains.admin import ChainAdmin
+
+        self.chain = Chain.objects.create(code=ChainCode.Anvil, active=False)
+        Chain.objects.filter(pk=self.chain.pk).update(
+            latest_block_number=500,
+            scan_cursor_block=100,
+            scan_last_error="rpc down",
+            scan_last_error_at=timezone.now(),
+        )
+        self.admin = ChainAdmin(Chain, AdminSite())
+        self.admin.message_user = Mock()
+
+    def test_scanner_actions_are_superuser_only(self):
+        # 启停/追平会改动资金入账的扫描位点，不能靠 Chain 的 change 权限放行给普通管理员。
+        superuser = Mock(is_active=True, is_superuser=True)
+        staff = Mock(is_active=True, is_superuser=False)
+        self.assertTrue(self.admin.has_manage_scanner_permission(Mock(user=superuser)))
+        self.assertFalse(self.admin.has_manage_scanner_permission(Mock(user=staff)))
+        for action_name in (
+            "enable_selected_scanners",
+            "disable_selected_scanners",
+            "sync_selected_to_latest",
+        ):
+            action = getattr(self.admin, action_name)
+            self.assertEqual(list(action.allowed_permissions), ["manage_scanner"])
+
+    def test_sync_selected_to_latest_moves_cursor_to_chain_head_and_clears_error(self):
+        self.admin.sync_selected_to_latest(
+            Mock(), Chain.objects.filter(pk=self.chain.pk)
+        )
+
+        self.chain.refresh_from_db()
+        self.assertEqual(self.chain.scan_cursor_block, 500)
+        self.assertEqual(self.chain.scan_last_error, "")
+        self.assertIsNone(self.chain.scan_last_error_at)
+
+    def test_editing_chain_does_not_overwrite_scanner_progress(self):
+        # 后台读出链之后、保存之前，扫描器推进了链高与位点、超管暂停了扫描；
+        # 保存链配置不得把这些字段写回请求开始时读到的旧值。
+        obj = Chain.objects.get(pk=self.chain.pk)
+        Chain.objects.filter(pk=self.chain.pk).update(
+            latest_block_number=600,
+            scan_cursor_block=200,
+            scan_enabled=False,
+        )
+
+        obj.sort_order = 5
+        self.admin.save_model(
+            Mock(), obj, Mock(changed_data=["sort_order"]), change=True
+        )
+
+        self.chain.refresh_from_db()
+        self.assertEqual(self.chain.sort_order, 5)
+        self.assertEqual(self.chain.latest_block_number, 600)
+        self.assertEqual(self.chain.scan_cursor_block, 200)
+        self.assertFalse(self.chain.scan_enabled)
 
 
 class TxTaskValidationTests(TestCase):

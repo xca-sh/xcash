@@ -253,7 +253,7 @@ class ChainLoop:
         """扫描一轮后立即推进 last_scanned_at。
 
         与原 Celery 扫描任务的 finally 语义一致：无论成败都推进，按固定周期重试，失败
-        是否持续由游标 last_error 体现给 /health/scanning。放在扫描步骤之后而不是整轮
+        是否持续由 Chain.scan_last_error 体现给 /health/scanning。放在扫描步骤之后而不是整轮
         之后：它表示「扫描完成于」，不应被同链轮询与派发的耗时推迟。
         """
         self.run_step(chain, "scan", family.scan_round, SCAN_ROUND_BUDGET_SECONDS)

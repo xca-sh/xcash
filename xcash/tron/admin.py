@@ -1,24 +1,16 @@
 from django.contrib import admin
-from django.db.models import F
-from django.db.models.functions import Greatest
 from django.utils import timezone
 from django.utils.formats import date_format
 from django.utils.translation import gettext_lazy as _
-from tron.client import TronHttpClient
 from tron.models import TronTxTask
-from tron.models import TronWatchCursor
 from unfold.contrib.filters.admin import ChoicesDropdownFilter
 from unfold.contrib.filters.admin import RangeDateTimeFilter
 from unfold.contrib.filters.admin import RelatedDropdownFilter
 from unfold.decorators import display
 
 from chains.admin import TX_TASK_STATUS_LABELS
-from chains.models import Chain
 from common import admin_display as fmt
 from common.admin import ReadOnlyModelAdmin
-from common.admin_scan_cursor import SCAN_LAG_LABELS
-from common.admin_scan_cursor import SyncScanCursorToLatestActionMixin
-from common.admin_scan_cursor import scan_lag_state
 
 
 @admin.register(TronTxTask)
@@ -194,139 +186,3 @@ class TronTxTaskAdmin(ReadOnlyModelAdmin):
     @display(description=_("网络"), ordering="chain__code")
     def display_chain(self, obj: TronTxTask):  # pragma: no cover
         return obj.chain
-
-
-@admin.register(TronWatchCursor)
-class TronWatchCursorAdmin(SyncScanCursorToLatestActionMixin, ReadOnlyModelAdmin):
-    actions = (
-        "enable_selected_scanners",
-        "disable_selected_scanners",
-        "sync_selected_to_latest",
-    )
-    ordering = ("-created_at",)
-    list_display = (
-        "display_chain",
-        "display_enabled",
-        "display_lag_state",
-        "display_chain_latest_block",
-        "display_last_scanned_block",
-        "display_scan_gap",
-        "display_error_state",
-        "display_error_summary",
-        "updated_at",
-    )
-    list_filter = ("enabled", ("chain", RelatedDropdownFilter))
-    search_fields = ("chain__code", "last_error")
-    search_help_text = _("支持按链代码或错误信息搜索")
-    list_select_related = ("chain",)
-    readonly_fields = (
-        "chain",
-        "enabled",
-        "display_last_scanned_block",
-        "display_chain_latest_block",
-        "display_scan_gap",
-        "display_lag_text",
-        "display_last_error",
-        "last_error_at",
-        "updated_at",
-        "created_at",
-    )
-    fieldsets = (
-        (
-            _("扫描位点"),
-            {
-                "fields": (
-                    "chain",
-                    "enabled",
-                    "display_lag_text",
-                    "display_last_scanned_block",
-                    "display_chain_latest_block",
-                    "display_scan_gap",
-                ),
-                "description": _(
-                    "游标单调前进且没有回补机制：把位点直接推到链头会永久跳过区间内的充值，"
-                    "仅在明确知道后果时使用「追平到最新区块」。"
-                ),
-            },
-        ),
-        (
-            _("最近异常"),
-            {
-                "fields": (
-                    "display_last_error",
-                    "last_error_at",
-                    "updated_at",
-                    "created_at",
-                )
-            },
-        ),
-    )
-
-    def get_sync_latest_block(self, *, chain: Chain) -> int:
-        latest_block = TronHttpClient(chain=chain).get_latest_solid_block_number()
-        Chain.objects.filter(pk=chain.pk).update(
-            latest_block_number=Greatest(F("latest_block_number"), latest_block)
-        )
-        chain.refresh_from_db(fields=["latest_block_number"])
-        return chain.latest_block_number
-
-    @display(description=_("网络"), ordering="chain__code")
-    def display_chain(self, obj: TronWatchCursor):  # pragma: no cover
-        return obj.chain
-
-    @display(
-        description=_("启用"),
-        ordering="enabled",
-        label={
-            "yes": "success",
-            "no": "danger",
-        },
-    )
-    def display_enabled(self, obj: TronWatchCursor) -> str:
-        return ("yes", _("是")) if obj.enabled else ("no", _("否"))
-
-    @display(description=_("链上最新块"))
-    def display_chain_latest_block(self, obj: TronWatchCursor):  # pragma: no cover
-        return fmt.number(obj.chain.latest_block_number)
-
-    @display(description=_("已扫描到"), ordering="last_scanned_block")
-    def display_last_scanned_block(self, obj: TronWatchCursor):
-        return fmt.number(obj.last_scanned_block)
-
-    @display(description=_("落后区块"))
-    def display_scan_gap(self, obj: TronWatchCursor):
-        return fmt.number(
-            max(obj.chain.latest_block_number - obj.last_scanned_block, 0)
-        )
-
-    @display(description=_("积压"), label=SCAN_LAG_LABELS)
-    def display_lag_state(self, obj: TronWatchCursor) -> str:
-        return scan_lag_state(
-            max(obj.chain.latest_block_number - obj.last_scanned_block, 0)
-        )
-
-    @display(
-        description=_("扫描状态"),
-        label={
-            "normal": "success",
-            "error": "danger",
-        },
-    )
-    def display_error_state(self, obj: TronWatchCursor) -> str:
-        return ("error", _("异常")) if obj.last_error else ("normal", _("正常"))
-
-    @display(description=_("积压"))
-    def display_lag_text(self, obj: TronWatchCursor) -> str:
-        return scan_lag_state(
-            max(obj.chain.latest_block_number - obj.last_scanned_block, 0)
-        )[1]
-
-    @display(description=_("错误摘要"))
-    def display_error_summary(self, obj: TronWatchCursor) -> str:
-        if not obj.last_error:
-            return fmt.empty()
-        return obj.last_error[:60]
-
-    @display(description=_("最近错误"))
-    def display_last_error(self, obj: TronWatchCursor):
-        return fmt.scroll_box(obj.last_error)

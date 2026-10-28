@@ -16,7 +16,6 @@ from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from currencies.models import CryptoOnChain
-from evm.models import EvmScanCursor
 from evm.scanner.constants import ERC20_TRANSFER_TOPIC0
 from evm.scanner.constants import XCASH_NATIVE_RECEIVED_TOPIC0
 from evm.scanner.logs import EvmLogScanner
@@ -159,10 +158,9 @@ class EvmLogScannerTests(TestCase):
 
         result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
-        self.assertEqual(EvmScanCursor.objects.filter(chain=self.chain).count(), 1)
-        cursor = EvmScanCursor.objects.get(chain=self.chain)
+        self.chain.refresh_from_db()
         # 首扫锚定链头：latest=100 时仅观测最新确认块 99。
-        self.assertEqual(cursor.last_scanned_block, 99)
+        self.assertEqual(self.chain.scan_cursor_block, 99)
         self.assertIsNone(result)
         self.assertEqual(Transfer.objects.count(), 2)
         log_calls = [call.kwargs for call in get_logs_mock.call_args_list]
@@ -202,9 +200,9 @@ class EvmLogScannerTests(TestCase):
 
         result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
-        cursor = EvmScanCursor.objects.get(chain=self.chain)
+        self.chain.refresh_from_db()
         # 首扫锚定链头：latest=120 时仅观测最新确认块 119。
-        self.assertEqual(cursor.last_scanned_block, 119)
+        self.assertEqual(self.chain.scan_cursor_block, 119)
         self.assertIsNone(result)
         get_logs_mock.assert_has_calls(
             [

@@ -29,42 +29,6 @@ EVM_INITIAL_GAS_PRICE_MULTIPLIER_BPS = 10500
 BPS_DENOMINATOR = 10000
 
 
-class EvmScanCursor(models.Model):
-    """记录某条 EVM 链上日志扫描器的推进位置与最近错误。
-
-    设计原则：
-    - 每条 EVM 链只维护一个日志扫描游标。
-    - last_scanned_block 记录 EVM 日志扫描已经推进到的最高块高。
-    """
-
-    chain = models.ForeignKey(
-        "chains.Chain",
-        on_delete=models.CASCADE,
-        related_name="evm_scan_cursors",
-        verbose_name=_("链"),
-    )
-    last_scanned_block = models.PositiveIntegerField(_("已扫描到的区块"), default=0)
-    enabled = models.BooleanField(_("启用"), default=True)
-    last_error = models.TextField(_("最近错误"), blank=True, default="")
-    last_error_at = models.DateTimeField(_("最近错误时间"), blank=True, null=True)
-    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
-    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=("chain",),
-                name="uniq_evm_scan_cursor_chain",
-            ),
-        ]
-        ordering = ("chain_id",)
-        verbose_name = _("EVM 扫描游标")
-        verbose_name_plural = verbose_name
-
-    def __str__(self) -> str:
-        return self.chain.code
-
-
 class EvmTxTask(UndeletableModel):
     # base_task 是跨链统一锚点；EVM 子表继续保存 nonce/gas/data 等链特有执行参数。
     base_task = models.OneToOneField(

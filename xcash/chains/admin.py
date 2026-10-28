@@ -1,8 +1,7 @@
 from django import forms
 from django.contrib import admin
 from django.contrib import messages
-from django.urls import reverse
-from django.utils.html import format_html
+from django.db.models import F
 from django.utils.translation import gettext_lazy as _
 from unfold.contrib.filters.admin import ChoicesDropdownFilter
 from unfold.contrib.filters.admin import RangeDateTimeFilter
@@ -27,8 +26,6 @@ from common import admin_display as fmt
 from common.admin import ModelAdmin
 from common.admin import ReadOnlyModelAdmin
 from common.admin import TabularInline
-from common.admin_scan_cursor import SCAN_LAG_LABELS
-from common.admin_scan_cursor import scan_lag_state
 
 # Register your models here.
 
@@ -48,12 +45,25 @@ class ChainAdminForm(forms.ModelForm):
         fields = "__all__"  # noqa: DJ007
 
 
-# 各链族扫描游标挂在 Chain 上的反向关系名与后台详情路由。按字符串引用，
-# 保持 chains 不 import evm / tron（分层契约见 pyproject.toml 的 [tool.importlinter]）。
-SCAN_CURSOR_RELATIONS = {
-    ChainType.EVM: ("evm_scan_cursors", "admin:evm_evmscancursor_change"),
-    ChainType.TRON: ("tron_watch_cursors", "admin:tron_tronwatchcursor_change"),
+# 扫描位点落后链头的积压判据，EVM 与 Tron 共用同一套分级与配色。
+SCAN_LAG_MINOR_BLOCKS = 16
+SCAN_LAG_SEVERE_BLOCKS = 128
+
+SCAN_LAG_LABELS = {
+    "normal": "success",
+    "minor": "warning",
+    "severe": "danger",
 }
+
+
+def scan_lag_state(gap: int) -> tuple[str, str]:
+    """把落后区块数映射为展示用的积压级别。"""
+    if gap >= SCAN_LAG_SEVERE_BLOCKS:
+        return ("severe", _("严重"))
+    if gap >= SCAN_LAG_MINOR_BLOCKS:
+        return ("minor", _("轻微"))
+    return ("normal", _("正常"))
+
 
 SCANNER_STATE_LABELS = {
     **SCAN_LAG_LABELS,
@@ -77,9 +87,14 @@ class ChainAdmin(ModelAdmin):
         "active",
     )
     list_editable = ("active",)
-    list_filter = ("active", "is_testnet")
+    list_filter = ("active", "is_testnet", "scan_enabled")
     search_fields = ("code",)
     search_help_text = _("支持按链代码搜索")
+    actions = (
+        "enable_selected_scanners",
+        "disable_selected_scanners",
+        "sync_selected_to_latest",
+    )
     readonly_fields = (
         "display_scanner_state_text",
         "display_scanned_block",
@@ -87,33 +102,67 @@ class ChainAdmin(ModelAdmin):
         "display_scan_gap",
         "display_scanner_error",
         "display_scanner_error_at",
-        "display_scanner_link",
     )
 
-    def get_queryset(self, request):
-        # 列表页每行都要读扫描游标，预取避免 N+1。
-        return (
-            super()
-            .get_queryset(request)
-            .prefetch_related(
-                *(relation for relation, _url in SCAN_CURSOR_RELATIONS.values())
-            )
+    def save_model(self, request, obj, form, change):
+        # 扫描器在后台持续推进 latest_block_number 与 scan_* 字段；整行 save 会把本次
+        # 请求读到的旧值写回，回退扫描位点或撤销刚执行的启停。编辑时只写表单字段。
+        if change:
+            obj.save(update_fields=form.changed_data)
+            return
+        super().save_model(request, obj, form, change)
+
+    def has_manage_scanner_permission(self, request) -> bool:
+        # 启停/追平扫描直接改动资金入账的扫描位点：暂停会停止充值/归集确认入账，
+        # 「追平到最新区块」会把位点直接跳到链头、跳过区间内的充值永久漏账（位点单调
+        # 前进、无回补机制）。属系统级治理操作，收口到超管，不能靠 change 权限放行，
+        # 与 chains.requeue / SystemSettings 口径一致。
+        return bool(request.user.is_active and request.user.is_superuser)
+
+    @admin.action(
+        description=_("启用所选链的扫描"),
+        permissions=["manage_scanner"],
+    )
+    def enable_selected_scanners(self, request, queryset) -> None:
+        updated_count = queryset.update(scan_enabled=True)
+        self.message_user(
+            request,
+            _("已启用 %(count)d 条链的扫描") % {"count": updated_count},
+            level=messages.SUCCESS,
+        )
+
+    @admin.action(
+        description=_("暂停所选链的扫描"),
+        permissions=["manage_scanner"],
+    )
+    def disable_selected_scanners(self, request, queryset) -> None:
+        updated_count = queryset.update(scan_enabled=False)
+        self.message_user(
+            request,
+            _("已暂停 %(count)d 条链的扫描") % {"count": updated_count},
+            level=messages.SUCCESS,
+        )
+
+    @admin.action(
+        description=_("扫描位点追平到最新区块"),
+        permissions=["manage_scanner"],
+    )
+    def sync_selected_to_latest(self, request, queryset) -> None:
+        # 以扫描器最近一轮刷新的链高为准：它不会超过真实链头，追平后不会多跳区块。
+        updated_count = queryset.update(
+            scan_cursor_block=F("latest_block_number"),
+            scan_last_error="",
+            scan_last_error_at=None,
+        )
+        self.message_user(
+            request,
+            _("已将 %(count)d 条链的扫描位点追平到最新区块") % {"count": updated_count},
+            level=messages.SUCCESS,
         )
 
     @staticmethod
-    def scan_cursor(obj: Chain):
-        """返回本链的扫描游标；每条链至多一个，尚未初始化时为 None。"""
-        relation = SCAN_CURSOR_RELATIONS.get(obj.type)
-        if relation is None or obj.pk is None:
-            return None
-        # 走 .all() 才能命中 get_queryset 的预取缓存。
-        return next(iter(getattr(obj, relation[0]).all()), None)
-
-    def scan_gap(self, obj: Chain) -> int | None:
-        cursor = self.scan_cursor(obj)
-        if cursor is None:
-            return None
-        return max(obj.latest_block_number - cursor.last_scanned_block, 0)
+    def scan_gap(obj: Chain) -> int:
+        return max(obj.latest_block_number - obj.scan_cursor_block, 0)
 
     @display(description=_("链"), ordering="code", header=True)
     def display_identity(self, obj: Chain) -> tuple:
@@ -129,13 +178,12 @@ class ChainAdmin(ModelAdmin):
 
     @display(description=_("扫描器"), label=SCANNER_STATE_LABELS)
     def display_scanner_state(self, obj: Chain) -> tuple:
-        # 优先级：未初始化 > 已暂停 > 最近报错 > 积压级别，取最需要运维关注的一项。
-        cursor = self.scan_cursor(obj)
-        if cursor is None:
-            return ("missing", _("未初始化"))
-        if not cursor.enabled:
+        # 优先级：已暂停 > 未初始化 > 最近报错 > 积压级别，取最需要运维关注的一项。
+        if not obj.scan_enabled:
             return ("paused", _("已暂停"))
-        if cursor.last_error:
+        if obj.scan_cursor_block == 0:
+            return ("missing", _("未初始化"))
+        if obj.scan_last_error:
             return ("error", _("异常"))
         return scan_lag_state(self.scan_gap(obj))
 
@@ -144,10 +192,9 @@ class ChainAdmin(ModelAdmin):
         # unfold 的 label 只在列表页渲染成标签，详情页只读字段需要纯文本。
         return self.display_scanner_state(obj)[1]
 
-    @display(description=_("已扫描到"))
+    @display(description=_("已扫描到"), ordering="scan_cursor_block")
     def display_scanned_block(self, obj: Chain):
-        cursor = self.scan_cursor(obj)
-        return fmt.number(cursor.last_scanned_block if cursor else None)
+        return fmt.number(obj.scan_cursor_block)
 
     @display(description=_("落后区块"))
     def display_scan_gap(self, obj: Chain):
@@ -155,27 +202,11 @@ class ChainAdmin(ModelAdmin):
 
     @display(description=_("最近错误"))
     def display_scanner_error(self, obj: Chain):
-        cursor = self.scan_cursor(obj)
-        return fmt.scroll_box(cursor.last_error if cursor else None)
+        return fmt.scroll_box(obj.scan_last_error)
 
     @display(description=_("最近错误时间"))
     def display_scanner_error_at(self, obj: Chain):
-        cursor = self.scan_cursor(obj)
-        if cursor is None or cursor.last_error_at is None:
-            return fmt.empty()
-        return cursor.last_error_at
-
-    @display(description=_("游标管理"))
-    def display_scanner_link(self, obj: Chain):
-        cursor = self.scan_cursor(obj)
-        if cursor is None:
-            return fmt.empty()
-        url = reverse(SCAN_CURSOR_RELATIONS[obj.type][1], args=[cursor.pk])
-        return format_html(
-            '<a class="text-primary-600 dark:text-primary-400" href="{}">{}</a>',
-            url,
-            _("启停 / 追平扫描游标"),
-        )
+        return obj.scan_last_error_at or fmt.empty()
 
     base_fieldsets = (
         (
@@ -226,7 +257,10 @@ class ChainAdmin(ModelAdmin):
                     "display_scan_gap",
                     "display_scanner_error",
                     "display_scanner_error_at",
-                    "display_scanner_link",
+                ),
+                "description": _(
+                    "扫描位点单调前进且没有回补机制：把位点直接推到链头会永久跳过区间内的"
+                    "充值，仅在明确知道后果时使用「扫描位点追平到最新区块」。"
                 ),
             },
         ),

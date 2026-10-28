@@ -17,9 +17,7 @@ from chains.models import TxTask
 from chains.models import TxTaskStatus
 from chains.models import TxTaskType
 from chains.models import Wallet
-from evm.admin import EvmScanCursorAdmin
 from evm.admin import EvmTxTaskAdmin
-from evm.models import EvmScanCursor
 from evm.models import EvmTxTask
 from evm.tests._fixtures import make_evm_chain
 
@@ -138,31 +136,3 @@ class EvmTxTaskAdminActionTests(TestCase):
         self.assertFalse(
             self.admin.has_mark_queued_failed_permission(Mock(user=auditor))
         )
-
-
-class EvmScanCursorAdminTests(SimpleTestCase):
-    def setUp(self):
-        self.admin = EvmScanCursorAdmin(EvmScanCursor, AdminSite())
-
-    def test_scan_cursor_admin_disallows_delete(self):
-        self.assertIn("has_delete_permission", EvmScanCursorAdmin.__dict__)
-        request = Mock()
-
-        self.assertFalse(self.admin.has_delete_permission(request, obj=None))
-        self.assertFalse(self.admin.has_delete_permission(request, obj=object()))
-
-    def test_scan_cursor_actions_are_superuser_only(self):
-        # 启停/追平游标会改动资金入账扫描位点，权限必须收口到超管而非 view 只读。
-        superuser = Mock(is_active=True, is_superuser=True)
-        auditor = Mock(is_active=True, is_superuser=False)
-        self.assertTrue(
-            self.admin.has_sync_scan_cursor_permission(Mock(user=superuser))
-        )
-        self.assertFalse(self.admin.has_sync_scan_cursor_permission(Mock(user=auditor)))
-        for action_name in (
-            "enable_selected_scanners",
-            "disable_selected_scanners",
-            "sync_selected_to_latest",
-        ):
-            action = getattr(EvmScanCursorAdmin, action_name)
-            self.assertEqual(list(action.allowed_permissions), ["sync_scan_cursor"])

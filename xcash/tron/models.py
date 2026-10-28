@@ -43,43 +43,6 @@ TRON_SIMULATION_REVERT_FAIL_MIN_COUNT = 5
 TRON_SIMULATION_REVERT_FAIL_MIN_WINDOW = timedelta(hours=4)
 
 
-class TronWatchCursor(models.Model):
-    """记录某条 Tron 链上资产扫描器的推进位置与最近错误。
-
-    设计原则（与 EvmScanCursor 对齐）：
-    - 每条 Tron 链只维护一个扫描游标；本链所有 TRC20 与原生 TRX（CryptoOnChain）
-      在同一条区块进度上逐块扫描，故不再按合约地址或资产拆分游标。
-    - last_scanned_block 记录已扫描推进到的最高块高。
-    """
-
-    chain = models.ForeignKey(
-        "chains.Chain",
-        on_delete=models.CASCADE,
-        related_name="tron_watch_cursors",
-        verbose_name=_("链"),
-    )
-    last_scanned_block = models.PositiveIntegerField(_("已扫描到的区块"), default=0)
-    enabled = models.BooleanField(_("启用"), default=True)
-    last_error = models.CharField(_("最近错误"), max_length=255, blank=True, default="")
-    last_error_at = models.DateTimeField(_("最近错误时间"), blank=True, null=True)
-    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
-    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=("chain",),
-                name="uniq_tron_watch_cursor_chain",
-            ),
-        ]
-        ordering = ("chain_id",)
-        verbose_name = _("Tron 扫描游标")
-        verbose_name_plural = verbose_name
-
-    def __str__(self) -> str:
-        return self.chain.code
-
-
 class TronTxTask(UndeletableModel):
     """Tron 主动链上任务。
 

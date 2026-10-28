@@ -27,7 +27,6 @@ from chains.runner import ChainLoop
 from core.models import SYSTEM_SETTINGS_CACHE_KEY
 from currencies.models import Crypto
 from currencies.models import CryptoOnChain
-from evm.models import EvmScanCursor
 from evm.models import EvmTxTask
 from evm.scanner.logs import EvmLogScanner
 from evm.scanner.rpc import EvmScannerRpcError
@@ -51,9 +50,8 @@ def create_active_evm_test_chain(*, code=ChainCode.BSC) -> Chain:
 class EvmErc20ScanWindowTests(SimpleTestCase):
     def test_erc20_compute_scan_window_initial_cursor_anchors_to_chain_head(self):
         # 新建游标只从当前链头开始观测，绝不从创世块全量回扫历史日志。
-        cursor = EvmScanCursor(last_scanned_block=0)
         from_block, to_block = EvmLogScanner._compute_scan_window(
-            cursor=cursor,
+            scanned_block=0,
             latest_block=2000,
             batch_size=100,
         )
@@ -62,9 +60,8 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
         self.assertEqual(to_block, 1999)
 
     def test_erc20_compute_scan_window_batch_size_is_net_forward_progress(self):
-        cursor = EvmScanCursor(last_scanned_block=1000)
         from_block, to_block = EvmLogScanner._compute_scan_window(
-            cursor=cursor,
+            scanned_block=1000,
             latest_block=2000,
             batch_size=100,
         )
@@ -73,9 +70,8 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
         self.assertEqual(to_block, 1100)
 
     def test_erc20_compute_scan_window_caps_to_latest_when_near_chain_head(self):
-        cursor = EvmScanCursor(last_scanned_block=1990)
         from_block, to_block = EvmLogScanner._compute_scan_window(
-            cursor=cursor,
+            scanned_block=1990,
             latest_block=2000,
             batch_size=100,
         )
@@ -84,9 +80,8 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
         self.assertEqual(to_block, 1999)
 
     def test_erc20_compute_scan_window_replay_never_goes_below_first_block(self):
-        cursor = EvmScanCursor(last_scanned_block=1)
         from_block, to_block = EvmLogScanner._compute_scan_window(
-            cursor=cursor,
+            scanned_block=1,
             latest_block=10,
             batch_size=3,
         )
@@ -95,9 +90,8 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
         self.assertEqual(to_block, 4)
 
     def test_erc20_compute_scan_window_returns_none_when_latest_block_is_zero(self):
-        cursor = EvmScanCursor(last_scanned_block=0)
         scan_window = EvmLogScanner._compute_scan_window(
-            cursor=cursor,
+            scanned_block=0,
             latest_block=0,
             batch_size=100,
         )
@@ -105,9 +99,8 @@ class EvmErc20ScanWindowTests(SimpleTestCase):
         self.assertIsNone(scan_window)
 
     def test_erc20_compute_scan_window_returns_none_when_cursor_is_ahead_of_chain(self):
-        cursor = EvmScanCursor(last_scanned_block=1000)
         scan_window = EvmLogScanner._compute_scan_window(
-            cursor=cursor,
+            scanned_block=1000,
             latest_block=900,
             batch_size=100,
         )
@@ -257,10 +250,8 @@ class EvmErc20ScannerTests(TestCase):
 
         EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
-        cursor = EvmScanCursor.objects.get(
-            chain=self.chain,
-        )
-        self.assertEqual(cursor.last_scanned_block, 99)
+        self.chain.refresh_from_db()
+        self.assertEqual(self.chain.scan_cursor_block, 99)
 
     @patch("chains.service.TransferService.enqueue_processing")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_transaction_receipt")
@@ -294,9 +285,7 @@ class EvmErc20ScannerTests(TestCase):
         result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
         transfer = Transfer.objects.get()
-        cursor = EvmScanCursor.objects.get(
-            chain=self.chain,
-        )
+        self.chain.refresh_from_db()
 
         self.assertIsNone(result)
         self.assertEqual(transfer.hash, "0x" + "ab" * 32)
@@ -304,7 +293,7 @@ class EvmErc20ScannerTests(TestCase):
             transfer.to_address, Web3.to_checksum_address(self.vault_slot.address)
         )
         self.assertEqual(transfer.amount, Decimal("1"))
-        self.assertEqual(cursor.last_scanned_block, 99)
+        self.assertEqual(self.chain.scan_cursor_block, 99)
 
     @patch("chains.service.TransferService.create_observed_transfer")
     def test_scan_range_skips_malformed_erc20_logs_without_blocking_batch(
@@ -580,7 +569,7 @@ class EvmErc20ScannerTests(TestCase):
         get_transaction_receipt_mock,
     ):
         # 端到端护栏：receipt 不可见时游标必须停在原处，下一轮才能重扫补回该入账。
-        EvmScanCursor.objects.create(chain=self.chain, last_scanned_block=90)
+        self.chain.reset_scan_cursor(90)
         get_latest_block_number_mock.return_value = 100
         get_block_timestamp_mock.return_value = 1_700_000_000
         transfer_log = self._build_transfer_log(
@@ -595,9 +584,9 @@ class EvmErc20ScannerTests(TestCase):
         with self.assertRaises(EvmScannerRpcError):
             EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
-        cursor = EvmScanCursor.objects.get(chain=self.chain)
-        self.assertEqual(cursor.last_scanned_block, 90)
-        self.assertNotEqual(cursor.last_error, "")
+        self.chain.refresh_from_db()
+        self.assertEqual(self.chain.scan_cursor_block, 90)
+        self.assertNotEqual(self.chain.scan_last_error, "")
         self.assertFalse(Transfer.objects.exists())
 
     @patch("evm.scanner.observed_transfers.TransferService.create_observed_transfer")
@@ -669,7 +658,7 @@ class EvmErc20ScannerTests(TestCase):
         # 游标供 /health/scanning 告警，绝不能当毒事件跳过后推进游标永久漏账。
         from procrastinate.exceptions import ConnectorException
 
-        EvmScanCursor.objects.create(chain=self.chain, last_scanned_block=90)
+        self.chain.reset_scan_cursor(90)
         get_latest_block_number_mock.return_value = 100
         get_block_timestamp_mock.return_value = 1_700_000_000
         transfer_log = self._build_transfer_log(
@@ -684,9 +673,9 @@ class EvmErc20ScannerTests(TestCase):
             EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
         enqueue_processing_mock.assert_called_once()
-        cursor = EvmScanCursor.objects.get(chain=self.chain)
-        self.assertEqual(cursor.last_scanned_block, 90)
-        self.assertIsNotNone(cursor.last_error_at)
+        self.chain.refresh_from_db()
+        self.assertEqual(self.chain.scan_cursor_block, 90)
+        self.assertIsNotNone(self.chain.scan_last_error_at)
         self.assertFalse(Transfer.objects.exists())
 
     @patch("evm.scanner.observed_transfers.TransferService.create_observed_transfer")
@@ -954,13 +943,11 @@ class EvmErc20ScannerTests(TestCase):
         first = EvmLogScanner.scan_chain(chain=self.chain, batch_size=100)
         second = EvmLogScanner.scan_chain(chain=self.chain, batch_size=100)
 
-        cursor = EvmScanCursor.objects.get(
-            chain=self.chain,
-        )
+        self.chain.refresh_from_db()
         self.assertIsNone(first)
         self.assertIsNone(second)
         self.assertEqual(Transfer.objects.count(), 1)
-        self.assertEqual(cursor.last_scanned_block, 99)
+        self.assertEqual(self.chain.scan_cursor_block, 99)
 
     @patch(
         "currencies.models.Crypto.get_decimals",
@@ -1063,8 +1050,7 @@ class EvmErc20ScannerTests(TestCase):
         # 任何一次请求越过 evm_log_max_block_range 都会被节点按跨度上限拒绝。
         Chain.objects.filter(pk=self.chain.pk).update(evm_log_max_block_range=10)
         self.chain.refresh_from_db(fields=["evm_log_max_block_range"])
-        EvmScanCursor.objects.filter(chain=self.chain).delete()
-        EvmScanCursor.objects.create(chain=self.chain, last_scanned_block=100)
+        self.chain.reset_scan_cursor(100)
         get_latest_block_number_mock.return_value = 126
         get_logs_mock.return_value = []
 
@@ -1095,8 +1081,7 @@ class EvmErc20ScannerTests(TestCase):
         # 走 queryset.update 绕开 Chain.full_clean 的 RPC 连通性校验（测试无真实节点）。
         Chain.objects.filter(pk=self.chain.pk).update(evm_log_max_block_range=10)
         self.chain.refresh_from_db(fields=["evm_log_max_block_range"])
-        EvmScanCursor.objects.filter(chain=self.chain).delete()
-        EvmScanCursor.objects.create(chain=self.chain, last_scanned_block=100)
+        self.chain.reset_scan_cursor(100)
         get_latest_block_number_mock.return_value = 200
 
         # 第三个 chunk（from_block=117 起）开始中断，前两段应已落盘。
@@ -1110,10 +1095,10 @@ class EvmErc20ScannerTests(TestCase):
         with self.assertRaises(EvmScannerRpcError):
             EvmLogScanner.scan_chain(chain=self.chain, batch_size=100)
 
-        cursor = EvmScanCursor.objects.get(chain=self.chain)
-        self.assertEqual(cursor.last_scanned_block, 116)
-        self.assertIsNotNone(cursor.last_error_at)
-        self.assertIn("node timeout", cursor.last_error)
+        self.chain.refresh_from_db()
+        self.assertEqual(self.chain.scan_cursor_block, 116)
+        self.assertIsNotNone(self.chain.scan_last_error_at)
+        self.assertIn("node timeout", self.chain.scan_last_error)
 
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs", return_value=[])
     @patch(
@@ -1133,8 +1118,7 @@ class EvmErc20ScannerTests(TestCase):
 
         Chain.objects.filter(pk=self.chain.pk).update(evm_log_max_block_range=10)
         self.chain.refresh_from_db(fields=["evm_log_max_block_range"])
-        EvmScanCursor.objects.filter(chain=self.chain).delete()
-        EvmScanCursor.objects.create(chain=self.chain, last_scanned_block=100)
+        self.chain.reset_scan_cursor(100)
 
         with self.assertRaises(ScanRoundBudgetExceeded):
             EvmLogScanner.scan_chain(
@@ -1145,10 +1129,10 @@ class EvmErc20ScannerTests(TestCase):
         self.assertEqual(
             {call.kwargs["from_block"] for call in get_logs_mock.call_args_list}, {97}
         )
-        cursor = EvmScanCursor.objects.get(chain=self.chain)
-        self.assertEqual(cursor.last_scanned_block, 106)
-        self.assertIsNotNone(cursor.last_error_at)
-        self.assertIn("ScanRoundBudgetExceeded", cursor.last_error)
+        self.chain.refresh_from_db()
+        self.assertEqual(self.chain.scan_cursor_block, 106)
+        self.assertIsNotNone(self.chain.scan_last_error_at)
+        self.assertIn("ScanRoundBudgetExceeded", self.chain.scan_last_error)
 
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number")
@@ -1163,11 +1147,9 @@ class EvmErc20ScannerTests(TestCase):
 
         result = EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
-        cursor = EvmScanCursor.objects.get(
-            chain=self.chain,
-        )
+        self.chain.refresh_from_db()
         self.assertIsNone(result)
-        self.assertEqual(cursor.last_scanned_block, 99)
+        self.assertEqual(self.chain.scan_cursor_block, 99)
         self.assertEqual(get_logs_mock.call_count, 1)
         self.assertIsNone(get_logs_mock.call_args.kwargs["addresses"])
 
@@ -1181,7 +1163,7 @@ class EvmErc20ScannerTests(TestCase):
         # 扫描链路只接受更高链高，避免异常 RPC / 节点回退把确认进度倒拨。
         Chain.objects.filter(pk=self.chain.pk).update(latest_block_number=200)
         self.chain.refresh_from_db()
-        EvmScanCursor.objects.create(chain=self.chain, last_scanned_block=100)
+        self.chain.reset_scan_cursor(100)
         get_latest_block_number_mock.return_value = 120
         get_logs_mock.return_value = []
 
@@ -1409,24 +1391,6 @@ class EvmErc20ScannerTests(TestCase):
         self.assertIn(self.vault_slot.address, owned_addresses)
         self.assertNotIn(self.addr.address, owned_addresses)
 
-    def test_erc20_cursor_advance_never_rewinds_database_value(self):
-        cursor = EvmScanCursor.objects.create(
-            chain=self.chain,
-            last_scanned_block=100,
-        )
-        stale_cursor = EvmScanCursor.objects.get(pk=cursor.pk)
-        EvmScanCursor.objects.filter(pk=cursor.pk).update(
-            last_scanned_block=150,
-        )
-
-        EvmLogScanner._advance_cursor(
-            cursor=stale_cursor,
-            scanned_to_block=120,
-        )
-
-        cursor.refresh_from_db()
-        self.assertEqual(cursor.last_scanned_block, 150)
-
     @patch(
         "evm.scanner.logs.EvmScannerRpcClient.get_latest_block_number",
         side_effect=EvmScannerRpcError("rpc timeout"),
@@ -1438,12 +1402,10 @@ class EvmErc20ScannerTests(TestCase):
         with self.assertRaises(EvmScannerRpcError):
             EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
-        cursor = EvmScanCursor.objects.get(
-            chain=self.chain,
-        )
-        self.assertEqual(cursor.last_scanned_block, 0)
-        self.assertEqual(cursor.last_error, "rpc timeout")
-        self.assertIsNotNone(cursor.last_error_at)
+        self.chain.refresh_from_db()
+        self.assertEqual(self.chain.scan_cursor_block, 0)
+        self.assertEqual(self.chain.scan_last_error, "rpc timeout")
+        self.assertIsNotNone(self.chain.scan_last_error_at)
 
     def test_erc20_scan_records_full_cursor_error_when_rpc_error_is_long(self):
         # RPC 供应商返回的长错误通常包含限制规则和建议查询范围，游标必须完整保留。
@@ -1458,10 +1420,8 @@ class EvmErc20ScannerTests(TestCase):
         ):
             EvmLogScanner.scan_chain(chain=self.chain, batch_size=32)
 
-        cursor = EvmScanCursor.objects.get(
-            chain=self.chain,
-        )
-        self.assertEqual(cursor.last_error, long_error)
+        self.chain.refresh_from_db()
+        self.assertEqual(self.chain.scan_last_error, long_error)
 
     @patch("chains.service.TransferService.create_observed_transfer")
     @patch("evm.scanner.logs.EvmScannerRpcClient.get_logs")

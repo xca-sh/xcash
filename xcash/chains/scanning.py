@@ -25,7 +25,7 @@ class ScanRoundBudgetExceeded(Exception):  # noqa: N818
     """本轮扫描已耗尽时间预算。"""
 
     def __init__(self):
-        # 游标 last_error 直接存 str(exc)，带上类名便于运维从后台一眼认出失败类型。
+        # Chain.scan_last_error 直接存 str(exc)，带上类名便于运维从后台一眼认出失败类型。
         super().__init__(
             "ScanRoundBudgetExceeded: 本轮扫描超出时间预算，剩余区块留待下一轮"
         )

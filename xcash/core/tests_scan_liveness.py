@@ -6,9 +6,9 @@ from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 from tron.client import TronClientError
-from tron.models import TronWatchCursor
 
 from chains.constants import ChainCode
+from chains.models import Chain
 from chains.models import ConfirmMode
 from chains.models import Transfer
 from chains.runner import ChainLoop
@@ -16,7 +16,6 @@ from chains.tests_fixtures import make_evm_chain
 from chains.tests_fixtures import make_tron_chain
 from currencies.models import Crypto
 from currencies.models import CryptoOnChain
-from evm.models import EvmScanCursor
 from evm.scanner.rpc import EvmScannerRpcError
 
 
@@ -24,7 +23,7 @@ from evm.scanner.rpc import EvmScannerRpcError
 class ScanLivenessTests(TestCase):
     """真实执行 chain-runner 的单轮扫描和 HTTP 探针，只替换链 RPC 与确认消息的外部发送。
 
-    手工给游标写 last_error 只能验证探针查询，覆盖不到预算耗尽、RPC 失败是否真正
+    手工给链写 scan_last_error 只能验证探针查询，覆盖不到预算耗尽、RPC 失败是否真正
     留下失败信号，也覆盖不到扫描异常是否连带跳过已有充值的确认派发。
     """
 
@@ -40,15 +39,13 @@ class ScanLivenessTests(TestCase):
                 address="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
                 decimals=6,
             )
-            cursor, _ = TronWatchCursor.objects.get_or_create(chain=chain)
         else:
             chain = make_evm_chain(
                 code=ChainCode.Anvil,
                 latest_block_number=100,
                 evm_log_max_block_range=10,
             )
-            cursor, _ = EvmScanCursor.objects.get_or_create(chain=chain)
-        type(cursor).objects.filter(pk=cursor.pk).update(last_scanned_block=100)
+        Chain.objects.filter(pk=chain.pk).update(scan_cursor_block=100)
         Transfer.objects.create(
             chain=chain,
             block=10,
@@ -68,7 +65,7 @@ class ScanLivenessTests(TestCase):
             processed_at=timezone.now(),
             confirm_mode=ConfirmMode.FULL,
         )
-        return chain, cursor
+        return chain
 
     def run_round(self, chain, *, expired_budget=False):
         loop = ChainLoop(chain)
@@ -78,13 +75,12 @@ class ScanLivenessTests(TestCase):
         with patch("chains.runner.step_deadline", return_value=time.monotonic() - 1):
             loop.run_once()
 
-    def assert_scan_failed(self, *, chain, cursor, scanned_block, error):
-        cursor.refresh_from_db()
+    def assert_scan_failed(self, *, chain, scanned_block, error):
         chain.refresh_from_db()
-        self.assertEqual(cursor.last_scanned_block, scanned_block)
-        self.assertIsNotNone(cursor.last_error_at)
-        self.assertIn(error, cursor.last_error)
-        self.assertGreaterEqual(chain.last_scanned_at, cursor.last_error_at)
+        self.assertEqual(chain.scan_cursor_block, scanned_block)
+        self.assertIsNotNone(chain.scan_last_error_at)
+        self.assertIn(error, chain.scan_last_error)
+        self.assertGreaterEqual(chain.last_scanned_at, chain.scan_last_error_at)
         self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 503)
 
     @patch("chains.tasks.enqueue_due_confirmations")
@@ -93,22 +89,20 @@ class ScanLivenessTests(TestCase):
     def test_evm_rpc_failures_keep_confirmation_live_and_probe_recovers(
         self, get_head, get_logs, dispatch
     ):
-        chain, cursor = self.make_scan_case()
+        chain = self.make_scan_case()
         get_head.side_effect = range(200, 206)
         get_logs.side_effect = EvmScannerRpcError("node down")
         for _ in range(5):
             self.run_round(chain)
         self.assertEqual(dispatch.call_count, 5)
-        self.assert_scan_failed(
-            chain=chain, cursor=cursor, scanned_block=100, error="node down"
-        )
+        self.assert_scan_failed(chain=chain, scanned_block=100, error="node down")
 
         get_logs.side_effect = None
         get_logs.return_value = []
         self.run_round(chain)
-        cursor.refresh_from_db()
-        self.assertGreater(cursor.last_scanned_block, 100)
-        self.assertIsNone(cursor.last_error_at)
+        chain.refresh_from_db()
+        self.assertGreater(chain.scan_cursor_block, 100)
+        self.assertIsNone(chain.scan_last_error_at)
         self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 200)
 
     @patch("chains.tasks.enqueue_due_confirmations")
@@ -116,24 +110,22 @@ class ScanLivenessTests(TestCase):
     def test_tron_rpc_failures_keep_confirmation_live_and_idle_recovery_clears_error(
         self, client_cls, dispatch
     ):
-        chain, cursor = self.make_scan_case(tron=True)
+        chain = self.make_scan_case(tron=True)
         client = client_cls.return_value
         client.get_latest_solid_block_number.side_effect = range(200, 205)
         client.get_transaction_infos_by_block.side_effect = TronClientError("down")
         for _ in range(5):
             self.run_round(chain)
         self.assertEqual(dispatch.call_count, 5)
-        self.assert_scan_failed(
-            chain=chain, cursor=cursor, scanned_block=100, error="down"
-        )
+        self.assert_scan_failed(chain=chain, scanned_block=100, error="down")
 
-        # 节点恢复且游标已追平时，没有扫块动作也应该解除上一轮错误。
-        TronWatchCursor.objects.filter(pk=cursor.pk).update(last_scanned_block=203)
+        # 节点恢复且位点已追平时，没有扫块动作也应该解除上一轮错误。
+        Chain.objects.filter(pk=chain.pk).update(scan_cursor_block=203)
         client.get_latest_solid_block_number.side_effect = None
         client.get_latest_solid_block_number.return_value = 204
         self.run_round(chain)
-        cursor.refresh_from_db()
-        self.assertIsNone(cursor.last_error_at)
+        chain.refresh_from_db()
+        self.assertIsNone(chain.scan_last_error_at)
         self.assertEqual(self.client.get(reverse("health-scanning")).status_code, 200)
         self.assertEqual(dispatch.call_count, 5)  # 链高未推进，不重复派发。
 
@@ -145,13 +137,12 @@ class ScanLivenessTests(TestCase):
     def test_evm_budget_exhaustion_retains_progress_and_reports_failing(
         self, _head, _logs, dispatch
     ):
-        chain, cursor = self.make_scan_case()
+        chain = self.make_scan_case()
         self.run_round(chain, expired_budget=True)
         dispatch.assert_called_once_with(chain)
         # 窗口从 97 起（回放 4 块），预算耗尽前仍扫完首段 [97, 106]。
         self.assert_scan_failed(
             chain=chain,
-            cursor=cursor,
             scanned_block=106,
             error="ScanRoundBudgetExceeded",
         )
@@ -161,7 +152,7 @@ class ScanLivenessTests(TestCase):
     def test_tron_budget_exhaustion_retains_progress_and_reports_failing(
         self, client_cls, dispatch
     ):
-        chain, cursor = self.make_scan_case(tron=True)
+        chain = self.make_scan_case(tron=True)
         client = client_cls.return_value
         client.get_latest_solid_block_number.return_value = 200
         client.get_transaction_infos_by_block.return_value = []
@@ -169,7 +160,6 @@ class ScanLivenessTests(TestCase):
         dispatch.assert_called_once_with(chain)
         self.assert_scan_failed(
             chain=chain,
-            cursor=cursor,
             scanned_block=101,
             error="ScanRoundBudgetExceeded",
         )
@@ -185,8 +175,8 @@ class ScanLivenessTests(TestCase):
     def test_confirmation_publish_failure_does_not_abort_scan(
         self, _head, _logs, dispatch
     ):
-        chain, cursor = self.make_scan_case()
+        chain = self.make_scan_case()
         self.run_round(chain)
         dispatch.assert_called_once_with(chain)
-        cursor.refresh_from_db()
-        self.assertEqual(cursor.last_scanned_block, 119)
+        chain.refresh_from_db()
+        self.assertEqual(chain.scan_cursor_block, 119)
