@@ -2357,6 +2357,119 @@ class ReapStaleConfirmingTransfersTests(TestCase):
         self.assertTrue(Transfer.objects.filter(pk=transfer.pk).exists())
 
 
+class PurgeUnmatchedDustTransfersTests(TestCase):
+    """未归类粉尘清理：只删已确认、超过保留期、价值低于阈值的未归类入账。
+
+    有真实金额的未归类入账是人工补单与对账的唯一凭据，已认领业务的入账更不能删；
+    无法定价的币种判不了价值，同样必须保留。
+    """
+
+    def setUp(self):
+        from chains.unmatched_dust import UNMATCHED_DUST_RETENTION_DAYS
+
+        # 1 美元阈值、单价 0.5 美元：数量低于 2 即为粉尘。
+        self.crypto = Crypto.objects.create(
+            name="Tron Dust",
+            symbol="TRX-DUST",
+            coingecko_id="tron-dust",
+            prices={"USD": "0.5"},
+            prices_updated_at=timezone.now(),
+        )
+        self.unpriced_crypto = Crypto.objects.create(
+            name="Unpriced Dust",
+            symbol="NOPRICE-DUST",
+            coingecko_id="unpriced-dust",
+        )
+        self.chain = make_evm_chain(code=ChainCode.Ethereum)
+        self.expired_created_at = timezone.now() - timedelta(
+            days=UNMATCHED_DUST_RETENTION_DAYS, hours=1
+        )
+        self.sequence = 0
+
+    def make_transfer(
+        self,
+        *,
+        amount: str,
+        crypto=None,
+        transfer_type=TransferType.Unmatched,
+        status=TransferStatus.CONFIRMED,
+        created_at=None,
+    ) -> Transfer:
+        self.sequence += 1
+        transfer = Transfer.objects.create(
+            chain=self.chain,
+            block=100,
+            block_hash="0x" + "aa" * 32,
+            hash="0x" + f"{self.sequence:064x}",
+            event_index=0,
+            crypto=crypto or self.crypto,
+            from_address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000c1"
+            ),
+            to_address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000c2"
+            ),
+            value=1,
+            amount=Decimal(amount),
+            type=transfer_type,
+            status=status,
+            timestamp=1700000000,
+            datetime=timezone.now(),
+            processed_at=timezone.now(),
+        )
+        Transfer.objects.filter(pk=transfer.pk).update(
+            created_at=created_at or self.expired_created_at
+        )
+        return transfer
+
+    def test_purges_only_expired_confirmed_unmatched_dust(self):
+        from chains.unmatched_dust import purge_unmatched_dust_transfers
+
+        dust = self.make_transfer(amount="0.000001")
+        kept = [
+            # 价值 1 美元，恰好达到阈值，不算粉尘。
+            self.make_transfer(amount="2"),
+            # 已认领账单的入账金额再小也不删。
+            self.make_transfer(amount="0.000001", transfer_type=TransferType.Invoice),
+            # 仍在保留期内。
+            self.make_transfer(amount="0.000001", created_at=timezone.now()),
+            # 确认未完成，交给确认 / 重组流程。
+            self.make_transfer(amount="0.000001", status=TransferStatus.CONFIRMING),
+            # 无价格判不了价值。
+            self.make_transfer(amount="0.000001", crypto=self.unpriced_crypto),
+        ]
+
+        self.assertEqual(purge_unmatched_dust_transfers(), 1)
+
+        self.assertFalse(Transfer.objects.filter(pk=dust.pk).exists())
+        self.assertEqual(
+            set(Transfer.objects.values_list("pk", flat=True)),
+            {transfer.pk for transfer in kept},
+        )
+
+    def test_stale_price_keeps_dust(self):
+        from chains.unmatched_dust import purge_unmatched_dust_transfers
+
+        transfer = self.make_transfer(amount="0.000001")
+        Crypto.objects.filter(pk=self.crypto.pk).update(
+            prices_updated_at=timezone.now() - timedelta(days=30)
+        )
+
+        self.assertEqual(purge_unmatched_dust_transfers(), 0)
+        self.assertTrue(Transfer.objects.filter(pk=transfer.pk).exists())
+
+    def test_purges_across_batches(self):
+        from chains.unmatched_dust import purge_unmatched_dust_transfers
+
+        for _ in range(3):
+            self.make_transfer(amount="0.000001")
+
+        with patch("chains.unmatched_dust.UNMATCHED_DUST_DELETE_BATCH_SIZE", 2):
+            self.assertEqual(purge_unmatched_dust_transfers(), 3)
+
+        self.assertFalse(Transfer.objects.exists())
+
+
 class TransferHandlerRegistryTests(TestCase):
     """chains 经注册表把入账交给业务处理器；装配缺失时必须失败，不能静默吞掉入账。"""
 

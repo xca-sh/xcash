@@ -19,6 +19,7 @@ from procrastinate.contrib.django import app
 
 from chains.tasks import execute_due_vault_slot_collect_schedules
 from chains.tasks import fallback_process_transfer
+from chains.tasks import purge_unmatched_dust_transfers_task
 from chains.tasks import reap_stale_confirming_transfers
 from chains.tasks import reconcile_vault_slot_collect_balance_gaps_task
 from common.jobs import PRIORITY_BULK
@@ -83,7 +84,11 @@ register_periodic(
 )
 # 每 5 分钟：强制终结超龄未送达的 Webhook 事件，防止其恒占调度批次头部。
 register_periodic(reap_stalled_events, cron="*/5 * * * *", priority=PRIORITY_DEFAULT)
-# 每日：链上终验并清理超龄 CONFIRMING 转账；清理保留期外的结束任务。
+# 每日：清理保留期外的未归类粉尘转账；链上终验并清理超龄 CONFIRMING 转账；
+# 清理保留期外的结束任务。
+register_periodic(
+    purge_unmatched_dust_transfers_task, cron="30 3 * * *", priority=PRIORITY_BULK
+)
 register_periodic(
     reap_stale_confirming_transfers, cron="30 4 * * *", priority=PRIORITY_BULK
 )

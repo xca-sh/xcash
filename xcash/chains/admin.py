@@ -22,6 +22,7 @@ from chains.models import VaultSlotBalance
 from chains.models import VaultSlotCollectSchedule
 from chains.models import VaultSlotUsage
 from chains.models import Wallet
+from chains.unmatched_dust import unmatched_dust_q
 from common import admin_display as fmt
 from common.admin import ModelAdmin
 from common.admin import ReadOnlyModelAdmin
@@ -343,6 +344,26 @@ class AddressAdmin(ReadOnlyModelAdmin):
         return obj.get_usage_display()
 
 
+class TransferDustFilter(admin.SimpleListFilter):
+    """按未归类粉尘筛选，判据与每日粉尘清理任务一致（见 chains.unmatched_dust）。"""
+
+    title = _("未归类粉尘")
+    parameter_name = "dust"
+
+    def lookups(self, request, model_admin):
+        return (
+            ("hide", _("隐藏粉尘")),
+            ("only", _("仅看粉尘")),
+        )
+
+    def queryset(self, request, queryset):
+        if self.value() == "hide":
+            return queryset.exclude(unmatched_dust_q())
+        if self.value() == "only":
+            return queryset.filter(unmatched_dust_q())
+        return queryset
+
+
 @admin.register(Transfer)
 class TransferAdmin(ReadOnlyModelAdmin):
     date_hierarchy = "datetime"
@@ -354,6 +375,7 @@ class TransferAdmin(ReadOnlyModelAdmin):
     list_filter = (
         ("status", ChoicesDropdownFilter),
         ("type", ChoicesDropdownFilter),
+        TransferDustFilter,
         ("chain", RelatedDropdownFilter),
         ("crypto", RelatedDropdownFilter),
         ("datetime", RangeDateTimeFilter),

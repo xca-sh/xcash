@@ -19,6 +19,7 @@ from chains.models import TransferStatus
 from chains.models import VaultSlotCollectSchedule
 from chains.scanning import deadline_passed
 from chains.scanning import step_deadline
+from chains.unmatched_dust import purge_unmatched_dust_transfers
 from chains.vault_slot_balances import reconcile_vault_slot_collect_balance_gaps
 from common.jobs import PRIORITY_DEFAULT
 from common.jobs import PRIORITY_URGENT
@@ -215,6 +216,15 @@ def reap_stale_confirming_transfers(
                 result=str(result),
             )
     return reaped_count
+
+
+@app.task(name="chains.purge_unmatched_dust_transfers")
+def purge_unmatched_dust_transfers_task(
+    *,
+    timestamp: int | None = None,  # noqa: ARG001
+) -> int:
+    """每日清理确认完成且超过保留期的未归类粉尘转账，规则见 chains.unmatched_dust。"""
+    return purge_unmatched_dust_transfers()
 
 
 @app.task(
