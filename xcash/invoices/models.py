@@ -24,6 +24,7 @@ from chains.models import VaultSlot
 from chains.models import VaultSlotUsage
 from common.fields import AddressField
 from common.fields import SysNoField
+from common.utils.math import round_decimal
 from currencies.service import FiatService
 from projects.models import InvoiceReceivingMode
 from projects.models import Project
@@ -168,7 +169,6 @@ class DifferRecipientAddress(models.Model):
 
 class Invoice(models.Model):
     MAX_ALLOCATION_RETRY = 5
-    DIFFER_AMOUNT_STEP = Decimal("0.01")
     DIFFER_MAX_OFFSET_STEPS = 100
 
     # 保留类属性别名，使 Invoice.InvoiceAllocationError 继续可用。
@@ -496,7 +496,13 @@ class Invoice(models.Model):
                 f"project={self.project_id}, chain={chain.code} 钱包直收不支持该链原生币"
             )
 
-        base_amount = crypto_amount.quantize(self.DIFFER_AMOUNT_STEP, rounding=ROUND_UP)
+        # 尾差步进取币种报价精度 10^scale（约 1 美分的币数量，随币价推算）：
+        # 稳定币仍是 0.01，高价币（WBTC/ETH）按其自身精度递增，避免固定 0.01 个币
+        # 把应付金额抬高数百上千美元。100 档偏移的溢价上限因此约为 1 美元。
+        # crypto_amount 已由 Fiat.to_crypto 按同一 scale 向上取整，这里再取整是兜底：
+        # 直接传入更高精度金额时也保证基准落在步进网格上。
+        amount_step = Decimal(f"1e{crypto.scale}")
+        base_amount = round_decimal(crypto_amount, crypto.scale, rounding=ROUND_UP)
         # 锁定候选地址行，与 DifferRecipientAddress.delete 的行锁互斥，地址不会在分配
         # 途中被删除。同一项目的并发分配会因此短暂串行，锁随本次分配事务释放。
         recipient_addresses = [
@@ -520,14 +526,14 @@ class Invoice(models.Model):
                     pay_address__in=recipient_addresses,
                     pay_amount__gte=base_amount,
                     pay_amount__lt=base_amount
-                    + self.DIFFER_AMOUNT_STEP * self.DIFFER_MAX_OFFSET_STEPS,
+                    + amount_step * self.DIFFER_MAX_OFFSET_STEPS,
                 )
                 .values_list("pay_address", "pay_amount")
             )
             # 先偏移后地址：同一档金额先铺满所有启用地址，地址都被占用才加尾差，
             # 地址越多买家越能按原价付款。
             for offset_index in range(self.DIFFER_MAX_OFFSET_STEPS):
-                pay_amount = base_amount + self.DIFFER_AMOUNT_STEP * offset_index
+                pay_amount = base_amount + amount_step * offset_index
                 for address in recipient_addresses:
                     if (address, pay_amount) not in occupied:
                         return address, pay_amount

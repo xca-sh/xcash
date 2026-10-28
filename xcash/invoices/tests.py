@@ -578,10 +578,16 @@ class InvoicePaymentSelectionTests(TestCase):
         # ETH 以 BEP20 上架 BSC 是合约币，靠 Transfer 事件即可在 EOA 上观测；
         # 不能因 Crypto.is_native 为真被当成「EVM 原生币不支持钱包直收」拒绝。
         address = self.enable_differ_mode(address_suffix="d01")
-        eth, _ = Crypto.objects.get_or_create(
+        eth, _ = Crypto.objects.update_or_create(
             symbol="ETH",
-            defaults={"name": "ETH", "coingecko_id": "ethereum", "is_native": True},
+            defaults={
+                "name": "ETH",
+                "coingecko_id": "ethereum",
+                "is_native": True,
+                "prices": {"USD": "3000"},
+            },
         )
+        cache.delete("ETH_scale")
         CryptoOnChain.objects.create(
             crypto=eth,
             chain=self.chain_b,
@@ -597,6 +603,45 @@ class InvoicePaymentSelectionTests(TestCase):
         )
 
         self.assertEqual((pay_address, pay_amount), (address, Decimal("0.05")))
+
+    def test_differ_payment_steps_by_crypto_scale_for_high_price_token(self):
+        # 高价币的尾差步进必须按币种报价精度（约 1 美分），不能按固定 0.01 个币：
+        # WBTC 价格 10 万时 scale=-7，基准金额不被抬到 0.01 WBTC（≈$1000），
+        # 被占用后只加 0.0000001 WBTC（$0.01）。
+        address = self.enable_differ_mode(address_suffix="d01")
+        wbtc = Crypto.objects.create(
+            name="Wrapped BTC",
+            symbol="WBTC-DIFFER",
+            coingecko_id="wrapped-bitcoin-differ",
+            prices={"USD": "100000"},
+        )
+        cache.delete(f"{wbtc.symbol}_scale")
+        CryptoOnChain.objects.create(
+            crypto=wbtc,
+            chain=self.chain_a,
+            address=Web3.to_checksum_address(
+                "0x00000000000000000000000000000000000000C3"
+            ),
+            decimals=8,
+        )
+        first = self.create_invoice(out_no="payment-differ-wbtc-first")
+        second = self.create_invoice(out_no="payment-differ-wbtc-second")
+
+        first_combo = first._allocate_differ_payment(
+            wbtc, self.chain_a, Decimal("0.0003100")
+        )
+        Invoice.objects.filter(pk=first.pk).update(
+            crypto=wbtc,
+            chain=self.chain_a,
+            pay_address=first_combo[0],
+            pay_amount=first_combo[1],
+        )
+        second_combo = second._allocate_differ_payment(
+            wbtc, self.chain_a, Decimal("0.0003100")
+        )
+
+        self.assertEqual(first_combo, (address, Decimal("0.00031")))
+        self.assertEqual(second_combo, (address, Decimal("0.0003101")))
 
     def test_differ_payment_rejects_evm_chain_native_coin(self):
         # 本链原生币（BSC 上的 BNB）打到 EOA 不产生事件，钱包直收无法观测，必须拒绝。
@@ -1439,10 +1484,16 @@ class InvoiceAllowedMethodsCapabilityTests(TestCase):
             tron_invoice_receiving_mode=InvoiceReceivingMode.Differ,
         )
         bsc_chain = create_active_evm_test_chain(code=ChainCode.BSC)
-        eth, _ = Crypto.objects.get_or_create(
+        eth, _ = Crypto.objects.update_or_create(
             symbol="ETH",
-            defaults={"name": "ETH", "coingecko_id": "ethereum", "is_native": True},
+            defaults={
+                "name": "ETH",
+                "coingecko_id": "ethereum",
+                "is_native": True,
+                "prices": {"USD": "3000"},
+            },
         )
+        cache.delete("ETH_scale")
         CryptoOnChain.objects.create(
             crypto=eth,
             chain=bsc_chain,
@@ -3565,10 +3616,16 @@ class InvoiceEvmWalletPaymentTests(InvoiceTestMixin, TestCase):
         # ETH 以 BEP20 上架 BSC 时 Crypto.is_native 仍为真，但它不是 BSC 原生币；
         # 必须编码为代币 transfer，否则钱包会把同等数量的 BNB 打到收款地址。
         bsc = create_active_evm_test_chain(code=ChainCode.BSC)
-        eth, _ = Crypto.objects.get_or_create(
+        eth, _ = Crypto.objects.update_or_create(
             symbol="ETH",
-            defaults={"name": "ETH", "coingecko_id": "ethereum", "is_native": True},
+            defaults={
+                "name": "ETH",
+                "coingecko_id": "ethereum",
+                "is_native": True,
+                "prices": {"USD": "3000"},
+            },
         )
+        cache.delete("ETH_scale")
         token = Web3.to_checksum_address("0x2170ed0880ac9a755fd29b2688956bd959f933f8")
         CryptoOnChain.objects.create(crypto=eth, chain=bsc, address=token, decimals=18)
         invoice = self.make_invoice(
@@ -3767,10 +3824,16 @@ class InvoiceTronWalletPaymentTests(InvoiceTestMixin, TestCase):
     def test_other_chain_native_listed_as_trc20_encodes_contract(self):
         # ETH 以 TRC20 上架 Tron 时 Crypto.is_native 仍为真，但它不是 TRX；
         # 必须走合约 transfer，否则 TronLink 会把同等数量的 TRX 打到收款地址。
-        eth, _ = Crypto.objects.get_or_create(
+        eth, _ = Crypto.objects.update_or_create(
             symbol="ETH",
-            defaults={"name": "ETH", "coingecko_id": "ethereum", "is_native": True},
+            defaults={
+                "name": "ETH",
+                "coingecko_id": "ethereum",
+                "is_native": True,
+                "prices": {"USD": "3000"},
+            },
         )
+        cache.delete("ETH_scale")
         contract = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"
         CryptoOnChain.objects.create(
             crypto=eth, chain=self.tron_chain, address=contract, decimals=18
