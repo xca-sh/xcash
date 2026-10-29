@@ -3,7 +3,7 @@ package = false
 
 [project]
 name = "xcash"
-version = "0.6.0"
+version = "0.8.0"
 description = "Open-source self-hosted cryptocurrency payment gateway. Accept USDT, ETH. Zero platform fees, major EVM chains and Tron, Docker deploy, full self-custody."
 requires-python = "==3.13.*"
 dependencies = [
