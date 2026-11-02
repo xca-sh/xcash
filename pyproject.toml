@@ -46,16 +46,16 @@ dev = [
     # djangorestframework-stubs[compatible-mypy] 3.18.1 要求 mypy<2.4，stubs 放开前不能再升。
     "mypy==2.3.1",
     "django-stubs[compatible-mypy]==6.1.2",
-    "pytest==9.1.1",
+    "pytest==9.2.0",
     "pytest-sugar==1.1.1",
     "djangorestframework-stubs[compatible-mypy]==3.18.1",
     # Code quality
     # black 是本项目唯一的格式化器（见 .pre-commit-config.yaml 的说明）；
     # 必须列在依赖里，否则本地 `uv run black` 不可用，只有 pre-commit 自建环境能跑。
     "black==26.10.1",
-    "ruff==0.17.1",
-    "coverage==7.16.2",
-    "djlint==1.46.6",
+    "ruff==0.17.3",
+    "coverage==7.17.0",
+    "djlint==1.47.1",
     "pre-commit==4.7.0",
     # Django
     "django-debug-toolbar==8.0.0",
