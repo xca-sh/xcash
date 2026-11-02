@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.13.*"
 
 [[package]]
@@ -211,12 +211,11 @@ wheels = [
 
 [[package]]
 name = "bip-utils"
-version = "2.12.2"
+version = "2.12.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cbor2" },
     { name = "coincurve" },
-    { name = "crcmod" },
     { name = "ecdsa" },
     { name = "ed25519-blake2b-fork" },
     { name = "py-sr25519-bindings" },
@@ -225,9 +224,9 @@ dependencies = [
     { name = "pytoniq-core-fork" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/45/fb/c0455b7597fb7b02261af7676fafc4e611601c6cf7ce417d21933e57730b/bip_utils-2.12.2.tar.gz", hash = "sha256:385ecd943f74117c76c1fbb48dc15ec2a6ee8f425495dea3d43cc09cf0144b66", size = 608866, upload-time = "2026-08-13T22:01:08.062Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/42/15/91112aa231730571f61ccd42084b6d58bb156f619a22a5ac1162a9a0ef7f/bip_utils-2.12.3.tar.gz", hash = "sha256:3b821882a3827b67bfd88976bfaf7df2b1d916ab4f70d5e307c9ff965057acea", size = 610092, upload-time = "2026-10-26T20:11:19.504Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/2a/2101f9f60034df27df44ef7f64bef601e9187fac311088de9170837de41b/bip_utils-2.12.2-py3-none-any.whl", hash = "sha256:638856b9f40ee684c313bd4c7f00a16f322d25cb9236bd50f9e9f5751734dd97", size = 634651, upload-time = "2026-08-13T22:01:05.961Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/98/cd695cbd3925cdfa36973d872312760c3436db65df76eaba2f8206442578/bip_utils-2.12.3-py3-none-any.whl", hash = "sha256:5413e9a6993fbdf5d288f16a49529571445045085b7025e7ef22abfec3ee504b", size = 634546, upload-time = "2026-10-26T20:11:17.674Z" },
 ]
 
 [[package]]
@@ -454,12 +453,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/1b/d9/9ef6845367600b336ff75d000444a0d32497d6972c833141bd39356abf68/coverage-7.16.2-cp313-cp313-win_arm64.whl", hash = "sha256:28ff850182a67d117990fa2ce5ea1032836d8c9630dae867e8bdd3bff4533b79", size = 226409, upload-time = "2026-09-27T12:27:03.116Z" },
     { url = "https://files.pythonhosted.org/packages/3f/0c/7a64e1ac90541a8edf50daef0914848011fb057a5bf55284a4811e21939a/coverage-7.16.2-py3-none-any.whl", hash = "sha256:11d28e9123a9156cb405d8d27b44256c9a58fb5decc2073a8f17862057e3aa0f", size = 215754, upload-time = "2026-09-27T12:28:59.075Z" },
 ]
-
-[[package]]
-name = "crcmod"
-version = "1.7"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/6b/b0/e595ce2a2527e169c3bcd6c33d2473c1918e0b7f6826a043ca1245dd4e5b/crcmod-1.7.tar.gz", hash = "sha256:dc7051a0db5f2bd48665a990d3ec1cc305a466a77358ca4492826f41f283601e", size = 89670, upload-time = "2010-06-27T14:35:29.538Z" }
 
 [[package]]
 name = "croniter"
@@ -2427,7 +2420,7 @@ production = [
 requires-dist = [
     { name = "argon2-cffi", specifier = "==25.1.0" },
     { name = "base58", specifier = "==2.1.1" },
-    { name = "bip-utils", specifier = "==2.12.2" },
+    { name = "bip-utils", specifier = "==2.12.3" },
     { name = "cryptography", specifier = "==50.0.2" },
     { name = "django", specifier = "==5.2.18" },
     { name = "django-cors-headers", specifier = "==4.9.0" },
