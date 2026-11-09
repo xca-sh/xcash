@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.13.*"
 
 [[package]]
@@ -211,12 +211,11 @@ wheels = [
 
 [[package]]
 name = "bip-utils"
-version = "2.12.2"
+version = "2.12.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cbor2" },
     { name = "coincurve" },
-    { name = "crcmod" },
     { name = "ecdsa" },
     { name = "ed25519-blake2b-fork" },
     { name = "py-sr25519-bindings" },
@@ -225,9 +224,9 @@ dependencies = [
     { name = "pytoniq-core-fork" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/45/fb/c0455b7597fb7b02261af7676fafc4e611601c6cf7ce417d21933e57730b/bip_utils-2.12.2.tar.gz", hash = "sha256:385ecd943f74117c76c1fbb48dc15ec2a6ee8f425495dea3d43cc09cf0144b66", size = 608866, upload-time = "2026-08-13T22:01:08.062Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/42/15/91112aa231730571f61ccd42084b6d58bb156f619a22a5ac1162a9a0ef7f/bip_utils-2.12.3.tar.gz", hash = "sha256:3b821882a3827b67bfd88976bfaf7df2b1d916ab4f70d5e307c9ff965057acea", size = 610092, upload-time = "2026-10-26T20:11:19.504Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/2a/2101f9f60034df27df44ef7f64bef601e9187fac311088de9170837de41b/bip_utils-2.12.2-py3-none-any.whl", hash = "sha256:638856b9f40ee684c313bd4c7f00a16f322d25cb9236bd50f9e9f5751734dd97", size = 634651, upload-time = "2026-08-13T22:01:05.961Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/98/cd695cbd3925cdfa36973d872312760c3436db65df76eaba2f8206442578/bip_utils-2.12.3-py3-none-any.whl", hash = "sha256:5413e9a6993fbdf5d288f16a49529571445045085b7025e7ef22abfec3ee504b", size = 634546, upload-time = "2026-10-26T20:11:17.674Z" },
 ]
 
 [[package]]
@@ -456,12 +455,6 @@ wheels = [
 ]
 
 [[package]]
-name = "crcmod"
-version = "1.7"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/6b/b0/e595ce2a2527e169c3bcd6c33d2473c1918e0b7f6826a043ca1245dd4e5b/crcmod-1.7.tar.gz", hash = "sha256:dc7051a0db5f2bd48665a990d3ec1cc305a466a77358ca4492826f41f283601e", size = 89670, upload-time = "2010-06-27T14:35:29.538Z" }
-
-[[package]]
 name = "croniter"
 version = "6.2.4"
 source = { registry = "https://pypi.org/simple" }
@@ -592,16 +585,16 @@ wheels = [
 
 [[package]]
 name = "django"
-version = "5.2.18"
+version = "5.2.19"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asgiref" },
     { name = "sqlparse" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/85/fe/79e692b430c7721bf4b812c328bfe687e73e3f28f56611a6a18a97e887cc/django-5.2.18.tar.gz", hash = "sha256:461c5dd06d2ea16bd5ca37d3f46e4def1d6b0fe7588c6f4e2119517bb0af8b2d", size = 10910238, upload-time = "2026-10-06T13:01:09.371Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/29/a487a108caa76430c8b616aa90a6d09cf431306112c14093e6f0a7454e17/django-5.2.19.tar.gz", hash = "sha256:ad03d8abc51dbff95ebf34b27123cf0c26a3b62db7ba0cd520783686362533d1", size = 10969285, upload-time = "2026-11-03T15:22:09.468Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d6/01/6568ec52b26548ca1b83d33249f7274db3bf74698f42c0da42ec9db1a24a/django-5.2.18-py3-none-any.whl", hash = "sha256:92ed81d500be6408ecd704d7bd1366c534f30427bffcc63c5fefb129561aec7c", size = 8316071, upload-time = "2026-10-06T13:01:04.413Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/fb/65b4e897d1268288a46457493d9aec6541be8be08e0093a93cc101c03ab2/django-5.2.19-py3-none-any.whl", hash = "sha256:5965d974a5218a2b68a11dd1276434707f23886525c23f0598eccedaf4f4ca00", size = 8319631, upload-time = "2026-11-03T15:22:03.67Z" },
 ]
 
 [[package]]
@@ -745,14 +738,14 @@ wheels = [
 
 [[package]]
 name = "django-unfold"
-version = "0.110.0"
+version = "0.110.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/44/45/8fed87cc80291ab694c46fa3c113dff3e25cc7b1de843f5c334679f9128d/django_unfold-0.110.0.tar.gz", hash = "sha256:cd0bbfd3b96454b6e6eccea98996f9de634e1aa08956807943011b12f2fbcdf2", size = 1172280, upload-time = "2026-10-13T06:47:18.085Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5e/a6/d5f7f3bcb0c9da5719dbf32d13a5d4877994975dffae4aeaa2bd7b2d823c/django_unfold-0.110.1.tar.gz", hash = "sha256:8274da7e3c92583c7f875b3ac3ceef0ed75346a1a28b03bede667aba3205e286", size = 1172856, upload-time = "2026-11-01T08:39:32.508Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2b/d1/d9f998dcd02fbdcc5a63836ac3025e170f3a99cfdc0b64efe7a4ab1e861c/django_unfold-0.110.0-py3-none-any.whl", hash = "sha256:5b20e87cf389376398dee19f9e168ad1f8c4cd5e53850b4b7d38bb1e17c14f9a", size = 1301431, upload-time = "2026-10-13T06:47:16.414Z" },
+    { url = "https://files.pythonhosted.org/packages/04/11/66c648c4252ccebbda446b516dcab5fa02328df231b1f5006954ed1af430/django_unfold-0.110.1-py3-none-any.whl", hash = "sha256:92b1bb09e56fcbc8535cef53d19579bd417483fdb8981ceac00de409e8cc5a98", size = 1302025, upload-time = "2026-11-01T08:39:31.147Z" },
 ]
 
 [[package]]
@@ -2427,15 +2420,15 @@ production = [
 requires-dist = [
     { name = "argon2-cffi", specifier = "==25.1.0" },
     { name = "base58", specifier = "==2.1.1" },
-    { name = "bip-utils", specifier = "==2.12.2" },
+    { name = "bip-utils", specifier = "==2.12.3" },
     { name = "cryptography", specifier = "==50.0.2" },
-    { name = "django", specifier = "==5.2.18" },
+    { name = "django", specifier = "==5.2.19" },
     { name = "django-cors-headers", specifier = "==4.9.0" },
     { name = "django-environ", specifier = "==0.14.0" },
     { name = "django-migration-linter", specifier = "==6.0.0" },
     { name = "django-redis", specifier = "==7.0.0" },
     { name = "django-smart-ratelimit", extras = ["redis"], specifier = "==4.12.1" },
-    { name = "django-unfold", specifier = "==0.110.0" },
+    { name = "django-unfold", specifier = "==0.110.1" },
     { name = "djangorestframework", specifier = "==3.18.3" },
     { name = "gunicorn", specifier = "==26.2.0" },
     { name = "hiredis", specifier = "==3.5.0" },
