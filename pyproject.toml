@@ -9,7 +9,7 @@ requires-python = "==3.13.*"
 dependencies = [
     "web3==8.0.0",
     "base58==2.1.1",
-    "bip-utils==2.12.2",
+    "bip-utils==2.12.3",
     "redis==8.1.0",
     "hiredis==3.5.0",
     "cryptography==50.0.2",
@@ -17,9 +17,9 @@ dependencies = [
     "shortuuid==1.0.13",
     "httpx==0.28.1",
     # Django
-    "django==5.2.18",
+    "django==5.2.19",
     "django-environ==0.14.0",
-    "django-unfold==0.110.0",
+    "django-unfold==0.110.1",
     "djangorestframework==3.18.3",
     "django-redis==7.0.0",
     "django-cors-headers==4.9.0",
