@@ -143,6 +143,19 @@ def check_saas_permission(
         raise APIError(ErrorCode.ACCOUNT_FROZEN)
 
 
+def is_saas_frozen(*, appid: str) -> bool:
+    """读取 SaaS 是否已冻结该项目对应的商户（不抛异常的冻结判断）。
+
+    给异步任务这类没有请求上下文、不能靠 APIError 拒绝的调用方用；判定口径与
+    check_saas_permission 一致：自托管、appid 缺失、冷缓存都按未冻结处理（fail-open），
+    只有缓存里明确 frozen=True 才返回 True。
+    """
+    perm = _read_saas_perm(appid)
+    if perm is None:
+        return False
+    return bool(perm.get("frozen"))
+
+
 def get_saas_deposit_customer_limit(*, appid: str) -> int | None:
     """读取 SaaS 下发的充值 Customer 软限额。
 

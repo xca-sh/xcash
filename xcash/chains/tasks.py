@@ -238,7 +238,21 @@ def schedule_vault_slot_deploy(*, slot_pk: int) -> None:
     请求线程不内联链上调用：RPC 抖动会把已经落库的下单请求打成 500；挪到这里后失败按
     退避表重试（8s → 16s → 32s → 64s → 128s），仍失败则由归集前的部署闸门兜底，不会丢部署。
     """
+    from chains.vault_slots import predeploy_blocked_reason  # noqa: PLC0415
     from chains.vault_slots import schedule_deploy  # noqa: PLC0415
+
+    # 执行时闸门：项目已停用或 SaaS 已冻结时不让热钱包代付预部署 gas。
+    # 入队时项目可能还正常，排队期间被冻结 / 停用同样要拦，所以在执行时判定。
+    # 跳过是终态、不抛异常：抛了会按退避表重试，白占队列。项目恢复后再次暴露该地址
+    # （ensure_*_address 对已有未部署槽位同样会入队）即重新预部署。
+    blocked_reason = predeploy_blocked_reason(slot_pk)
+    if blocked_reason is not None:
+        logger.warning(
+            "VaultSlot 预部署已跳过：项目不可用",
+            vault_slot_id=slot_pk,
+            reason=blocked_reason,
+        )
+        return
 
     try:
         schedule_deploy(slot_pk)

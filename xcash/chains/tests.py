@@ -1,3 +1,4 @@
+import time
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ from unittest.mock import patch
 
 from django.contrib.admin.sites import AdminSite
 from django.core import checks
+from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
@@ -1871,6 +1873,96 @@ def locked_transfer_row(queries) -> bool:
         "FOR UPDATE" in query["sql"] and '"chains_transfer"' in query["sql"]
         for query in queries.captured_queries
     )
+
+
+@override_settings(
+    IS_SAAS=True,
+    SAAS_API_TOKEN="xcash-saas-token",
+    SAAS_CALLBACK_URL="http://saas",
+)
+class ScheduleVaultSlotDeployGateTests(TestCase):
+    """预部署任务的执行时闸门：停用 / SaaS 冻结的项目不让热钱包代付部署 gas。"""
+
+    def setUp(self):
+        self.chain = make_evm_chain(code=ChainCode.Ethereum)
+        self.project = Project.objects.create(name="Predeploy Gate")
+        self.slot = VaultSlot.objects.create(
+            chain=self.chain,
+            usage=VaultSlotUsage.INVOICE,
+            project=self.project,
+            invoice_index=1,
+            address=Web3.to_checksum_address("0x" + "5a" * 20),
+            salt=b"g" * 32,
+        )
+        self.permission_key = f"saas:permission:{self.project.appid}"
+        self.addCleanup(cache.delete, self.permission_key)
+        # 冷缓存会提交后台刷新；测试里桩掉执行器，不发真实 HTTP。
+        executor_patch = patch("common.permission_check.refresh_executor")
+        executor_patch.start()
+        self.addCleanup(executor_patch.stop)
+
+    def set_saas_frozen(self, *, frozen: bool):
+        cache.set(
+            self.permission_key,
+            {"frozen": frozen, "_fetched_at": time.time()},
+            None,
+        )
+
+    def run_task(self):
+        from chains.tasks import schedule_vault_slot_deploy
+
+        with patch("chains.vault_slots.schedule_deploy") as schedule_deploy:
+            schedule_vault_slot_deploy(slot_pk=self.slot.pk)
+        return schedule_deploy
+
+    def test_saas_frozen_project_skips_predeploy(self):
+        self.set_saas_frozen(frozen=True)
+
+        schedule_deploy = self.run_task()
+
+        schedule_deploy.assert_not_called()
+
+    def test_inactive_project_skips_predeploy(self):
+        self.set_saas_frozen(frozen=False)
+        Project.objects.filter(pk=self.project.pk).update(active=False)
+
+        schedule_deploy = self.run_task()
+
+        schedule_deploy.assert_not_called()
+
+    def test_normal_project_schedules_predeploy(self):
+        self.set_saas_frozen(frozen=False)
+
+        schedule_deploy = self.run_task()
+
+        schedule_deploy.assert_called_once_with(self.slot.pk)
+
+    def test_cold_permission_cache_schedules_predeploy(self):
+        # 冷缓存按未冻结处理（fail-open），与 check_saas_permission 口径一致。
+        schedule_deploy = self.run_task()
+
+        schedule_deploy.assert_called_once_with(self.slot.pk)
+
+    @override_settings(IS_SAAS=False)
+    def test_self_hosted_ignores_saas_frozen_cache(self):
+        # 自托管不对接 SaaS：即便缓存里残留 frozen=True 也照常预部署。
+        self.set_saas_frozen(frozen=True)
+
+        schedule_deploy = self.run_task()
+
+        schedule_deploy.assert_called_once_with(self.slot.pk)
+
+    def test_collect_deploy_gate_is_not_affected(self):
+        # 归集前的部署闸门由 auto_collect 开关单独管控，预部署闸门不介入这条路径。
+        from chains.vault_slots import can_create_collect_tx_task
+
+        self.set_saas_frozen(frozen=True)
+        Project.objects.filter(pk=self.project.pk).update(active=False)
+
+        with patch("chains.vault_slots.schedule_deploy") as schedule_deploy:
+            can_create_collect_tx_task(chain=self.chain, slot=self.slot)
+
+        schedule_deploy.assert_called_once_with(self.slot.pk)
 
 
 class TransferProcessQuickConfirmDispatchTests(TestCase):

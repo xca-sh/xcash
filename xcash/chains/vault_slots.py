@@ -227,6 +227,29 @@ def ensure_invoice_address(
     return slot.address
 
 
+def predeploy_blocked_reason(slot_pk: int) -> str | None:
+    """预部署前的项目可用性闸门：返回跳过原因，None 表示放行。
+
+    预部署由平台热钱包代付 gas，且由「地址暴露」触发（每个新 uid 一次），触发方可控；
+    项目已停用或商户已被 SaaS 冻结（欠费）时不再垫付，避免被批量刷地址消耗热钱包。
+    - project.active=False：引擎自身的停用状态，自托管与 SaaS 都生效（/v1 入口同样拒绝停用项目）。
+    - SaaS 冻结：读权限缓存，自托管（IS_SAAS=False）与冷缓存按未冻结处理，口径同 check_saas_permission。
+    只拦预部署任务；归集前的部署闸门（can_create_collect_tx_task）另有 auto_collect 开关，不走这里。
+    槽位不存在时放行，交由 schedule_deploy 按原有方式报错。
+    """
+    from common.permission_check import is_saas_frozen  # noqa: PLC0415
+
+    slot = VaultSlot.objects.select_related("project").filter(pk=slot_pk).first()
+    if slot is None:
+        return None
+    project = slot.project
+    if not project.active:
+        return "project_inactive"
+    if is_saas_frozen(appid=project.appid):
+        return "saas_frozen"
+    return None
+
+
 def schedule_deploy(slot_pk: int) -> TxTask | None:
     with db_transaction.atomic():
         slot = (
